@@ -191,19 +191,32 @@ You have full system access. Act on every request immediately using your tools."
         self.add_message(Message(role="assistant", content=content))
 
     def add_tool_result(self, tool_call_id: str, tool_name: str, result: str) -> None:
-     self.add_message(Message(
-        role="tool",
-        content=result,
-        tool_call_id=tool_call_id,
-        tool_name=tool_name,
-    ))
-    # Force the model to see the result as a user message too
-    # Some models ignore the tool role entirely
-    
-     self.add_message(Message(
-        role="user",
-        content=f"The tool '{tool_name}' returned this exact output. Report it verbatim:\n\n{result}",
-    ))
+        """
+        Record a tool result in history — exactly once.
+
+        With native function calling the result is a `tool`-role message tied
+        to its tool_call_id. In JSON mode the model has no tool role, so the
+        result is delivered as a user-role observation instead. Either way it
+        appears a single time: the model is expected to reason over the output
+        and choose the next action, not echo it back as a final answer.
+        """
+        if self.use_function_calling:
+            self.add_message(Message(
+                role="tool",
+                content=result,
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+            ))
+        else:
+            self.add_message(Message(
+                role="user",
+                content=(
+                    f"[tool:{tool_name}] returned:\n\n{result}\n\n"
+                    "Use this to decide the next step. Quote specific findings "
+                    "(ports, versions, hashes, paths, flags) exactly as shown; "
+                    "never invent values."
+                ),
+            ))
 
 
 

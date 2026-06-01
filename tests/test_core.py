@@ -177,6 +177,30 @@ def test_context_builder_token_budget():
     print(f"  PASS  context_builder_token_budget (kept {len(msgs)} messages)")
 
 
+def test_context_builder_tool_result_function_calling():
+    ctx = ContextBuilder(use_function_calling=True)
+    ctx.add_tool_result("call-1", "nmap_scan", "22/tcp open ssh")
+    # Exactly one message, with the tool role — no duplicate user echo.
+    assert len(ctx._history) == 1
+    msg = ctx._history[0]
+    assert msg.role == "tool"
+    assert msg.tool_call_id == "call-1"
+    assert "verbatim" not in msg.content.lower()
+    print("  PASS  context_builder_tool_result_function_calling")
+
+
+def test_context_builder_tool_result_json_mode():
+    ctx = ContextBuilder(use_function_calling=False)
+    ctx.add_tool_result("call-2", "shell", "uid=0(root)")
+    # Exactly one message; delivered as user observation since there's no tool role.
+    assert len(ctx._history) == 1
+    msg = ctx._history[0]
+    assert msg.role == "user"
+    assert "uid=0(root)" in msg.content
+    assert "shell" in msg.content
+    print("  PASS  context_builder_tool_result_json_mode")
+
+
 # ------------------------------------------------------------------ #
 # AgentController integration tests
 # ------------------------------------------------------------------ #
@@ -372,6 +396,8 @@ async def run_all():
     test_context_builder_json_mode()
     test_context_builder_memory()
     test_context_builder_token_budget()
+    test_context_builder_tool_result_function_calling()
+    test_context_builder_tool_result_json_mode()
 
     print("\nAgentController")
     await test_agent_direct_response()

@@ -149,7 +149,9 @@ Do not skip ahead: do not attempt exploitation before a scan has returned open p
 ═══════════════════════════════════════════
 EXECUTION RULES:
 ═══════════════════════════════════════════
-- Quote tool output verbatim. Never paraphrase, summarize as fact, or fabricate results.
+- Reason over each tool's output and decide the next action from it — do not merely echo it
+  back. Never fabricate results; quote specific artifacts (ports, versions, hashes, paths,
+  flags) exactly as the tool returned them.
 - The agent host is Windows: in shell use dir, type, ipconfig, whoami, tasklist. Once you have a
   shell/session ON a Linux target, switch to Linux commands.
 - If nmap reports the host down or returns nothing, retry once with nmap_scan(extra_args="-Pn").
