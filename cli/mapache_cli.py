@@ -16,7 +16,6 @@ from core.agent_controller import AgentController, AgentMode
 from core.logger import get_logger, setup_logging
 from core.project_context import build_project_context, get_mapache_instructions
 from memory.memory_manager import MemoryManager
-from models.model_manager import ModelManager
 from models.routing_engine import RoutingStrategy
 from models.providers.ollama_provider import OllamaProvider
 from plugins.sdk.base_tool import Permission
@@ -163,7 +162,6 @@ class MapacheCLI:
         self.controller: AgentController | None = None
         self.registry: ToolRegistry | None = None
         self.memory = MemoryManager()
-        self.model_manager: ModelManager | None = None
         self.confirm = args.confirm
         self.working_dir = os.path.abspath(args.dir)
 
@@ -276,20 +274,6 @@ class MapacheCLI:
             for schema in self.registry.get_context_schemas():
                 self.controller.register_tool(schema)
 
-            # Phase 7 — multi-model manager
-            self.model_manager = ModelManager(
-                strategy=self.strategy,
-                local_only=not self.args.allow_cloud,
-                max_vram_gb=float(self.args.max_vram),
-                enable_verifier=not self.args.no_verifier,
-                ollama_url=self.args.ollama_url,
-            )
-            await self.model_manager.setup(
-                available_models=available or [self.args.model],
-                tool_dispatcher=dispatcher,
-            )
-            self.model_manager.set_available_tools(self.registry.list_names())
-
         await self.controller.start(inject_project_context=not self.args.no_context)
         return True
 
@@ -303,15 +287,11 @@ class MapacheCLI:
 
         print(BANNER)
         print(f"  Model    : {self.args.model}")
-        print(f"  Strategy : {self.strategy.value}")
+        print(f"  Strategy : {self.strategy.value} (stored; multi-model routing not yet wired to the loop)")
         print(f"  Dir      : {self.working_dir}")
         print(f"  Confirm  : {'on' if self.confirm else 'off'}")
-        print(f"  Verifier : {'on' if not self.args.no_verifier else 'off'}")
         print(f"  ToolSubset: {'off (all tools)' if self.args.all_tools else 'on (phase-based)'}")
         print(f"  Memory   : {stats['notes']} notes, {stats['knowledge_entries']} facts")
-
-        if self.model_manager:
-            print(f"\n{self.model_manager.explain_routing()}")
 
         if self.registry:
             print(f"\n  Tools    : {len(self.registry.list_names())} registered")
@@ -401,24 +381,13 @@ class MapacheCLI:
                 print()
 
         elif command == "/models":
-            if self.model_manager:
-                print(f"\n{self.model_manager.registry.summary()}\n")
-                print(self.model_manager.explain_routing())
-                s = self.model_manager.stats()
-                print(f"\n  Planner calls : {s['planner_calls']}")
-                print(f"  Executor calls: {s['executor_calls']}")
-                print(f"  Tool calls    : {s['executor_tool_calls']}")
-                vs = s.get('verifier_stats', {})
-                if vs:
-                    print(f"  Verifier      : {vs.get('calls',0)} checks, "
-                          f"{vs.get('retries_triggered',0)} retries, "
-                          f"{vs.get('failures_caught',0)} failures caught")
-                print()
-            else:
-                print("  Model manager not initialized.\n")
+            print(f"\n  Active model : {self.args.model}")
+            print(f"  Strategy     : {self.strategy.value} (stored)")
+            print("  Note: multi-model routing/verifier are not currently wired "
+                  "to the agent loop.\n")
 
         elif command == "/pipeline":
-            if len(parts) > 1 and self.model_manager:
+            if len(parts) > 1:
                 strategy_map = {
                     "single":   RoutingStrategy.SINGLE,
                     "pipeline": RoutingStrategy.PIPELINE,
@@ -427,10 +396,9 @@ class MapacheCLI:
                 }
                 new_strat = strategy_map.get(parts[1].lower())
                 if new_strat:
-                    self.model_manager.routing.strategy = new_strat
                     self.strategy = new_strat
-                    print(f"  Strategy: {new_strat.value}\n")
-                    print(self.model_manager.explain_routing())
+                    print(f"  Strategy stored: {new_strat.value} "
+                          "(applies once routing is wired to the loop)\n")
                 else:
                     print("  Options: single | pipeline | auto | hybrid\n")
             else:

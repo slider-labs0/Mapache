@@ -21,9 +21,7 @@ from .conversation_chain import ConversationChain
 from .event_bus import Event, EventBus
 from .executor import Executor
 from .logger import get_logger
-from .planner import Planner
 from .project_context import build_project_context
-from .task_manager import TaskManager
 
 logger = get_logger(__name__)
 
@@ -99,13 +97,13 @@ class AgentController:
             max_context_tokens=max_context_tokens,
             use_function_calling=use_function_calling,
         )
-        self.planner = Planner(self.bus)
-        self.task_manager = TaskManager(self.bus)
+        # Executor is retained only as a shell/tool utility (used by the CLI
+        # `!cmd` shortcut and tool dispatch); it no longer drives a parallel
+        # event-bus execution pipeline.
         self.executor = Executor(self.bus)
         self.chain = ConversationChain()
 
         # Wire subsystems
-        self.planner.set_model_caller(self._call_model_for_planning)
         self.executor.set_model_caller(self._call_model_raw)
         if tool_dispatcher:
             self.executor.set_tool_dispatcher(tool_dispatcher)
@@ -153,17 +151,6 @@ class AgentController:
         chain_context = self.chain.get_context_injection()
         if chain_context:
             self.context.inject_memory([chain_context])
-
-        await self.bus.emit(
-            "agent.turn.start",
-            {
-                "input": user_input,
-                "session_id": session_id,
-                "skip_planning": self.mode == AgentMode.CHAT,
-            },
-            source="controller",
-            session_id=session_id,
-        )
 
         self.context.add_user_message(user_input)
         response = await self._agent_loop(user_input, session_id)
@@ -282,11 +269,9 @@ class AgentController:
 
     def register_tool(self, schema: ToolSchema) -> None:
         self.context.register_tool(schema)
-        self.planner.set_available_tools(self.context.available_tools)
 
     def unregister_tool(self, name: str) -> None:
         self.context.unregister_tool(name)
-        self.planner.set_available_tools(self.context.available_tools)
 
     def set_working_dir(self, path: str) -> None:
         self.working_dir = path
@@ -524,20 +509,6 @@ class AgentController:
     # Model helpers
     # ------------------------------------------------------------------ #
 
-    async def _call_model_for_planning(
-        self,
-        messages: list[dict],
-        json_mode: bool = True,
-    ) -> str:
-        try:
-            raw = await self.model.chat(messages=messages, json_mode=json_mode)
-            if isinstance(raw, dict):
-                return raw.get("message", {}).get("content", "") or raw.get("content", "")
-            return str(raw)
-        except Exception as exc:
-            logger.error("Planning model call failed: %s", exc)
-            return '{"reasoning": "error", "tasks": []}'
-
     async def _call_model_raw(
         self,
         messages: list[dict],
@@ -556,7 +527,6 @@ class AgentController:
 
     def end_session(self, session_id: str) -> None:
         self._sessions.pop(session_id, None)
-        self.task_manager.clear_session(session_id)
 
     # ------------------------------------------------------------------ #
     # Event handlers

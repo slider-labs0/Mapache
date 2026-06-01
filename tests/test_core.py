@@ -19,8 +19,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core.event_bus import EventBus, Event
 from core.context_builder import ContextBuilder, Message, ToolSchema
-from core.planner import Planner, TaskType
-from core.task_manager import TaskManager, TaskStatus
 from core.agent_controller import AgentController, AgentMode
 
 
@@ -180,169 +178,6 @@ def test_context_builder_token_budget():
 
 
 # ------------------------------------------------------------------ #
-# Planner tests
-# ------------------------------------------------------------------ #
-
-async def test_planner_noop_without_model():
-    bus = EventBus()
-    planner = Planner(bus)
-    # No model set — should emit a passthrough plan
-
-    plans = []
-
-    @bus.on("planner.plan_ready")
-    async def capture(event: Event):
-        plans.append(event.data["plan"])
-
-    await bus.emit(
-        "agent.turn.start",
-        {"input": "hello there", "session_id": "test-session"},
-    )
-
-    await asyncio.sleep(0.05)  # let async handlers run
-    assert len(plans) == 1
-    assert plans[0]["tasks"][0]["type"] == "noop"
-    print("  PASS  planner_noop_without_model")
-
-
-async def test_planner_with_mock_model():
-    bus = EventBus()
-    planner = Planner(bus)
-
-    plan_json = json.dumps({
-        "reasoning": "Need to run a port scan first",
-        "tasks": [
-            {
-                "type": "tool_call",
-                "description": "Scan target for open ports",
-                "tool_name": "run_nmap",
-                "tool_args": {"host": "192.168.1.1"},
-                "output_key": "scan_result",
-            }
-        ]
-    })
-
-    async def mock_caller(messages, json_mode=True):
-        return plan_json
-
-    planner.set_model_caller(mock_caller)
-    planner.set_available_tools(["run_nmap", "shell"])
-
-    plans = []
-
-    @bus.on("planner.plan_ready")
-    async def capture(event: Event):
-        plans.append(event.data["plan"])
-
-    await bus.emit(
-        "agent.turn.start",
-        {"input": "scan 192.168.1.1", "session_id": "test2"},
-    )
-
-    await asyncio.sleep(0.05)
-    assert len(plans) == 1
-    assert plans[0]["tasks"][0]["tool_name"] == "run_nmap"
-    assert plans[0]["reasoning"] == "Need to run a port scan first"
-    print("  PASS  planner_with_mock_model")
-
-
-# ------------------------------------------------------------------ #
-# TaskManager tests
-# ------------------------------------------------------------------ #
-
-async def test_task_manager_plan_flow():
-    bus = EventBus()
-    tm = TaskManager(bus)
-
-    ready_tasks = []
-    done_plans = []
-
-    @bus.on("task.ready")
-    async def on_ready(event: Event):
-        ready_tasks.append(event.data)
-
-    @bus.on("task.plan_done")
-    async def on_done(event: Event):
-        done_plans.append(event.data)
-
-    # Emit a plan directly
-    plan_data = {
-        "id": "plan-001",
-        "goal": "test goal",
-        "reasoning": "test",
-        "tasks": [
-            {
-                "id": "t1",
-                "type": "tool_call",
-                "description": "step 1",
-                "tool_name": "shell",
-                "tool_args": {"cmd": "echo hi"},
-                "output_key": "result1",
-                "depends_on": [],
-            }
-        ]
-    }
-
-    await bus.emit("planner.plan_ready", {"plan": plan_data, "session_id": "sess1"})
-    await asyncio.sleep(0.05)
-
-    assert len(ready_tasks) == 1
-    assert ready_tasks[0]["tool_name"] == "shell"
-
-    # Simulate executor reporting success
-    await bus.emit("task.result", {
-        "task_id": "t1",
-        "output": "hi",
-        "session_id": "sess1",
-    })
-    await asyncio.sleep(0.05)
-
-    assert len(done_plans) == 1
-    assert done_plans[0]["success"] is True
-    print("  PASS  task_manager_plan_flow")
-
-
-async def test_task_manager_retry_on_failure():
-    bus = EventBus()
-    tm = TaskManager(bus)
-
-    ready_count = [0]
-    failed_plans = []
-
-    @bus.on("task.ready")
-    async def on_ready(event: Event):
-        ready_count[0] += 1
-
-    @bus.on("task.plan_done")
-    async def on_done(event: Event):
-        failed_plans.append(event.data)
-
-    plan_data = {
-        "id": "plan-retry",
-        "goal": "retry test",
-        "reasoning": "",
-        "tasks": [{"id": "t2", "type": "tool_call", "description": "flaky step",
-                   "tool_name": "flaky_tool", "tool_args": {}, "output_key": None, "depends_on": []}]
-    }
-
-    await bus.emit("planner.plan_ready", {"plan": plan_data, "session_id": "sess2"})
-    await asyncio.sleep(0.05)
-
-    # First failure — should retry (max_attempts=2)
-    await bus.emit("task.error", {"task_id": "t2", "error": "timeout", "session_id": "sess2"})
-    await asyncio.sleep(0.05)
-
-    # Second failure — should give up
-    await bus.emit("task.error", {"task_id": "t2", "error": "timeout again", "session_id": "sess2"})
-    await asyncio.sleep(0.05)
-
-    assert ready_count[0] == 2  # initial + 1 retry
-    assert len(failed_plans) == 1
-    assert failed_plans[0]["success"] is False
-    print("  PASS  task_manager_retry_on_failure")
-
-
-# ------------------------------------------------------------------ #
 # AgentController integration tests
 # ------------------------------------------------------------------ #
 
@@ -363,8 +198,6 @@ async def test_agent_direct_response():
 
 async def test_agent_tool_call_then_response():
     model = MockModel()
-    # Planner call (AGENT mode triggers planning) — return a passthrough plan
-    model.queue('{"reasoning": "direct", "tasks": [{"type": "noop", "description": "who am I"}]}')
     # First agent loop call: model requests a tool
     model.queue({"message": {
         "content": "",
@@ -392,8 +225,6 @@ async def test_agent_tool_call_then_response():
 
 async def test_agent_json_mode_tool_call():
     model = MockModel()
-    # Planner call
-    model.queue('{"reasoning": "direct", "tasks": [{"type": "noop", "description": "list files"}]}')
     # Agent loop: JSON mode tool call
     model.queue(json.dumps({"type": "tool_call", "tool": "shell", "args": {"cmd": "ls"}}))
     # Agent loop: final response
@@ -457,14 +288,6 @@ async def run_all():
     test_context_builder_json_mode()
     test_context_builder_memory()
     test_context_builder_token_budget()
-
-    print("\nPlanner")
-    await test_planner_noop_without_model()
-    await test_planner_with_mock_model()
-
-    print("\nTaskManager")
-    await test_task_manager_plan_flow()
-    await test_task_manager_retry_on_failure()
 
     print("\nAgentController")
     await test_agent_direct_response()

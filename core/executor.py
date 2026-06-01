@@ -1,36 +1,24 @@
 """
-executor.py — Mapache executor
+executor.py — Mapache shell/tool execution utility
 
-The executor sits between the task manager and the tools.
-It receives "task.ready" events, runs the appropriate action
-(tool call, shell command, or direct model query), and emits
-"task.result" or "task.error" back to the task manager.
+A thin helper that actually *runs* low-level actions on the host:
 
-The executor is the only component that actually *does* things.
-Everything else plans, routes, or tracks.
+    _run_shell()       ← run a subprocess (timeout + output capture)
+    _run_tool_call()   ← route through the tool dispatcher
+    _run_model_query() ← ask the model a one-off sub-question
 
-Execution flow:
-    task.ready  →  Executor._on_task_ready
-                        ↓
-                   _run_task(task)
-                        ↓
-                   _run_tool_call()   ← tool registry / dispatcher
-                   _run_shell()       ← direct shell (sandboxed)
-                   _run_model_query() ← sub-question to model
-                        ↓
-                   task.result  |  task.error
+Used directly by the agent loop's CLI `!cmd` shortcut and by callers that
+need a raw shell runner. It no longer drives an event-bus execution pipeline;
+the agent's real ReAct loop lives in AgentController._agent_loop.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import shlex
-import subprocess
-import time
 from typing import Any, Optional
 
-from .event_bus import Event, EventBus
+from .event_bus import EventBus
 from .logger import get_logger
 
 logger = get_logger(__name__)
@@ -69,10 +57,8 @@ class Executor:
         self._tool_dispatcher: Any = None   # injected by AgentController
         self._model_caller: Any = None       # injected by AgentController
         self._shell_timeout: int = self.DEFAULT_SHELL_TIMEOUT
-        self._running: dict[str, asyncio.Task] = {}  # task_id → asyncio.Task
 
-        bus.subscribe("task.ready", self._on_task_ready)
-        logger.info("Executor initialized")
+        logger.info("Executor initialized (shell/tool utility)")
 
     # ------------------------------------------------------------------ #
     # Dependency injection
@@ -86,81 +72,6 @@ class Executor:
 
     def set_shell_timeout(self, seconds: int) -> None:
         self._shell_timeout = seconds
-
-    # ------------------------------------------------------------------ #
-    # Event handler
-    # ------------------------------------------------------------------ #
-
-    async def _on_task_ready(self, event: Event) -> None:
-        task_id: str = event.data.get("task", {}).get("id", "")
-        task_type: str = event.data.get("task_type", "noop")
-        session_id: str = event.data.get("session_id") or event.session_id or ""
-
-        if not task_id:
-            logger.warning("task.ready event missing task.id — skipping")
-            return
-
-        logger.info("Executing task %s [%s]", task_id, task_type)
-
-        # Run in a separate asyncio task so the bus isn't blocked
-        coro = self._run_task(event.data, session_id)
-        running = asyncio.create_task(coro)
-        self._running[task_id] = running
-
-        def _cleanup(fut):
-            self._running.pop(task_id, None)
-
-        running.add_done_callback(_cleanup)
-
-    # ------------------------------------------------------------------ #
-    # Task dispatch
-    # ------------------------------------------------------------------ #
-
-    async def _run_task(self, task_data: dict, session_id: str) -> None:
-        task_id: str = task_data.get("task", {}).get("id", "unknown")
-        task_type: str = task_data.get("task_type", "noop")
-        tool_name: str = task_data.get("tool_name", "")
-        tool_args: dict = task_data.get("tool_args", {})
-        description: str = task_data.get("description", "")
-
-        start = time.monotonic()
-
-        try:
-            if task_type == "tool_call":
-                result = await self._run_tool_call(tool_name, tool_args, session_id)
-
-            elif task_type == "shell":
-                cmd = tool_args.get("cmd") or description
-                result = await self._run_shell(cmd)
-
-            elif task_type == "model_query":
-                result = await self._run_model_query(description, session_id)
-
-            elif task_type == "noop":
-                # Direct answer — output is the description itself
-                result = ExecutionResult(output=description)
-
-            else:
-                result = ExecutionResult(
-                    output="",
-                    error=f"Unknown task type: {task_type!r}",
-                )
-
-        except Exception as exc:
-            elapsed = (time.monotonic() - start) * 1000
-            logger.error("Task %s raised exception: %s", task_id, exc, exc_info=True)
-            await self._emit_error(task_id, str(exc), session_id)
-            return
-
-        elapsed = (time.monotonic() - start) * 1000
-        result.duration_ms = elapsed
-
-        if result.success:
-            logger.info("Task %s completed in %.0fms", task_id, elapsed)
-            await self._emit_result(task_id, result.output, session_id)
-        else:
-            logger.warning("Task %s failed in %.0fms: %s", task_id, elapsed, result.error)
-            await self._emit_error(task_id, result.error or "unknown", session_id)
 
     # ------------------------------------------------------------------ #
     # Execution strategies
@@ -265,39 +176,3 @@ class Executor:
         except Exception as exc:
             return ExecutionResult(output="", error=f"Model sub-query failed: {exc}")
 
-    # ------------------------------------------------------------------ #
-    # Result emission
-    # ------------------------------------------------------------------ #
-
-    async def _emit_result(self, task_id: str, output: str, session_id: str) -> None:
-        await self.bus.emit(
-            "task.result",
-            {"task_id": task_id, "output": output, "session_id": session_id},
-            source="executor",
-            session_id=session_id,
-        )
-
-    async def _emit_error(self, task_id: str, error: str, session_id: str) -> None:
-        await self.bus.emit(
-            "task.error",
-            {"task_id": task_id, "error": error, "session_id": session_id},
-            source="executor",
-            session_id=session_id,
-        )
-
-    # ------------------------------------------------------------------ #
-    # Control
-    # ------------------------------------------------------------------ #
-
-    async def cancel_task(self, task_id: str) -> bool:
-        """Cancel a running task by ID."""
-        task = self._running.get(task_id)
-        if task and not task.done():
-            task.cancel()
-            logger.info("Task %s cancelled", task_id)
-            return True
-        return False
-
-    @property
-    def running_task_ids(self) -> list[str]:
-        return list(self._running.keys())
