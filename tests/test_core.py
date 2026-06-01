@@ -270,6 +270,90 @@ async def test_agent_max_iterations():
 
 
 # ------------------------------------------------------------------ #
+# Model routing tests (Phase 7)
+# ------------------------------------------------------------------ #
+
+class FakeProvider:
+    """Stand-in for OllamaProvider that records calls and echoes its model."""
+
+    def __init__(self, model_id: str) -> None:
+        self.model = model_id
+        self.supports_tools = True
+
+    async def chat(self, messages, tools=None, json_mode=False, stream=False):
+        return {"message": {"content": f"reply from {self.model}"}}
+
+
+class FakePool:
+    """ModelPool stand-in that hands out FakeProviders and logs get() calls."""
+
+    def __init__(self) -> None:
+        self.gets: list[str] = []
+        self._providers: dict[str, FakeProvider] = {}
+
+    def get(self, model_id: str) -> FakeProvider:
+        self.gets.append(model_id)
+        return self._providers.setdefault(model_id, FakeProvider(model_id))
+
+
+def _routing(strategy):
+    from models.model_registry import ModelRegistry
+    from models.routing_engine import RoutingEngine
+    registry = ModelRegistry()
+    engine = RoutingEngine(
+        registry, strategy=strategy, primary_model_id="qwen2.5:14b",
+        local_only=True, max_vram_gb=12.0,
+    )
+    # qwen2.5:7b is faster, qwen2.5:14b is higher quality; nomic is embed-only.
+    engine.set_available_models(["qwen2.5:14b", "qwen2.5:7b", "nomic-embed-text"])
+    return engine
+
+
+async def test_routing_pipeline_picks_fast_executor():
+    from models.model_registry import ModelRole
+    from models.routing_engine import RoutingStrategy
+    from models.routed_model import RoutedModel
+
+    engine = _routing(RoutingStrategy.PIPELINE)
+    pool = FakePool()
+    routed = RoutedModel(engine, pool, primary_model_id="qwen2.5:14b")
+
+    # PIPELINE executor prefers speed → the 7B model wins.
+    assert routed.model_for(ModelRole.EXECUTOR) == "qwen2.5:7b"
+    # Planner prefers quality → the 14B model wins.
+    assert routed.model_for(ModelRole.PLANNER) == "qwen2.5:14b"
+
+    # A chat() call (default EXECUTOR role) dispatches to the executor model.
+    await routed.chat([{"role": "user", "content": "hi"}])
+    assert pool.gets[-1] == "qwen2.5:7b"
+    print("  PASS  routing_pipeline_picks_fast_executor")
+
+
+async def test_routing_excludes_embedding_only_model():
+    from models.routing_engine import RoutingStrategy
+    engine = _routing(RoutingStrategy.AUTO)
+    # nomic-embed-text must never be offered for a chat role.
+    assert "nomic-embed-text" not in engine._chat_capable
+    print("  PASS  routing_excludes_embedding_only_model")
+
+
+async def test_routing_strategy_switch_changes_executor():
+    from models.model_registry import ModelRole
+    from models.routing_engine import RoutingStrategy
+    from models.routed_model import RoutedModel
+
+    engine = _routing(RoutingStrategy.AUTO)
+    routed = RoutedModel(engine, FakePool(), primary_model_id="qwen2.5:14b")
+
+    # AUTO scores executor by role only → 14B (higher executor_score) wins.
+    assert routed.model_for(ModelRole.EXECUTOR) == "qwen2.5:14b"
+    # Switching to PIPELINE (speed-weighted) flips it to the 7B.
+    routed.set_strategy(RoutingStrategy.PIPELINE)
+    assert routed.model_for(ModelRole.EXECUTOR) == "qwen2.5:7b"
+    print("  PASS  routing_strategy_switch_changes_executor")
+
+
+# ------------------------------------------------------------------ #
 # Runner
 # ------------------------------------------------------------------ #
 
@@ -294,6 +378,11 @@ async def run_all():
     await test_agent_tool_call_then_response()
     await test_agent_json_mode_tool_call()
     await test_agent_max_iterations()
+
+    print("\nModelRouting")
+    await test_routing_pipeline_picks_fast_executor()
+    await test_routing_excludes_embedding_only_model()
+    await test_routing_strategy_switch_changes_executor()
 
     print("\n" + "─" * 40)
     print("All tests passed.\n")

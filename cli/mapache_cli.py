@@ -16,7 +16,10 @@ from core.agent_controller import AgentController, AgentMode
 from core.logger import get_logger, setup_logging
 from core.project_context import build_project_context, get_mapache_instructions
 from memory.memory_manager import MemoryManager
-from models.routing_engine import RoutingStrategy
+from models.model_registry import ModelRegistry
+from models.routing_engine import RoutingEngine, RoutingStrategy
+from models.model_pool import ModelPool
+from models.routed_model import RoutedModel
 from models.providers.ollama_provider import OllamaProvider
 from plugins.sdk.base_tool import Permission
 from security_tools.recon.nmap_tool import NmapTool
@@ -161,6 +164,7 @@ class MapacheCLI:
         self.session_id: str | None = None
         self.controller: AgentController | None = None
         self.registry: ToolRegistry | None = None
+        self.routed: RoutedModel | None = None
         self.memory = MemoryManager()
         self.confirm = args.confirm
         self.working_dir = os.path.abspath(args.dir)
@@ -202,10 +206,27 @@ class MapacheCLI:
             ans = input(f"\n  ⚠ Confirm {tool_name}({str(args)[:100]})? [Y/n] ").strip().lower()
             return ans != "n"
 
+        # Phase 7 — per-role model routing. RoutedModel consults the
+        # RoutingEngine on every call and dispatches to the best installed
+        # model for the role (the agent loop runs as EXECUTOR). With one
+        # model installed this collapses to that single model.
+        registry = ModelRegistry()
+        routing = RoutingEngine(
+            registry,
+            strategy=self.strategy,
+            primary_model_id=self.args.model,
+            local_only=not self.args.allow_cloud,
+            max_vram_gb=float(self.args.max_vram),
+        )
+        routing.set_available_models(available or [self.args.model])
+        pool = ModelPool(base_url=self.args.ollama_url)
+        pool.register(self.args.model, primary)  # reuse the already-built client
+        self.routed = RoutedModel(routing, pool, primary_model_id=self.args.model)
+
         self.controller = AgentController(
-            model_provider=primary,
+            model_provider=self.routed,
             mode=mode,
-            use_function_calling=primary.supports_tools,
+            use_function_calling=self.routed.supports_tools,
             system_prompt=SYSTEM_PROMPT,
             working_dir=self.working_dir,
             confirm_dangerous=self.confirm,
@@ -287,11 +308,14 @@ class MapacheCLI:
 
         print(BANNER)
         print(f"  Model    : {self.args.model}")
-        print(f"  Strategy : {self.strategy.value} (stored; multi-model routing not yet wired to the loop)")
+        print(f"  Strategy : {self.strategy.value}")
         print(f"  Dir      : {self.working_dir}")
         print(f"  Confirm  : {'on' if self.confirm else 'off'}")
         print(f"  ToolSubset: {'off (all tools)' if self.args.all_tools else 'on (phase-based)'}")
         print(f"  Memory   : {stats['notes']} notes, {stats['knowledge_entries']} facts")
+
+        if self.routed:
+            print(f"\n{self.routed.explain()}")
 
         if self.registry:
             print(f"\n  Tools    : {len(self.registry.list_names())} registered")
@@ -381,13 +405,20 @@ class MapacheCLI:
                 print()
 
         elif command == "/models":
-            print(f"\n  Active model : {self.args.model}")
-            print(f"  Strategy     : {self.strategy.value} (stored)")
-            print("  Note: multi-model routing/verifier are not currently wired "
-                  "to the agent loop.\n")
+            if self.routed:
+                print(f"\n{self.routed.routing.registry.summary()}\n")
+                print(self.routed.explain())
+                calls = self.routed.stats()
+                if calls:
+                    print("\n  Calls by model:")
+                    for model_id, n in sorted(calls.items(), key=lambda x: -x[1]):
+                        print(f"    {model_id:30s} {n}")
+                print()
+            else:
+                print(f"\n  Active model : {self.args.model}\n")
 
         elif command == "/pipeline":
-            if len(parts) > 1:
+            if len(parts) > 1 and self.routed:
                 strategy_map = {
                     "single":   RoutingStrategy.SINGLE,
                     "pipeline": RoutingStrategy.PIPELINE,
@@ -396,9 +427,10 @@ class MapacheCLI:
                 }
                 new_strat = strategy_map.get(parts[1].lower())
                 if new_strat:
+                    self.routed.set_strategy(new_strat)
                     self.strategy = new_strat
-                    print(f"  Strategy stored: {new_strat.value} "
-                          "(applies once routing is wired to the loop)\n")
+                    print(f"  Strategy: {new_strat.value}\n")
+                    print(self.routed.explain())
                 else:
                     print("  Options: single | pipeline | auto | hybrid\n")
             else:

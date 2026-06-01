@@ -116,22 +116,34 @@ security_tools/
 
 Milestone: full offensive toolchain registered and callable.
 
-## 🟡 Phase 7 — Multi-Model Routing (PARTIAL — salvage pending)
+## ✅ Phase 7 — Multi-Model Routing (LIVE)
 
 ```
 models/
-  model_registry.py      ← scores known models by role (kept)
-  routing_engine.py      ← per-role model selection, skips embedding-only models (kept)
+  model_registry.py      ← scores known models by role
+  routing_engine.py      ← per-role model selection, skips embedding-only models
+  model_pool.py          ← lazy OllamaProvider cache, one per model id
+  routed_model.py        ← provider facade; routes each call to the best model
   providers/ollama_provider.py
 ```
 
-**Status:** the routing primitives exist but are **not wired into the agent
-loop**. Every turn currently runs on the single primary model. The `--strategy`
-flag and `/pipeline` command store a choice but do not yet affect execution; the
-deleted `ModelManager` used to (cosmetically) display routing but never ran it.
+**Status:** routing is **wired into the live turn path**. The CLI builds a
+`RoutedModel` as the agent's `model_provider`; every call consults the
+`RoutingEngine` and dispatches to the best installed model for the role. The
+ReAct loop runs as the EXECUTOR role. `--strategy` and the `/pipeline` command
+now take real effect, and `/models` shows the live routing table plus a
+per-model call count. With a single model installed, routing collapses to that
+model (no behaviour change).
 
-**Next step:** wire `RoutingEngine` into `_agent_loop` so model selection per
-role is real, and fold a lightweight verifier/reflection check into the loop.
+Routing by strategy:
+- `single`   — one model for everything
+- `auto`     — best role score per role
+- `pipeline` — quality-weighted planner/verifier, speed-weighted executor
+- `hybrid`   — cloud planner/verifier + local executor (needs `--allow-cloud`)
+
+**Not yet wired:** a verifier/reflection step. `verifier_score` exists in the
+registry and the VERIFIER role routes correctly, but no turn currently issues a
+verifier call. `--no-verifier` remains inert until that lands (see Phase 8).
 
 ---
 
@@ -192,17 +204,19 @@ python -m cli --model qwen2.5:14b
 you > target is 10.129.x.x — nmap scan with -Pn flag
 ```
 
-Note: `--strategy` and `--no-verifier` are currently inert (routing not wired,
-verifier removed). They are accepted but have no effect.
+Note: `--strategy` is live (per-role routing). `--no-verifier` is still inert
+(the verifier step is Phase 8). With multiple tool-capable models installed,
+`--strategy pipeline` will run the loop on the fastest one.
 
 ---
 
 ## What's left
 
 ```
-Phase 8 ⬜  Routing salvage — wire RoutingEngine + a verifier/reflection
-              check into _agent_loop so --strategy and per-role model
-              selection actually take effect.
+Phase 8 ⬜  Verifier / reflection — issue a VERIFIER-role call after a turn
+              (or on empty/error tool output) to catch dead ends and retry.
+              Routing for the role is already in place; default-on vs opt-in
+              is an open decision (latency vs reliability).
 
 Phase 9 ⬜  Voice + Hardware + Mobile
               voice/speech_to_text.py     (Whisper)
