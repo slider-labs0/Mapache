@@ -1,0 +1,359 @@
+"""
+context_builder.py — Mapache context window assembler
+
+Responsible for assembling the full prompt context sent to the model on each turn.
+Handles: system prompt, conversation history, tool schemas, memory injection,
+and token budget management.
+
+The model never sees raw internal state — everything passes through here first.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from dataclasses import dataclass, field
+from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
+
+# Approximate token counts (conservative estimates)
+AVG_CHARS_PER_TOKEN = 4
+DEFAULT_MAX_TOKENS = 16384
+SYSTEM_PROMPT_RESERVE = 1024
+TOOL_SCHEMA_RESERVE = 2048
+
+
+@dataclass
+class Message:
+    """A single message in the conversation history."""
+
+    role: str  # "system" | "user" | "assistant" | "tool"
+    content: str
+    tool_call_id: Optional[str] = None
+    tool_name: Optional[str] = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_ollama(self) -> dict[str, Any]:
+        """Serialize to Ollama message format."""
+        msg: dict[str, Any] = {"role": self.role, "content": self.content}
+        if self.tool_call_id:
+            msg["tool_call_id"] = self.tool_call_id
+        return msg
+
+    def to_openai(self) -> dict[str, Any]:
+        """Serialize to OpenAI-compatible message format."""
+        msg: dict[str, Any] = {"role": self.role, "content": self.content}
+        if self.tool_call_id:
+            msg["tool_call_id"] = self.tool_call_id
+        if self.tool_name:
+            msg["name"] = self.tool_name
+        return msg
+
+    def token_estimate(self) -> int:
+        return max(1, len(self.content) // AVG_CHARS_PER_TOKEN)
+
+
+@dataclass
+class ToolSchema:
+    """JSON schema describing a tool the model can call."""
+
+    name: str
+    description: str
+    parameters: dict[str, Any]
+
+    def to_openai_function(self) -> dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters,
+            },
+        }
+
+    def to_ollama_tool(self) -> dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters,
+            },
+        }
+
+    def to_json_mode_description(self) -> str:
+        """Fallback: describe the tool in plain text for JSON-mode prompting."""
+        params = json.dumps(self.parameters, indent=2)
+        return f"Tool: {self.name}\nDescription: {self.description}\nParameters:\n{params}"
+
+
+class ContextBuilder:
+    """
+    Assembles the full context payload for a model call.
+
+    Manages:
+    - System prompt construction
+    - Conversation history with rolling window
+    - Tool schema injection (native function calling or JSON mode)
+    - Memory snippet injection
+    - Token budget enforcement
+    """
+
+    DEFAULT_SYSTEM_PROMPT = """You are Mapache, an autonomous AI agent with direct access to a \
+Windows host system via registered tools.
+
+RULES — follow these exactly, no exceptions:
+- You MUST call a tool to answer any question about the system. Never describe what you would \
+do — just do it.
+- When asked about files, ALWAYS call the shell tool immediately with the appropriate command.
+- When a tool returns output, print it EXACTLY as returned. Never use placeholders like \
+%USERNAME%, 'username', '/path/to/directory', or any invented values.
+- You are on Windows. Use Windows commands only: 'dir' not 'ls', 'type' not 'cat', \
+'ipconfig' not 'ifconfig', 'tasklist' not 'ps', 'whoami' for username, 'cd' for directory.
+- Never explain commands. Never show examples. Never say what you would do. Just do it.
+- If you are unsure of a path or value, run a command to find out — do not guess or invent it.
+
+You have full system access. Act on every request immediately using your tools."""
+
+    def __init__(
+        self,
+        system_prompt: str | None = None,
+        max_context_tokens: int = DEFAULT_MAX_TOKENS,
+        use_function_calling: bool = True,
+    ) -> None:
+        self.system_prompt = system_prompt or self.DEFAULT_SYSTEM_PROMPT
+        self.max_context_tokens = max_context_tokens
+        self.use_function_calling = use_function_calling
+
+        self._history: list[Message] = []
+        self._tools: dict[str, ToolSchema] = {}
+        self._memory_snippets: list[str] = []
+        # When set, only tools whose names are in this set are exposed to the
+        # model. None means "expose all registered tools". Used for phase-based
+        # subsetting to keep the function-calling payload small enough for
+        # local models (avoids Ollama tool-schema overflow).
+        self._active_tools: set[str] | None = None
+
+    # ------------------------------------------------------------------ #
+    # Tool registration
+    # ------------------------------------------------------------------ #
+
+    def register_tool(self, schema: ToolSchema) -> None:
+        self._tools[schema.name] = schema
+        logger.debug("Tool registered in context: %s", schema.name)
+
+    def unregister_tool(self, name: str) -> None:
+        self._tools.pop(name, None)
+
+    def clear_tools(self) -> None:
+        self._tools.clear()
+
+    def set_active_tools(self, names: object | None) -> None:
+        """
+        Restrict which registered tools are exposed to the model.
+
+        Pass an iterable of tool names to expose only those; pass None to
+        expose all registered tools. Names not actually registered are
+        ignored. If the resulting active set would be empty, the filter is
+        treated as None (expose all) so the model is never left tool-less.
+        """
+        if names is None:
+            self._active_tools = None
+            return
+        self._active_tools = {n for n in names if n in self._tools}
+
+    def clear_active_tools(self) -> None:
+        self._active_tools = None
+
+    def _active_schemas(self) -> list[ToolSchema]:
+        """Return the ToolSchema objects currently exposed to the model."""
+        if not self._active_tools:
+            return list(self._tools.values())
+        active = [t for n, t in self._tools.items() if n in self._active_tools]
+        return active or list(self._tools.values())
+
+    @property
+    def available_tools(self) -> list[str]:
+        return list(self._tools.keys())
+
+    # ------------------------------------------------------------------ #
+    # History management
+    # ------------------------------------------------------------------ #
+
+    def add_message(self, message: Message) -> None:
+        self._history.append(message)
+
+    def add_user_message(self, content: str) -> None:
+        self.add_message(Message(role="user", content=content))
+
+    def add_assistant_message(self, content: str) -> None:
+        self.add_message(Message(role="assistant", content=content))
+
+    def add_tool_result(self, tool_call_id: str, tool_name: str, result: str) -> None:
+     self.add_message(Message(
+        role="tool",
+        content=result,
+        tool_call_id=tool_call_id,
+        tool_name=tool_name,
+    ))
+    # Force the model to see the result as a user message too
+    # Some models ignore the tool role entirely
+    
+     self.add_message(Message(
+        role="user",
+        content=f"The tool '{tool_name}' returned this exact output. Report it verbatim:\n\n{result}",
+    ))
+
+
+
+    def clear_history(self) -> None:
+        self._history.clear()
+
+    # ------------------------------------------------------------------ #
+    # Memory
+    # ------------------------------------------------------------------ #
+
+    def inject_memory(self, snippets: list[str]) -> None:
+        """Inject memory snippets to be prepended to the system prompt."""
+        self._memory_snippets = snippets
+
+    def clear_memory(self) -> None:
+        self._memory_snippets.clear()
+
+    # ------------------------------------------------------------------ #
+    # Context assembly
+    # ------------------------------------------------------------------ #
+
+    def build(self, format: str = "ollama") -> dict[str, Any]:
+        """
+        Assemble the full context payload.
+
+        Args:
+            format: "ollama" | "openai"
+
+        Returns:
+            dict with keys: messages, tools (if function calling), system
+        """
+        system = self._build_system_prompt()
+        history = self._trim_history()
+
+        if format == "ollama":
+            messages = self._build_ollama_messages(system, history)
+            result: dict[str, Any] = {"messages": messages}
+            if self.use_function_calling and self._tools:
+                result["tools"] = [t.to_ollama_tool() for t in self._active_schemas()]
+        else:
+            messages = self._build_openai_messages(system, history)
+            result = {"messages": messages}
+            if self.use_function_calling and self._tools:
+                result["tools"] = [t.to_openai_function() for t in self._active_schemas()]
+                result["tool_choice"] = "auto"
+
+        return result
+
+    def build_json_mode(self) -> dict[str, Any]:
+        """
+        Build context for JSON mode fallback (no native function calling).
+        Tool schemas are described in plain text within the system prompt.
+        Model is instructed to respond with a JSON object.
+        """
+        tool_descriptions = "\n\n".join(
+            t.to_json_mode_description() for t in self._active_schemas()
+        )
+
+        json_system = self.system_prompt
+        if tool_descriptions:
+            json_system += f"""
+
+---
+AVAILABLE TOOLS:
+{tool_descriptions}
+
+---
+RESPONSE FORMAT:
+You must respond with a JSON object. Use one of these structures:
+
+To call a tool:
+{{"type": "tool_call", "tool": "<tool_name>", "args": {{...}}}}
+
+To give a final answer:
+{{"type": "response", "content": "<your response>"}}
+
+To plan multiple steps:
+{{"type": "plan", "steps": ["step 1", "step 2", ...], "first_tool": "<tool_name>", "first_args": {{...}}}}
+"""
+
+        system = self._build_system_prompt(override=json_system)
+        history = self._trim_history()
+        messages = self._build_ollama_messages(system, history)
+
+        return {"messages": messages}
+
+    # ------------------------------------------------------------------ #
+    # Internal helpers
+    # ------------------------------------------------------------------ #
+
+    def _build_system_prompt(self, override: str | None = None) -> str:
+        base = override or self.system_prompt
+        if self._memory_snippets:
+            memory_block = "\n".join(f"- {s}" for s in self._memory_snippets)
+            base = f"RELEVANT MEMORY:\n{memory_block}\n\n---\n{base}"
+        return base
+
+    def _trim_history(self) -> list[Message]:
+        """
+        Trim history to fit within the token budget.
+        Always keeps the most recent messages. Never drops tool results
+        that correspond to a preceding tool call (would break context).
+        """
+        budget = (
+            self.max_context_tokens
+            - SYSTEM_PROMPT_RESERVE
+            - (TOOL_SCHEMA_RESERVE if self._tools else 0)
+        )
+
+        # Walk backwards, accumulate until budget exceeded
+        kept: list[Message] = []
+        used = 0
+        for msg in reversed(self._history):
+            tokens = msg.token_estimate()
+            if used + tokens > budget and kept:
+                break
+            kept.append(msg)
+            used += tokens
+
+        kept.reverse()
+        if len(kept) < len(self._history):
+            logger.debug(
+                "Context trimmed: kept %d/%d messages (%d est. tokens)",
+                len(kept), len(self._history), used,
+            )
+        return kept
+
+    def _build_ollama_messages(self, system: str, history: list[Message]) -> list[dict]:
+        messages = [{"role": "system", "content": system}]
+        messages += [m.to_ollama() for m in history]
+        return messages
+
+    def _build_openai_messages(self, system: str, history: list[Message]) -> list[dict]:
+        messages = [{"role": "system", "content": system}]
+        messages += [m.to_openai() for m in history]
+        return messages
+
+    def token_usage_estimate(self) -> dict[str, int]:
+        """Return a rough token budget breakdown for debugging."""
+        history_tokens = sum(m.token_estimate() for m in self._history)
+        system_tokens = len(self.system_prompt) // AVG_CHARS_PER_TOKEN
+        tool_tokens = sum(
+            len(json.dumps(t.to_openai_function())) // AVG_CHARS_PER_TOKEN
+            for t in self._active_schemas()
+        )
+        return {
+            "system": system_tokens,
+            "history": history_tokens,
+            "tools": tool_tokens,
+            "total_estimate": system_tokens + history_tokens + tool_tokens,
+            "budget": self.max_context_tokens,
+            "remaining": self.max_context_tokens - system_tokens - history_tokens - tool_tokens,
+        }
