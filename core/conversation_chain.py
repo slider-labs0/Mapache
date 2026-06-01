@@ -257,10 +257,24 @@ class ConversationChain:
     def on_turn_start(self, user_input: str) -> None:
         self._turn_number += 1
 
-        # Extract target from input
+        # Extract target from input. A freshly typed IP that differs from the
+        # current target overrides it — e.g. HTB reassigns the machine IP
+        # mid-session, and we must not keep scanning the dead host. When the
+        # target changes, stale per-target findings (ports, services, vulns)
+        # are cleared and the phase resets to recon. Hostnames only set the
+        # target when none exists yet, so a domain mentioned in passing can't
+        # hijack the active engagement.
         target = self._extract_target(user_input)
-        if target and not self.attack_state.target:
-            self.attack_state.target = target
+        if target:
+            is_ip = bool(re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", target))
+            if not self.attack_state.target:
+                self.attack_state.target = target
+            elif is_ip and target != self.attack_state.target:
+                self.attack_state.target = target
+                self.attack_state.open_ports = []
+                self.attack_state.services = {}
+                self.attack_state.vulnerabilities = []
+                self.attack_state.current_phase = "recon"
 
         # Detect explicit rescan requests — clear cached data
         rescan_keywords = [
