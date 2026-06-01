@@ -135,8 +135,9 @@ now take real effect, and `/models` shows the live routing table plus a
 per-model call count. With a single model installed, routing collapses to that
 model (no behaviour change).
 
-Routing by strategy:
-- `single`   — one model for everything
+Routing by strategy (default is `single`, so the chosen `--model` is always
+honored; routing is opt-in):
+- `single`   — one model for everything (the `--model` you pass)
 - `auto`     — best role score per role
 - `pipeline` — quality-weighted planner/verifier, speed-weighted executor
 - `hybrid`   — cloud planner/verifier + local executor (needs `--allow-cloud`)

@@ -541,8 +541,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ollama-url",
                         default=os.environ.get("OLLAMA_URL", "http://localhost:11434"))
     parser.add_argument("--dir", "-d", default=os.getcwd())
-    parser.add_argument("--strategy", default="auto",
-                        choices=["single", "pipeline", "auto", "hybrid"])
+    parser.add_argument("--strategy", default="single",
+                        choices=["single", "pipeline", "auto", "hybrid"],
+                        help="single (default): always use --model. "
+                             "auto/pipeline/hybrid: route per role across "
+                             "installed models (may pick a model other than --model)")
     parser.add_argument("--max-vram", default="12")
     parser.add_argument("--allow-cloud", action="store_true")
     parser.add_argument("--no-verifier", action="store_true")
