@@ -16,7 +16,7 @@ from core.agent_controller import AgentController, AgentMode
 from core.logger import get_logger, setup_logging
 from core.project_context import build_project_context, get_mapache_instructions
 from memory.memory_manager import MemoryManager
-from models.model_registry import ModelRegistry
+from models.model_registry import ModelRegistry, ModelRole
 from models.routing_engine import RoutingEngine, RoutingStrategy
 from models.model_pool import ModelPool
 from models.routed_model import RoutedModel
@@ -225,6 +225,13 @@ class MapacheCLI:
         pool.register(self.args.model, primary)  # reuse the already-built client
         self.routed = RoutedModel(routing, pool, primary_model_id=self.args.model)
 
+        # Opt-in verifier (--verify): route the verification call to the
+        # VERIFIER-role model so it can use a higher-quality model than the loop.
+        async def verifier_caller(messages: list[dict]):
+            return await self.routed.chat(
+                messages=messages, role=ModelRole.VERIFIER, json_mode=True
+            )
+
         self.controller = AgentController(
             model_provider=self.routed,
             mode=mode,
@@ -234,6 +241,8 @@ class MapacheCLI:
             confirm_dangerous=self.confirm,
             confirm_callback=confirm_cb,
             enable_tool_subsetting=not self.args.all_tools,
+            enable_verifier=self.args.verify,
+            verifier_caller=verifier_caller,
         )
 
         if not self.args.no_tools:
@@ -313,6 +322,7 @@ class MapacheCLI:
         print(f"  Strategy : {self.strategy.value}")
         print(f"  Dir      : {self.working_dir}")
         print(f"  Confirm  : {'on' if self.confirm else 'off'}")
+        print(f"  Verifier : {'on (--verify)' if self.args.verify else 'off'}")
         print(f"  ToolSubset: {'off (all tools)' if self.args.all_tools else 'on (phase-based)'}")
         print(f"  Memory   : {stats['notes']} notes, {stats['knowledge_entries']} facts")
 
@@ -550,7 +560,12 @@ def parse_args() -> argparse.Namespace:
                              "installed models (may pick a model other than --model)")
     parser.add_argument("--max-vram", default="12")
     parser.add_argument("--allow-cloud", action="store_true")
-    parser.add_argument("--no-verifier", action="store_true")
+    parser.add_argument("--verify", action="store_true",
+                        help="Enable the opt-in verifier: after a final answer, a "
+                             "VERIFIER-role model judges it and the loop retries once "
+                             "with a suggestion if it fell short (adds one model call)")
+    parser.add_argument("--no-verifier", action="store_true",
+                        help="(deprecated no-op; the verifier is now off unless --verify)")
     parser.add_argument("--no-tools", action="store_true")
     parser.add_argument("--all-tools", action="store_true",
                         help="Disable phase-based tool subsetting and expose all "

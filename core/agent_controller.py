@@ -30,6 +30,19 @@ DANGEROUS_PATTERNS = [
     "delete from", ":(){:|:&};:", "mkfs", "dd if=",
 ]
 
+VERIFIER_SYSTEM_PROMPT = """You are a verification module for an offensive-security agent. \
+Given the user's goal and the agent's final response, decide whether the response actually \
+addresses the goal or whether the agent stopped prematurely, skipped a step, or made an \
+unsupported claim.
+
+Respond with ONLY a JSON object, no prose:
+{"ok": true|false, "reason": "<short why>", "suggestion": "<if not ok, the single concrete \
+next action the agent should take>"}
+
+Mark ok=true if the response reasonably completes the goal or is correctly blocked waiting on \
+the operator. Mark ok=false only when there is a clear, actionable next step the agent should \
+have taken."""
+
 
 class AgentMode(str, Enum):
     CHAT  = "chat"
@@ -81,6 +94,9 @@ class AgentController:
         confirm_dangerous: bool = False,
         confirm_callback: Optional[Callable[[str, dict], Any]] = None,
         enable_tool_subsetting: bool = True,
+        enable_verifier: bool = False,
+        verify_max_retries: int = 1,
+        verifier_caller: Optional[Callable[[list[dict]], Any]] = None,
     ) -> None:
         self.model = model_provider
         self.tool_dispatcher = tool_dispatcher
@@ -89,6 +105,12 @@ class AgentController:
         self.confirm_dangerous = confirm_dangerous
         self.confirm_callback = confirm_callback
         self.enable_tool_subsetting = enable_tool_subsetting
+        # Opt-in verifier: after the loop produces a final answer, a VERIFIER-
+        # role model call judges whether it actually addresses the goal; if not
+        # (and retries remain) the loop resumes with the verifier's suggestion.
+        self.enable_verifier = enable_verifier
+        self.verify_max_retries = verify_max_retries
+        self.verifier_caller = verifier_caller
 
         # Core subsystems
         self.bus = EventBus()
@@ -297,6 +319,7 @@ class AgentController:
     async def _agent_loop(self, user_input: str, session_id: str) -> AgentResponse:
         tools_used: list[str] = []
         iteration = 0
+        verify_retries_left = self.verify_max_retries
 
         while iteration < self.MAX_ITERATIONS:
             iteration += 1
@@ -378,6 +401,32 @@ class AgentController:
             content = parsed.get("content") or parsed.get("text", "")
             if not content and isinstance(raw_response, str):
                 content = raw_response
+
+            # Opt-in verifier: judge the final answer; on a failed verdict with
+            # retries left, resume the loop with the verifier's suggestion.
+            if (
+                self.enable_verifier
+                and self.mode == AgentMode.AGENT
+                and content
+                and verify_retries_left > 0
+            ):
+                verdict = await self._verify(user_input, content, tools_used)
+                if not verdict.get("ok", True):
+                    verify_retries_left -= 1
+                    suggestion = verdict.get("suggestion") or "continue toward the goal"
+                    reason = verdict.get("reason") or "answer may be incomplete"
+                    logger.info("Verifier rejected answer: %s → %s", reason, suggestion)
+                    self.context.add_user_message(
+                        f"[verifier] Your answer may be incomplete: {reason}. "
+                        f"Next step: {suggestion}. Continue — call a tool if needed."
+                    )
+                    await self.bus.emit(
+                        "agent.verify.retry",
+                        {"reason": reason, "suggestion": suggestion, "session_id": session_id},
+                        source="controller",
+                        session_id=session_id,
+                    )
+                    continue
 
             return AgentResponse(
                 content=content,
@@ -515,6 +564,57 @@ class AgentController:
         json_mode: bool = False,
     ) -> Any:
         return await self.model.chat(messages=messages, json_mode=json_mode)
+
+    # ------------------------------------------------------------------ #
+    # Verifier
+    # ------------------------------------------------------------------ #
+
+    async def _verify(
+        self,
+        goal: str,
+        response_text: str,
+        tools_used: list[str],
+    ) -> dict[str, Any]:
+        """
+        Judge whether the agent's final answer addresses the goal.
+
+        Uses the injected verifier_caller (routes to the VERIFIER-role model)
+        when available, otherwise falls back to the primary model. Returns
+        {"ok": bool, "reason": str, "suggestion": str}. Any failure or
+        unparsable verdict passes (ok=True) so verification never deadlocks
+        the turn.
+        """
+        messages = [
+            {"role": "system", "content": VERIFIER_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    f"Goal: {goal}\n\n"
+                    f"Tools used: {', '.join(tools_used) or 'none'}\n\n"
+                    f"Agent response:\n{response_text}"
+                ),
+            },
+        ]
+        try:
+            if self.verifier_caller:
+                raw = await self.verifier_caller(messages)
+            else:
+                raw = await self.model.chat(messages=messages, json_mode=True)
+
+            if isinstance(raw, dict):
+                text = raw.get("message", {}).get("content", "") or raw.get("content", "")
+            else:
+                text = str(raw)
+
+            data = json.loads(text.strip())
+            return {
+                "ok": bool(data.get("ok", True)),
+                "reason": str(data.get("reason", "")),
+                "suggestion": str(data.get("suggestion", "")),
+            }
+        except Exception as exc:
+            logger.warning("Verifier unavailable/unparsable — passing: %s", exc)
+            return {"ok": True, "reason": "", "suggestion": ""}
 
     # ------------------------------------------------------------------ #
     # Session management

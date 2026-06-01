@@ -142,9 +142,24 @@ honored; routing is opt-in):
 - `pipeline` — quality-weighted planner/verifier, speed-weighted executor
 - `hybrid`   — cloud planner/verifier + local executor (needs `--allow-cloud`)
 
-**Not yet wired:** a verifier/reflection step. `verifier_score` exists in the
-registry and the VERIFIER role routes correctly, but no turn currently issues a
-verifier call. `--no-verifier` remains inert until that lands (see Phase 8).
+**Verifier:** see Phase 8 below — wired as an opt-in (`--verify`).
+
+## ✅ Phase 8 — Verifier / Reflection (LIVE, opt-in)
+
+Enabled with `--verify` (off by default — zero added latency on normal runs).
+After the ReAct loop produces a final answer, a VERIFIER-role model call judges
+whether it actually addresses the goal. On a failed verdict the loop resumes
+once with the verifier's suggested next step; on pass (or after the retry
+budget) it returns. Bounded by `verify_max_retries` (default 1) and the overall
+`MAX_ITERATIONS`, so it can never deadlock or run away. Any verifier error or
+unparsable verdict passes through (fail-open).
+
+```
+core/agent_controller.py   ← _verify() + loop integration, enable_verifier flag
+cli/mapache_cli.py         ← --verify flag, routes the check to the VERIFIER role
+```
+
+`--no-verifier` is now a deprecated no-op (the verifier is off unless `--verify`).
 
 ---
 
@@ -214,11 +229,6 @@ Note: `--strategy` is live (per-role routing). `--no-verifier` is still inert
 ## What's left
 
 ```
-Phase 8 ⬜  Verifier / reflection — issue a VERIFIER-role call after a turn
-              (or on empty/error tool output) to catch dead ends and retry.
-              Routing for the role is already in place; default-on vs opt-in
-              is an open decision (latency vs reliability).
-
 Phase 9 ⬜  Voice + Hardware + Mobile
               voice/speech_to_text.py     (Whisper)
               voice/text_to_speech.py     (Coqui/ElevenLabs)

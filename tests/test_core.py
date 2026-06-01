@@ -269,6 +269,42 @@ async def test_agent_json_mode_tool_call():
     print("  PASS  agent_json_mode_tool_call")
 
 
+async def test_agent_verifier_retry():
+    model = MockModel()
+    # 1) loop produces a thin first answer
+    model.queue({"message": {"content": "Found something."}})
+    # 2) verifier (falls back to primary model here) rejects it
+    model.queue('{"ok": false, "reason": "no scan run", "suggestion": "run nmap_scan"}')
+    # 3) loop produces the improved final answer
+    model.queue({"message": {"content": "Ran the scan; ports 22,80 open."}})
+
+    controller = AgentController(
+        model_provider=model, mode=AgentMode.AGENT, enable_verifier=True,
+    )
+    await controller.start()
+
+    response = await controller.run("scan and report", session_id="verify-test")
+
+    assert response.success
+    assert response.content == "Ran the scan; ports 22,80 open."
+    # First answer + retried answer = 2 loop iterations (the verifier call
+    # itself is out-of-band and does not count as an iteration).
+    assert response.iterations == 2
+    print("  PASS  agent_verifier_retry")
+
+
+async def test_agent_verifier_off_by_default():
+    model = MockModel()
+    model.queue({"message": {"content": "Done."}})
+    controller = AgentController(model_provider=model, mode=AgentMode.AGENT)
+    await controller.start()
+    response = await controller.run("do it", session_id="noverify-test")
+    # No verifier call → single iteration, answer returned as-is.
+    assert response.iterations == 1
+    assert response.content == "Done."
+    print("  PASS  agent_verifier_off_by_default")
+
+
 async def test_agent_max_iterations():
     model = MockModel()
     # Always return a tool call — should hit max iterations
@@ -403,6 +439,8 @@ async def run_all():
     await test_agent_direct_response()
     await test_agent_tool_call_then_response()
     await test_agent_json_mode_tool_call()
+    await test_agent_verifier_retry()
+    await test_agent_verifier_off_by_default()
     await test_agent_max_iterations()
 
     print("\nModelRouting")
