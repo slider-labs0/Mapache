@@ -81,6 +81,9 @@ class AgentController:
     """
 
     MAX_ITERATIONS = 50
+    # How many times per turn to feed a format error back and ask the model to
+    # retry before giving up and treating its text as a final answer.
+    MAX_REASKS = 2
 
     def __init__(
         self,
@@ -264,6 +267,17 @@ class AgentController:
                     )
                     parsed = self._parse_model_response(raw)
 
+                    if parsed.get("todos"):
+                        self.chain.set_todos(parsed["todos"])
+
+                    if parsed.get("type") == "todo_update":
+                        for ref in parsed.get("completed") or []:
+                            self.chain.update_todo(ref, "completed")
+                        refreshed = self.chain.get_context_injection()
+                        if refreshed:
+                            self.context.inject_memory([refreshed])
+                        continue
+
                     if parsed.get("type") == "tool_call":
                         tool_name = parsed["tool"]
                         tool_args = self._apply_arg_fallbacks(tool_name, parsed.get("args", {}))
@@ -320,10 +334,19 @@ class AgentController:
         tools_used: list[str] = []
         iteration = 0
         verify_retries_left = self.verify_max_retries
+        reasks_left = self.MAX_REASKS
 
         while iteration < self.MAX_ITERATIONS:
             iteration += 1
             self._refresh_active_tools()
+
+            # Re-inject the live attack state + task list every iteration so
+            # the model sees mid-turn progress (ports found, todos completed),
+            # not just the snapshot taken at turn start. inject_memory replaces
+            # the snippet list, so this is idempotent.
+            refreshed = self.chain.get_context_injection()
+            if refreshed:
+                self.context.inject_memory([refreshed])
 
             if self.context.use_function_calling:
                 # Native tool-calling: schemas go in the `tools` field.
@@ -351,6 +374,48 @@ class AgentController:
                 )
 
             parsed = self._parse_model_response(raw_response)
+
+            # Self-correction: the model produced structured output that we
+            # could not turn into a valid action. Feed the error back and ask
+            # for a clean retry rather than silently treating it as a final
+            # answer (the failure mode behind the original plan-dispatch bug).
+            # Bounded by MAX_REASKS; on exhaustion we fail open and return the
+            # text so the turn always terminates.
+            if parsed.get("type") == "malformed":
+                if reasks_left > 0:
+                    reasks_left -= 1
+                    reason = parsed.get("reason", "it was not a valid action")
+                    logger.info("Reasking model (%s); %d left", reason, reasks_left)
+                    self.context.add_user_message(
+                        f"Your last message could not be used ({reason}). "
+                        "Reply with ONLY one JSON object, no prose, in one of "
+                        'these forms: {"type":"tool_call","tool":"<name>",'
+                        '"args":{...}} to act, or {"type":"response",'
+                        '"content":"<final answer>"} when finished.'
+                    )
+                    await self.bus.emit(
+                        "agent.reask",
+                        {"reason": reason, "session_id": session_id},
+                        source="controller",
+                        session_id=session_id,
+                    )
+                    continue
+                # Budget exhausted — accept the raw text as the final answer.
+                parsed = {"type": "response", "content": parsed.get("content", "")}
+
+            # Persist any plan the model supplied onto the conversation chain
+            # so the task list survives across turns and is re-injected below.
+            if parsed.get("todos"):
+                self.chain.set_todos(parsed["todos"])
+
+            # Progress-only update: revise statuses, no tool call, no final
+            # answer. Re-loop so the model acts with the updated list in view
+            # (re-injected at the top of the next iteration). Bounded by
+            # MAX_ITERATIONS, so it cannot run away.
+            if parsed.get("type") == "todo_update":
+                for ref in parsed.get("completed") or []:
+                    self.chain.update_todo(ref, "completed")
+                continue
 
             if parsed.get("type") == "tool_call":
                 tool_name = parsed["tool"]
@@ -460,23 +525,147 @@ class AgentController:
                         args = json.loads(args)
                     except json.JSONDecodeError:
                         args = {}
-                return {"type": "tool_call", "tool": fn.get("name", ""), "args": args}
+                name = fn.get("name", "")
+                if not name:
+                    # Native tool call with no tool name — ask for a redo.
+                    return {"type": "malformed", "content": str(raw),
+                            "reason": "tool call had no tool name"}
+                return {"type": "tool_call", "tool": name, "args": args}
 
             content = raw.get("message", {}).get("content") or raw.get("content", "")
             raw = content
 
-        if isinstance(raw, str):
-            stripped = raw.strip()
-            if stripped.startswith("{"):
-                try:
-                    data = json.loads(stripped)
-                    if data.get("type") == "tool_call":
-                        return data
-                    if data.get("type") in ("response", "plan"):
-                        return {"type": "response", "content": data.get("content", stripped)}
-                except json.JSONDecodeError:
-                    pass
+        if not isinstance(raw, str):
+            return {"type": "response", "content": str(raw)}
+
+        data = self._extract_json_object(raw)
+        if data is None:
+            # No JSON at all — a natural-language final answer.
             return {"type": "response", "content": raw}
+
+        return self._interpret_json_response(data, raw)
+
+    # Keys that let us infer the intended type when the model omits "type".
+    def _interpret_json_response(self, data: dict, raw: str) -> dict[str, Any]:
+        rtype = data.get("type")
+
+        # Infer a missing/unknown type from the keys present — local models
+        # frequently emit the right shape without the "type" tag.
+        if rtype not in ("tool_call", "plan", "todo_update", "response"):
+            if data.get("tool"):
+                rtype = "tool_call"
+            elif data.get("first_tool") or data.get("steps") or data.get("todos"):
+                rtype = "plan"
+            elif "completed" in data:
+                rtype = "todo_update"
+            elif rtype is not None:
+                # An explicit but unrecognized "type" with no usable keys means
+                # the model tried to use the protocol and got it wrong — reask.
+                return {"type": "malformed", "content": raw,
+                        "reason": f"unknown response type {rtype!r}"}
+            else:
+                # No type tag and no protocol keys: this is just an answer that
+                # happens to contain JSON. Treat it as a plain response so we
+                # don't reask on incidental braces.
+                return {"type": "response", "content": data.get("content", raw)}
+
+        if rtype == "tool_call":
+            tool = data.get("tool") or ""
+            if not tool:
+                return {"type": "malformed", "content": raw,
+                        "reason": "tool_call missing 'tool' name"}
+            args = data.get("args")
+            if not isinstance(args, dict):
+                args = {}
+            return {"type": "tool_call", "tool": tool, "args": args}
+
+        if rtype == "plan":
+            # A plan seeds/updates the persistent todo list and carries the
+            # first concrete action in first_tool/first_args. Dispatch that
+            # action instead of treating the plan text as a final answer — the
+            # ReAct loop re-plans next turn after seeing the real result (one
+            # tool per step). `todos` is surfaced so the loop can persist the
+            # list on the conversation chain.
+            todos = data.get("todos") or data.get("steps")
+            first_tool = data.get("first_tool")
+            if first_tool:
+                args = data.get("first_args")
+                if not isinstance(args, dict):
+                    args = {}
+                out = {"type": "tool_call", "tool": first_tool, "args": args}
+                if todos:
+                    out["todos"] = todos
+                return out
+            out = {"type": "response", "content": data.get("content", raw)}
+            if todos:
+                out["todos"] = todos
+            return out
+
+        if rtype == "todo_update":
+            return {"type": "todo_update", "todos": data.get("todos"),
+                    "completed": data.get("completed", [])}
+
+        # rtype == "response"
+        return {"type": "response", "content": data.get("content", raw)}
+
+    @staticmethod
+    def _extract_json_object(text: str) -> Optional[dict]:
+        """
+        Pull a single JSON object out of a model response.
+
+        Handles the common local-model habits: a bare object, an object fenced
+        in ```json ... ``` , or an object embedded in surrounding prose.
+        Returns the parsed dict, or None if no JSON object is present.
+        """
+        stripped = text.strip()
+        # Strip a leading ```json / ``` fence if present.
+        if stripped.startswith("```"):
+            stripped = stripped.split("```", 2)
+            stripped = stripped[1] if len(stripped) > 1 else ""
+            if stripped.startswith("json"):
+                stripped = stripped[4:]
+            stripped = stripped.strip().rstrip("`").strip()
+
+        if not stripped or "{" not in stripped:
+            return None
+
+        # Fast path: the whole thing is one object.
+        if stripped.startswith("{"):
+            try:
+                obj = json.loads(stripped)
+                return obj if isinstance(obj, dict) else None
+            except json.JSONDecodeError:
+                pass
+
+        # Slow path: scan for the first balanced {...} block (string-aware).
+        start = stripped.find("{")
+        depth = 0
+        in_str = False
+        escape = False
+        for i in range(start, len(stripped)):
+            ch = stripped[i]
+            if in_str:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = stripped[start:i + 1]
+                    try:
+                        obj = json.loads(candidate)
+                        return obj if isinstance(obj, dict) else None
+                    except json.JSONDecodeError:
+                        return None
+        return None
 
         return {"type": "response", "content": str(raw)}
 

@@ -329,6 +329,52 @@ async def test_agent_max_iterations():
     print(f"  PASS  agent_max_iterations (hit limit at {response.iterations})")
 
 
+async def test_agent_plan_dispatches_and_seeds_todos():
+    model = MockModel()
+    # A plan must dispatch its first_tool AND seed the persistent task list,
+    # not be returned as a final answer (the plan-dispatch bug regression).
+    model.queue(json.dumps({
+        "type": "plan",
+        "todos": ["scan host", "enumerate services", "find flag"],
+        "first_tool": "shell",
+        "first_args": {"cmd": "nmap"},
+    }))
+    model.queue(json.dumps({"type": "response", "content": "done"}))
+
+    controller = AgentController(model_provider=model, use_function_calling=False)
+    controller.register_tool(ToolSchema(
+        name="shell", description="Run a shell command",
+        parameters={"type": "object", "properties": {"cmd": {"type": "string"}}, "required": ["cmd"]},
+    ))
+    await controller.start()
+
+    response = await controller.run("scan it", session_id="plan-test")
+
+    assert "shell" in response.tool_calls_made, "plan did not dispatch first_tool"
+    todos = controller.chain.todos
+    assert [t.task for t in todos] == ["scan host", "enumerate services", "find flag"]
+    assert todos[0].status == "in_progress"
+    print("  PASS  agent_plan_dispatches_and_seeds_todos")
+
+
+async def test_agent_reask_on_malformed():
+    model = MockModel()
+    # 1) structured-but-invalid output (unknown type, no usable keys)
+    model.queue(json.dumps({"type": "thinking", "text": "hmm"}))
+    # 2) after the reask, a clean final answer
+    model.queue(json.dumps({"type": "response", "content": "recovered"}))
+
+    controller = AgentController(model_provider=model, use_function_calling=False)
+    await controller.start()
+
+    response = await controller.run("do it", session_id="reask-test")
+
+    assert response.content == "recovered"
+    # malformed turn + recovered turn = 2 iterations (reask is in-band).
+    assert response.iterations == 2, response.iterations
+    print("  PASS  agent_reask_on_malformed")
+
+
 # ------------------------------------------------------------------ #
 # Model routing tests (Phase 7)
 # ------------------------------------------------------------------ #
@@ -442,6 +488,8 @@ async def run_all():
     await test_agent_verifier_retry()
     await test_agent_verifier_off_by_default()
     await test_agent_max_iterations()
+    await test_agent_plan_dispatches_and_seeds_todos()
+    await test_agent_reask_on_malformed()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()

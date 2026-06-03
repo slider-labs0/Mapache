@@ -188,10 +188,28 @@ moltbook_feed, moltbook_comment, moltbook_search
   the current target overrides it and clears stale findings (handles HTB machine
   IP reassignment mid-session). Rescan keywords clear cached ports. Tool outputs
   are compressed before re-injection to prevent context overflow.
+- **Persistent TODO list** — the model owns a task list that survives across
+  turns (`ConversationChain` todos). A `plan` response seeds it
+  (`{"type":"plan","todos":[...],"first_tool":...,"first_args":...}`) and
+  dispatches the first action; the agent revises it with `todo_update`
+  (`{"completed":[1,2]}`) or by re-emitting a plan with per-item status.
+  Completed items are preserved across re-emits. A `=== TASK LIST ===` block
+  (`[ ]`/`[~]`/`[x]`) is re-injected every loop iteration so the model always
+  sees mid-turn progress; the list clears on a target change. This is what makes
+  a `plan` actionable instead of a dead-end final answer (the dispatch bug fix).
 - **Phase-based tool subsetting** (`ConversationChain.active_tool_names`) exposes
   only the tools relevant to the current attack phase, keeping the function-
   calling payload small enough for local models (avoids the Ollama tool-schema
   overflow). This — not `--no-verifier` — is the fix for the 33-schema overflow.
+- **Robust tool-calling** — `_parse_model_response` tolerates the ways local
+  models mangle output: JSON fenced in ```json blocks, JSON embedded in prose
+  (balanced, string-aware brace scan), and a missing `"type"` tag (inferred
+  from the keys present). Output that clearly intended the protocol but is
+  unusable (unknown `type`, a tool call with no tool name) is flagged
+  `malformed`; the loop then feeds the error back and asks for a clean retry,
+  bounded by `MAX_REASKS` (default 2) and fail-open on exhaustion. Incidental
+  braces in a normal answer are NOT reasked. This is the general fix for the
+  bug class behind the original plan-dispatch failure.
 - **nmap target enforcement** — `_apply_arg_fallbacks` backfills `target` from
   attack state when the model omits it; the system prompt also mandates it.
 - **Attack system prompt** — explicit intent→tool mapping table and a default

@@ -78,6 +78,24 @@ class TurnSummary:
     )
 
 
+TODO_STATUSES = ("pending", "in_progress", "completed")
+
+
+@dataclass
+class TodoItem:
+    """A single item on the agent's persistent task list."""
+
+    task: str
+    status: str = "pending"  # pending | in_progress | completed
+
+    def marker(self) -> str:
+        return {
+            "completed": "[x]",
+            "in_progress": "[~]",
+            "pending": "[ ]",
+        }.get(self.status, "[ ]")
+
+
 @dataclass
 class AttackState:
     target: Optional[str] = None
@@ -253,6 +271,7 @@ class ConversationChain:
         self._current_goal: str = ""
         self._max_summaries = max_turn_summaries
         self._turn_number = 0
+        self._todos: list[TodoItem] = []
 
     def on_turn_start(self, user_input: str) -> None:
         self._turn_number += 1
@@ -275,6 +294,8 @@ class ConversationChain:
                 self.attack_state.services = {}
                 self.attack_state.vulnerabilities = []
                 self.attack_state.current_phase = "recon"
+                # New engagement — the old plan no longer applies.
+                self._todos = []
 
         # Detect explicit rescan requests — clear cached data
         rescan_keywords = [
@@ -340,12 +361,115 @@ class ConversationChain:
 
         self._current_turn = None
 
+    # ------------------------------------------------------------------ #
+    # Persistent TODO list
+    #
+    # Gives the agent long-horizon coherence: the plan survives across many
+    # tool calls instead of being re-derived (or lost) each turn. The model
+    # owns the list — it seeds it via a `plan` response and revises it by
+    # re-emitting one with per-item status (the TodoWrite pattern). Completed
+    # items are preserved across re-emits so a model that restates only the
+    # remaining work does not lose progress.
+    # ------------------------------------------------------------------ #
+
+    def set_todos(self, items: list) -> None:
+        """
+        Replace the working todo list from a model-supplied plan.
+
+        `items` may be a list of plain strings (status defaults to pending)
+        or a list of dicts ``{"task": str, "status": str}``. Status from any
+        previously-completed item is preserved by matching task text. Exactly
+        one not-completed item ends up marked in_progress.
+        """
+        prev_completed = {t.task for t in self._todos if t.status == "completed"}
+        new_items: list[TodoItem] = []
+        for raw in items:
+            if isinstance(raw, dict):
+                task = str(raw.get("task") or raw.get("step") or "").strip()
+                status = raw.get("status", "pending")
+            else:
+                task = str(raw).strip()
+                status = "pending"
+            if not task:
+                continue
+            if status not in TODO_STATUSES:
+                status = "pending"
+            if task in prev_completed:
+                status = "completed"
+            new_items.append(TodoItem(task=task, status=status))
+
+        if not new_items:
+            return
+
+        if not any(t.status == "in_progress" for t in new_items):
+            for t in new_items:
+                if t.status != "completed":
+                    t.status = "in_progress"
+                    break
+
+        self._todos = new_items
+
+    def update_todo(self, ref, status: str) -> bool:
+        """Mark a todo (by 1-based index or task text) with a new status."""
+        if status not in TODO_STATUSES:
+            return False
+        item = self._resolve_todo(ref)
+        if item is None:
+            return False
+        item.status = status
+        # Keep one active item: completing the in_progress one promotes the
+        # next pending item so the model always sees what to do next.
+        if status == "completed" and not any(
+            t.status == "in_progress" for t in self._todos
+        ):
+            for t in self._todos:
+                if t.status == "pending":
+                    t.status = "in_progress"
+                    break
+        return True
+
+    def _resolve_todo(self, ref) -> Optional[TodoItem]:
+        if isinstance(ref, bool):  # guard: bool is an int subclass
+            return None
+        if isinstance(ref, int):
+            idx = ref - 1
+            return self._todos[idx] if 0 <= idx < len(self._todos) else None
+        ref_l = str(ref).strip().lower()
+        if not ref_l:
+            return None
+        for t in self._todos:  # exact match first
+            if t.task.lower() == ref_l:
+                return t
+        for t in self._todos:  # then substring
+            if ref_l in t.task.lower():
+                return t
+        return None
+
+    @property
+    def todos(self) -> list[TodoItem]:
+        return list(self._todos)
+
+    def todos_block(self) -> str:
+        if not self._todos:
+            return ""
+        lines = ["=== TASK LIST ==="]
+        for i, t in enumerate(self._todos, 1):
+            lines.append(f"{i}. {t.marker()} {t.task}")
+        done = sum(1 for t in self._todos if t.status == "completed")
+        lines.append(f"({done}/{len(self._todos)} complete)")
+        lines.append("=== END TASK LIST ===")
+        return "\n".join(lines)
+
     def get_context_injection(self) -> str:
         parts = []
 
         state_block = self.attack_state.to_prompt_block()
         if state_block:
             parts.append(state_block)
+
+        todos_block = self.todos_block()
+        if todos_block:
+            parts.append(todos_block)
 
         if self._turn_summaries:
             parts.append("=== RECENT ACTIONS ===")
@@ -404,6 +528,7 @@ class ConversationChain:
         self._turn_summaries = []
         self._current_goal = ""
         self._turn_number = 0
+        self._todos = []
 
     @property
     def has_active_target(self) -> bool:

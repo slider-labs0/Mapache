@@ -293,8 +293,19 @@ To call a tool:
 To give a final answer:
 {{"type": "response", "content": "<your response>"}}
 
-To plan multiple steps:
-{{"type": "plan", "steps": ["step 1", "step 2", ...], "first_tool": "<tool_name>", "first_args": {{...}}}}
+To plan a multi-step task (sets the TASK LIST and starts the first step):
+{{"type": "plan", "todos": ["step 1", "step 2", ...], "first_tool": "<tool_name>", "first_args": {{...}}}}
+
+To update progress without calling a tool (mark steps done):
+{{"type": "todo_update", "completed": [1, 2]}}
+
+TASK LIST rules:
+- For any goal needing 3+ steps, FIRST emit a "plan" with the full list of todos.
+- A "=== TASK LIST ===" block is shown to you each turn with [ ] pending,
+  [~] in_progress, [x] done. Work the [~] item, then mark it complete.
+- Mark steps complete with "todo_update" (by number) or by re-emitting "plan"
+  with per-item status: {{"task": "step 1", "status": "completed"}}.
+- Keep exactly one step in progress. Do not restate the goal as a single todo.
 """
 
         system = self._build_system_prompt(override=json_system)
