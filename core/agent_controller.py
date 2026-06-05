@@ -100,6 +100,7 @@ class AgentController:
         enable_verifier: bool = False,
         verify_max_retries: int = 1,
         verifier_caller: Optional[Callable[[list[dict]], Any]] = None,
+        enable_compaction: bool = True,
     ) -> None:
         self.model = model_provider
         self.tool_dispatcher = tool_dispatcher
@@ -108,6 +109,10 @@ class AgentController:
         self.confirm_dangerous = confirm_dangerous
         self.confirm_callback = confirm_callback
         self.enable_tool_subsetting = enable_tool_subsetting
+        # When history outgrows the token budget, summarize the oldest turns
+        # into a running summary instead of dropping them (preserves continuity
+        # over long engagements). Only fires when actually over budget.
+        self.enable_compaction = enable_compaction
         # Opt-in verifier: after the loop produces a final answer, a VERIFIER-
         # role model call judges whether it actually addresses the goal; if not
         # (and retries remain) the loop resumes with the verifier's suggestion.
@@ -280,6 +285,11 @@ class AgentController:
             iteration += 1
             self._refresh_active_tools()
 
+            # Fold older turns into a running summary if we've outgrown the
+            # token budget, so continuity survives a long engagement instead of
+            # being hard-trimmed away.
+            await self._maybe_compact(session_id)
+
             # Re-inject the live attack state + task list every iteration so
             # the model sees mid-turn progress (ports found, todos completed),
             # not just the snapshot taken at turn start. inject_memory replaces
@@ -407,6 +417,71 @@ class AgentController:
             tool_calls_made=tools_used,
             iterations=iteration,
             error="max_iterations",
+        )
+
+    # ------------------------------------------------------------------ #
+    # Context compaction
+    # ------------------------------------------------------------------ #
+
+    async def _maybe_compact(self, session_id: str) -> None:
+        """
+        Summarize the oldest history into a running summary when over budget.
+
+        Fails open: any error leaves history untouched, and `_trim_history`
+        still keeps the model call within budget by dropping the oldest
+        messages — i.e. the pre-compaction behavior.
+        """
+        if not self.enable_compaction or not self.context.needs_compaction():
+            return
+
+        old = self.context.messages_to_compact()
+        if len(old) < 2:
+            return
+
+        prev = self.context.running_summary
+        transcript = "\n".join(
+            f"{m.role}: {m.content}" for m in old if m.content
+        )
+        prompt = [
+            {
+                "role": "system",
+                "content": (
+                    "You compress the earlier part of an offensive-security "
+                    "engagement transcript into a compact briefing. Preserve "
+                    "durable facts EXACTLY: targets, open ports, service "
+                    "versions, credentials, hashes, vulnerabilities, flags, "
+                    "file paths, what was tried, and what is still pending. "
+                    "Drop chatter. Output prose under 200 words, no preamble."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    (f"Earlier summary to merge:\n{prev}\n\n" if prev else "")
+                    + f"Transcript to compress:\n{transcript}"
+                ),
+            },
+        ]
+
+        try:
+            raw = await self.model.chat(messages=prompt)
+            summary = self._parse_model_response(raw).get("content", "").strip()
+        except Exception as exc:
+            logger.warning("Compaction failed (%s) — leaving history intact", exc)
+            return
+
+        if not summary:
+            return
+
+        # Hard cap so the summary can't itself blow the system-prompt reserve.
+        summary = summary[:2000]
+        self.context.apply_compaction(summary, len(old))
+        await self.bus.emit(
+            "agent.compact",
+            {"compacted": len(old), "summary_chars": len(summary),
+             "session_id": session_id},
+            source="controller",
+            session_id=session_id,
         )
 
     # ------------------------------------------------------------------ #

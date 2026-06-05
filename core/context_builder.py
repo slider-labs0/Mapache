@@ -129,6 +129,10 @@ You have full system access. Act on every request immediately using your tools."
         self._history: list[Message] = []
         self._tools: dict[str, ToolSchema] = {}
         self._memory_snippets: list[str] = []
+        # Running summary of older turns folded away by compaction. Prepended
+        # to the system prompt so continuity survives even after the raw
+        # messages are dropped from the window.
+        self._running_summary: str = ""
         # When set, only tools whose names are in this set are exposed to the
         # model. None means "expose all registered tools". Used for phase-based
         # subsetting to keep the function-calling payload small enough for
@@ -222,6 +226,75 @@ You have full system access. Act on every request immediately using your tools."
 
     def clear_history(self) -> None:
         self._history.clear()
+        self._running_summary = ""
+
+    # ------------------------------------------------------------------ #
+    # Compaction
+    #
+    # When the raw history outgrows its token budget we summarize the oldest
+    # messages into `_running_summary` (a model call driven by the controller)
+    # and drop them, rather than silently discarding them as _trim_history
+    # does. The controller asks `needs_compaction()`, takes the prefix from
+    # `messages_to_compact()`, summarizes it, and calls `apply_compaction()`.
+    # ------------------------------------------------------------------ #
+
+    @property
+    def running_summary(self) -> str:
+        return self._running_summary
+
+    def history_tokens(self) -> int:
+        return sum(m.token_estimate() for m in self._history)
+
+    def _history_budget(self) -> int:
+        return (
+            self.max_context_tokens
+            - SYSTEM_PROMPT_RESERVE
+            - (TOOL_SCHEMA_RESERVE if self._tools else 0)
+        )
+
+    def needs_compaction(self) -> bool:
+        return self.history_tokens() > self._history_budget()
+
+    def messages_to_compact(self, keep_fraction: float = 0.5) -> list[Message]:
+        """
+        Return the oldest messages that should be folded into the summary.
+
+        A recent window worth roughly `keep_fraction` of the history budget is
+        retained verbatim; everything older is returned for summarization. The
+        split is advanced so the retained window never begins with a dangling
+        tool-result message. Returns [] when nothing should be compacted.
+        """
+        if len(self._history) <= 2:
+            return []
+
+        keep_target = int(self._history_budget() * keep_fraction)
+        kept = 0
+        split = 0  # history[:split] gets compacted
+        for i in range(len(self._history) - 1, -1, -1):
+            tokens = self._history[i].token_estimate()
+            # Keep at least one message; stop once the recent window is full.
+            if kept + tokens > keep_target and (len(self._history) - i) > 1:
+                split = i + 1
+                break
+            kept += tokens
+
+        # Don't let the retained window start on a tool-result message whose
+        # originating call is now gone — push such messages into the summary.
+        while split < len(self._history) and self._history[split].role == "tool":
+            split += 1
+
+        return self._history[:split]
+
+    def apply_compaction(self, summary: str, compacted_count: int) -> None:
+        """Replace the oldest `compacted_count` messages with `summary`."""
+        if compacted_count <= 0:
+            return
+        self._running_summary = summary.strip()
+        self._history = self._history[compacted_count:]
+        logger.debug(
+            "Compacted %d messages into summary (%d chars); %d messages remain",
+            compacted_count, len(self._running_summary), len(self._history),
+        )
 
     # ------------------------------------------------------------------ #
     # Memory
@@ -323,6 +396,11 @@ TASK LIST rules:
 
     def _build_system_prompt(self, override: str | None = None) -> str:
         base = override or self.system_prompt
+        if self._running_summary:
+            base = (
+                f"CONVERSATION SO FAR (summary of earlier turns):\n"
+                f"{self._running_summary}\n\n---\n{base}"
+            )
         if self._memory_snippets:
             memory_block = "\n".join(f"- {s}" for s in self._memory_snippets)
             base = f"RELEVANT MEMORY:\n{memory_block}\n\n---\n{base}"
@@ -331,14 +409,13 @@ TASK LIST rules:
     def _trim_history(self) -> list[Message]:
         """
         Trim history to fit within the token budget.
-        Always keeps the most recent messages. Never drops tool results
-        that correspond to a preceding tool call (would break context).
+
+        A safety net under compaction: the controller normally summarizes
+        overflow into the running summary, but if history still exceeds the
+        budget (compaction disabled or a single huge message) we keep the most
+        recent messages that fit so the model call never overflows.
         """
-        budget = (
-            self.max_context_tokens
-            - SYSTEM_PROMPT_RESERVE
-            - (TOOL_SCHEMA_RESERVE if self._tools else 0)
-        )
+        budget = self._history_budget()
 
         # Walk backwards, accumulate until budget exceeded
         kept: list[Message] = []

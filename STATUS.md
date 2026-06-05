@@ -201,6 +201,15 @@ moltbook_feed, moltbook_comment, moltbook_search
   only the tools relevant to the current attack phase, keeping the function-
   calling payload small enough for local models (avoids the Ollama tool-schema
   overflow). This — not `--no-verifier` — is the fix for the 33-schema overflow.
+- **Context compaction** — when raw history outgrows its token budget, the
+  controller summarizes the oldest turns into a running summary (a model call
+  via `_maybe_compact`) and drops those messages, instead of silently trimming
+  them. The summary is prepended to the system prompt as "CONVERSATION SO FAR",
+  preserving continuity over a long engagement; durable facts (targets, ports,
+  versions, creds, vulns, flags, paths, what's pending) are kept verbatim. Only
+  fires when actually over budget, keeps a ~50% recent window, caps the summary,
+  and fails open (`_trim_history` remains the safety net). Toggle:
+  `enable_compaction` (default on).
 - **Token streaming (unified)** — the live turn path streams model tokens to
   the caller via an optional `on_token` callback on `run()`/`_agent_loop`. A
   single streaming-aware `_chat` helper reassembles streamed pieces into the

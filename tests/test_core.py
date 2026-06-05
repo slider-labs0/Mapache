@@ -445,6 +445,39 @@ async def test_agent_streaming_unified():
     print("  PASS  agent_streaming_unified")
 
 
+async def test_agent_context_compaction():
+    # Over-budget history should be summarized into a running summary and
+    # dropped from the window, not silently trimmed away.
+    class SummarizingModel:
+        supports_tools = False
+
+        async def chat(self, messages, tools=None, json_mode=False, stream=False):
+            if messages and "compress" in messages[0].get("content", ""):
+                return {"message": {"content": "BRIEFING: target 10.0.0.5, ports 22,80 open."}}
+            return {"message": {"content": "ok"}}
+
+    controller = AgentController(
+        model_provider=SummarizingModel(), mode=AgentMode.AGENT,
+        use_function_calling=False, max_context_tokens=1200,
+    )
+    await controller.start()
+
+    for i in range(12):
+        controller.context.add_user_message(f"observation {i} " + "y" * 200)
+
+    assert controller.context.needs_compaction()
+    before = len(controller.context._history)
+    await controller._maybe_compact("compact-test")
+    after = len(controller.context._history)
+
+    assert after < before, (before, after)
+    assert "BRIEFING" in controller.context.running_summary
+    assert not controller.context.needs_compaction()
+    # The summary rides in the system prompt so continuity survives.
+    assert "CONVERSATION SO FAR" in controller.context._build_system_prompt()
+    print("  PASS  agent_context_compaction")
+
+
 # ------------------------------------------------------------------ #
 # Model routing tests (Phase 7)
 # ------------------------------------------------------------------ #
@@ -562,6 +595,7 @@ async def run_all():
     await test_agent_reask_on_malformed()
     await test_agent_multi_tool_calls()
     await test_agent_streaming_unified()
+    await test_agent_context_compaction()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()
