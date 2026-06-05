@@ -31,6 +31,9 @@ DANGEROUS_PATTERNS = [
     "delete from", ":(){:|:&};:", "mkfs", "dd if=",
 ]
 
+# Name of the built-in tool the model calls to spawn a focused sub-agent.
+DELEGATE_TOOL = "delegate"
+
 VERIFIER_SYSTEM_PROMPT = """You are a verification module for an offensive-security agent. \
 Given the user's goal and the agent's final response, decide whether the response actually \
 addresses the goal or whether the agent stopped prematurely, skipped a step, or made an \
@@ -85,6 +88,10 @@ class AgentController:
     # How many times per turn to feed a format error back and ask the model to
     # retry before giving up and treating its text as a final answer.
     MAX_REASKS = 2
+    # Delegation depth at which the `delegate` tool is no longer offered, so a
+    # sub-agent cannot spawn its own sub-agents (no recursion bomb). Depth 0 is
+    # the top-level agent; with this set to 1 only it can delegate.
+    MAX_DELEGATION_DEPTH = 1
 
     def __init__(
         self,
@@ -102,6 +109,8 @@ class AgentController:
         verify_max_retries: int = 1,
         verifier_caller: Optional[Callable[[list[dict]], Any]] = None,
         enable_compaction: bool = True,
+        enable_delegation: bool = True,
+        delegation_depth: int = 0,
     ) -> None:
         self.model = model_provider
         self.tool_dispatcher = tool_dispatcher
@@ -114,6 +123,13 @@ class AgentController:
         # into a running summary instead of dropping them (preserves continuity
         # over long engagements). Only fires when actually over budget.
         self.enable_compaction = enable_compaction
+        # Delegation: expose a `delegate` tool that spawns a focused sub-agent
+        # for a bounded subtask and returns only its conclusion. Offered only
+        # while below MAX_DELEGATION_DEPTH so sub-agents can't recurse forever.
+        self.delegation_depth = delegation_depth
+        self.enable_delegation = (
+            enable_delegation and delegation_depth < self.MAX_DELEGATION_DEPTH
+        )
         # Opt-in verifier: after the loop produces a final answer, a VERIFIER-
         # role model call judges whether it actually addresses the goal; if not
         # (and retries remain) the loop resumes with the verifier's suggestion.
@@ -138,6 +154,30 @@ class AgentController:
         self.executor.set_model_caller(self._call_model_raw)
         if tool_dispatcher:
             self.executor.set_tool_dispatcher(tool_dispatcher)
+
+        # Expose the built-in delegate tool to the model when delegation is on.
+        if self.enable_delegation:
+            self.context.register_tool(ToolSchema(
+                name=DELEGATE_TOOL,
+                description=(
+                    "Spawn a focused sub-agent to fully complete ONE bounded "
+                    "subtask (e.g. 'enumerate the web service on port 80 and "
+                    "report findings'), then return only its conclusion. Use "
+                    "for self-contained chunks of work to keep the main thread "
+                    "clean. The sub-agent shares your tools and the current "
+                    "target/ports but has its own scratch context."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "task": {
+                            "type": "string",
+                            "description": "The complete, self-contained subtask for the sub-agent.",
+                        }
+                    },
+                    "required": ["task"],
+                },
+            ))
 
         self._sessions: dict[str, dict[str, Any]] = {}
         self._register_handlers()
@@ -875,6 +915,88 @@ class AgentController:
                 session_id=session_id,
             )
 
+    # ------------------------------------------------------------------ #
+    # Sub-agent delegation
+    # ------------------------------------------------------------------ #
+
+    async def _run_subagent(self, args: dict[str, Any], session_id: str) -> str:
+        """
+        Spawn a focused child agent for one bounded subtask and return its
+        conclusion. The child shares this agent's model, tool dispatcher, and
+        registered tools, and is seeded with the current target/ports, but runs
+        its own ReAct loop in a separate context so the main thread stays clean.
+        Findings (flags, creds, vulns, ports) are merged back on completion.
+        """
+        task = (args.get("task") or args.get("goal") or "").strip()
+        if not task:
+            return "[delegate] No task provided."
+
+        child = AgentController(
+            model_provider=self.model,
+            tool_dispatcher=self.tool_dispatcher,
+            system_prompt=self.context.system_prompt,
+            mode=self.mode,
+            use_function_calling=self.context.use_function_calling,
+            max_context_tokens=self.context.max_context_tokens,
+            working_dir=self.working_dir,
+            confirm_dangerous=self.confirm_dangerous,
+            confirm_callback=self.confirm_callback,
+            enable_tool_subsetting=self.enable_tool_subsetting,
+            enable_verifier=False,            # keep sub-agents lean
+            enable_compaction=self.enable_compaction,
+            enable_delegation=True,           # actually gated by depth
+            delegation_depth=self.delegation_depth + 1,
+        )
+        # Give the child the same tools (it registers no delegate of its own
+        # once at max depth, so just skip copying that one).
+        for schema in self.context._tools.values():
+            if schema.name == DELEGATE_TOOL:
+                continue
+            child.register_tool(schema)
+
+        # Seed the child with the live engagement context.
+        pst, cst = self.chain.attack_state, child.chain.attack_state
+        cst.target = pst.target
+        cst.open_ports = list(pst.open_ports)
+        cst.services = dict(pst.services)
+        cst.current_phase = pst.current_phase
+
+        await child.start(inject_project_context=False)
+        logger.info("Delegating subtask (depth=%d): %r", child.delegation_depth, task[:80])
+        await self.bus.emit(
+            "agent.delegate.start",
+            {"task": task[:200], "depth": child.delegation_depth, "session_id": session_id},
+            source="controller", session_id=session_id,
+        )
+
+        result = await child.run(task, session_id=f"{session_id}:sub")
+
+        self._merge_subagent_state(child)
+        await self.bus.emit(
+            "agent.delegate.end",
+            {"task": task[:200], "iterations": result.iterations, "session_id": session_id},
+            source="controller", session_id=session_id,
+        )
+
+        content = (result.content or "").strip()
+        if result.error and not content:
+            content = f"[subagent error: {result.error}]"
+        return f"[subagent result]\n{content[:4000]}"
+
+    def _merge_subagent_state(self, child: "AgentController") -> None:
+        """Fold a finished sub-agent's findings back into the parent state."""
+        cst, pst = child.chain.attack_state, self.chain.attack_state
+        for flag in cst.flags:
+            pst.add_flag(flag)
+        for cred in cst.credentials:
+            pst.add_credential(cred)
+        for vuln in cst.vulnerabilities:
+            pst.add_vulnerability(vuln)
+        for port in cst.open_ports:
+            if port not in pst.open_ports:
+                pst.open_ports.append(port)
+        pst.services.update(cst.services)
+
     async def _dispatch_tool(
         self,
         tool_name: str,
@@ -882,6 +1004,20 @@ class AgentController:
         tool_call_id: str,
         session_id: str,
     ) -> ToolCallResult:
+        # Built-in delegation: handled by the controller, not the dispatcher.
+        if tool_name == DELEGATE_TOOL:
+            try:
+                output = await self._run_subagent(tool_args, session_id)
+                return ToolCallResult(
+                    tool_name=tool_name, tool_call_id=tool_call_id, output=output,
+                )
+            except Exception as exc:
+                logger.error("Sub-agent failed: %s", exc)
+                return ToolCallResult(
+                    tool_name=tool_name, tool_call_id=tool_call_id,
+                    output="", error=str(exc),
+                )
+
         if self.tool_dispatcher is None:
             return ToolCallResult(
                 tool_name=tool_name,

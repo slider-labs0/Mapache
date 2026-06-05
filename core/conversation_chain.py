@@ -34,6 +34,8 @@ CORE_TOOLS = {
     "shell",
     "file_read", "file_write", "file_edit", "file_list", "file_search",
     "memory_recall", "memory_save", "memory_target_store", "memory_target_get",
+    # Built-in sub-agent delegation tool — always available when registered.
+    "delegate",
 }
 
 PHASE_TOOLS = {

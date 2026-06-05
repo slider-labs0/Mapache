@@ -459,6 +459,7 @@ async def test_agent_context_compaction():
     controller = AgentController(
         model_provider=SummarizingModel(), mode=AgentMode.AGENT,
         use_function_calling=False, max_context_tokens=1200,
+        enable_delegation=False,  # keep the tiny test budget free of tool reserve
     )
     await controller.start()
 
@@ -516,6 +517,48 @@ async def test_agent_mid_run_steering():
     assert response.content == "redirected"
     assert controller._drain_steering() == []  # inbox fully drained
     print("  PASS  agent_mid_run_steering")
+
+
+async def test_agent_delegation():
+    class Dispatcher:
+        async def dispatch(self, name, args, session_id):
+            return "HTB{sub_flag} found" if name == "shell" else "ok"
+
+    class DelegModel:
+        # Routes by inspecting the visible messages: parent delegates, child
+        # runs a tool then reports a flag, parent then finishes.
+        supports_tools = False
+
+        async def chat(self, messages, tools=None, json_mode=False, stream=False):
+            joined = " ".join(m.get("content", "") for m in messages)
+            if "enumerate port 80" in joined and "HTB{sub_flag}" not in joined:
+                return json.dumps({"type": "tool_call", "tool": "shell", "args": {"cmd": "curl"}})
+            if "HTB{sub_flag}" in joined and "subagent result" not in joined:
+                return json.dumps({"type": "response", "content": "Found HTB{sub_flag} on port 80"})
+            if "subagent result" in joined:
+                return json.dumps({"type": "response", "content": "done"})
+            return json.dumps({"type": "tool_call", "tool": "delegate",
+                               "args": {"task": "enumerate port 80 and report"}})
+
+    controller = AgentController(
+        model_provider=DelegModel(), tool_dispatcher=Dispatcher(),
+        mode=AgentMode.AGENT, use_function_calling=False,
+    )
+    await controller.start()
+
+    # The delegate tool is offered at the top level...
+    assert "delegate" in controller.context.available_tools
+    # ...but a depth-1 agent (a sub-agent) must NOT be able to delegate further.
+    deep = AgentController(model_provider=DelegModel(), delegation_depth=1)
+    assert "delegate" not in deep.context.available_tools
+
+    response = await controller.run("pwn the web box", session_id="deleg-test")
+
+    assert "delegate" in response.tool_calls_made
+    # Sub-agent's finding merged back into the parent's attack state.
+    assert "HTB{sub_flag}" in controller.chain.attack_state.flags
+    assert response.content == "done"
+    print("  PASS  agent_delegation")
 
 
 # ------------------------------------------------------------------ #
@@ -637,6 +680,7 @@ async def run_all():
     await test_agent_streaming_unified()
     await test_agent_context_compaction()
     await test_agent_mid_run_steering()
+    await test_agent_delegation()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()

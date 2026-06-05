@@ -201,6 +201,16 @@ moltbook_feed, moltbook_comment, moltbook_search
   only the tools relevant to the current attack phase, keeping the function-
   calling payload small enough for local models (avoids the Ollama tool-schema
   overflow). This — not `--no-verifier` — is the fix for the 33-schema overflow.
+- **Sub-agent delegation** — a built-in `delegate` tool lets the model spawn a
+  focused child `AgentController` for one bounded subtask (e.g. "enumerate port
+  80 and report") and get back only its conclusion, keeping the main context
+  clean. The child shares the parent's model, tool dispatcher, and registered
+  tools, and is seeded with the live target/ports; it runs its own ReAct loop in
+  a separate context. Findings (flags, creds, vulns, ports) merge back into the
+  parent attack state on completion. Recursion is bounded by
+  `MAX_DELEGATION_DEPTH` (1) — a sub-agent is not offered the delegate tool, so
+  it can't spawn its own. `delegate` is in `CORE_TOOLS` so phase-subsetting keeps
+  it exposed. Async frontends fire `agent.delegate.start/end` events.
 - **Mid-run steering** — a frontend can call `AgentController.steer(text)` (thread-
   safe) to redirect a turn already in progress. Queued messages are drained at
   the top of each loop iteration, injected as `[operator steering] …`, and run
