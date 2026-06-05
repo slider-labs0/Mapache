@@ -274,6 +274,9 @@ class ConversationChain:
         self._max_summaries = max_turn_summaries
         self._turn_number = 0
         self._todos: list[TodoItem] = []
+        # Tool names to always expose regardless of attack phase (e.g. MCP
+        # tools, which don't belong to any phase but must stay callable).
+        self.always_tools: set[str] = set()
 
     def apply_input_signals(self, user_input: str) -> None:
         """
@@ -514,6 +517,7 @@ class ConversationChain:
         registered_set = set(registered)
 
         wanted = set(CORE_TOOLS)
+        wanted |= self.always_tools  # MCP / phase-agnostic tools
         wanted |= PHASE_TOOLS.get(self.attack_state.current_phase, set())
 
         for port in self.attack_state.open_ports:

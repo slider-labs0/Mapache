@@ -1,0 +1,15 @@
+{
+  "_comment": "Copy to mcp.json to connect Mapache to MCP servers. Each server is launched as a subprocess and its tools become mcp__<server>__<tool>. Override the path with --mcp-config.",
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+      "env": {}
+    },
+    "fetch": {
+      "command": "uvx",
+      "args": ["mcp-server-fetch"],
+      "env": {}
+    }
+  }
+}

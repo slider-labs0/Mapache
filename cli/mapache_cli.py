@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.agent_controller import AgentController, AgentMode
 from core.logger import get_logger, setup_logging
+from integrations.mcp import MCPManager, load_mcp_config
 from core.project_context import build_project_context, get_mapache_instructions
 from memory.memory_manager import MemoryManager
 from models.model_registry import ModelRegistry, ModelRole
@@ -168,6 +169,7 @@ class MapacheCLI:
         self.controller: AgentController | None = None
         self.registry: ToolRegistry | None = None
         self.routed: RoutedModel | None = None
+        self.mcp: MCPManager | None = None
         self.memory = MemoryManager()
         self.confirm = args.confirm
         self.working_dir = os.path.abspath(args.dir)
@@ -317,6 +319,10 @@ class MapacheCLI:
                 self.registry.register(MoltbookCommentTool())
                 self.registry.register(MoltbookSearchTool())
 
+            # MCP: connect to configured servers and register their tools so
+            # they're indistinguishable from built-ins to the model.
+            await self._connect_mcp()
+
             dispatcher = ToolDispatcher(self.registry)
             self.controller.tool_dispatcher = dispatcher
             self.controller.executor.set_tool_dispatcher(dispatcher)
@@ -326,6 +332,33 @@ class MapacheCLI:
 
         await self.controller.start(inject_project_context=not self.args.no_context)
         return True
+
+    async def _connect_mcp(self) -> None:
+        """Load mcp.json, connect to each server, register its tools."""
+        if self.registry is None or self.controller is None:
+            return
+        path = self.args.mcp_config
+        if not os.path.isabs(path):
+            path = os.path.join(self.working_dir, path)
+        configs = load_mcp_config(path)
+        if not configs:
+            return
+
+        self.mcp = MCPManager(configs)
+        try:
+            mcp_tools = await self.mcp.connect_all()
+        except Exception as exc:  # never let MCP break startup
+            print(f"  MCP      : failed to connect ({exc})")
+            self.mcp = None
+            return
+
+        for tool in mcp_tools:
+            self.registry.register(tool)
+        if mcp_tools:
+            # Pin MCP tool names so phase-based subsetting keeps them exposed.
+            self.controller.chain.always_tools |= set(self.mcp.tool_names)
+            print(f"  MCP      : {len(mcp_tools)} tools from "
+                  f"{len(self.mcp.clients)} server(s)")
 
     async def run(self) -> None:
         if not await self.setup():
@@ -397,6 +430,8 @@ class MapacheCLI:
 
                 await self._agent_turn(raw)
         finally:
+            if self.mcp:
+                await self.mcp.close_all()
             await self.memory.end_session()
 
     async def _agent_turn(self, user_input: str) -> None:
@@ -655,6 +690,9 @@ def parse_args() -> argparse.Namespace:
                         help="Disable phase-based tool subsetting and expose all "
                              "tools every turn (may overflow local-model payloads)")
     parser.add_argument("--no-context", action="store_true")
+    parser.add_argument("--mcp-config", default="mcp.json",
+                        help="Path to an mcp.json (Claude-Desktop-style) listing "
+                             "MCP servers to connect to. Ignored if absent.")
     parser.add_argument("--confirm", action="store_true")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--log-dir", default=os.environ.get("MAPACHE_LOG_DIR"))

@@ -201,6 +201,17 @@ moltbook_feed, moltbook_comment, moltbook_search
   only the tools relevant to the current attack phase, keeping the function-
   calling payload small enough for local models (avoids the Ollama tool-schema
   overflow). This — not `--no-verifier` — is the fix for the 33-schema overflow.
+- **MCP client** — Mapache connects OUT to Model Context Protocol servers
+  (`integrations/mcp/`) and exposes their tools as ordinary Mapache tools.
+  stdio transport: each server is launched as a subprocess and spoken to over
+  newline-delimited JSON-RPC 2.0 (`initialize` → `tools/list` → `tools/call`).
+  Servers are listed in a Claude-Desktop-style `mcp.json` (`--mcp-config`,
+  default `mcp.json`; absent = off). Remote tools are wrapped as `MCPTool`
+  (a `BaseTool`), registered into the same `ToolRegistry`/dispatcher as
+  built-ins, and namespaced `mcp__<server>__<tool>`. Their names are pinned in
+  `ConversationChain.always_tools` so phase-based subsetting keeps them exposed.
+  Connection is fail-soft (a bad server never breaks startup) and clients are
+  closed on exit.
 - **Sub-agent delegation** — a built-in `delegate` tool lets the model spawn a
   focused child `AgentController` for one bounded subtask (e.g. "enumerate port
   80 and report") and get back only its conclusion, keeping the main context

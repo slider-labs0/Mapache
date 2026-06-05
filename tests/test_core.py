@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from core.event_bus import EventBus, Event
 from core.context_builder import ContextBuilder, Message, ToolSchema
 from core.agent_controller import AgentController, AgentMode
+from core.conversation_chain import ConversationChain
 
 
 # ------------------------------------------------------------------ #
@@ -561,6 +562,41 @@ async def test_agent_delegation():
     print("  PASS  agent_delegation")
 
 
+async def test_mcp_client():
+    import os
+    import sys as _sys
+    from integrations.mcp import MCPManager, MCPServerConfig
+    from tools.tool_dispatcher import ToolDispatcher
+    from tools.tool_registry import ToolRegistry
+
+    server = os.path.join(os.path.dirname(__file__), "fake_mcp_server.py")
+    cfg = MCPServerConfig(name="fake", command=_sys.executable, args=[server])
+    mgr = MCPManager([cfg])
+    try:
+        tools = await mgr.connect_all()
+        assert tools and tools[0].name == "mcp__fake__echo", [t.name for t in tools]
+
+        registry = ToolRegistry()
+        for t in tools:
+            registry.register(t)
+        dispatcher = ToolDispatcher(registry)
+
+        out = await dispatcher.dispatch("mcp__fake__echo", {"text": "hi"}, "sess")
+        assert out == "echo: hi", out
+        bad = await dispatcher.dispatch("mcp__fake__echo", {}, "sess")
+        assert "Invalid arguments" in bad
+
+        # Phase subsetting must keep MCP tools exposed once pinned.
+        chain = ConversationChain()
+        names = {t.name for t in tools}
+        chain.always_tools |= names
+        active = chain.active_tool_names(names | {"nmap_scan"})
+        assert names <= active, (names, active)
+    finally:
+        await mgr.close_all()
+    print("  PASS  mcp_client")
+
+
 # ------------------------------------------------------------------ #
 # Model routing tests (Phase 7)
 # ------------------------------------------------------------------ #
@@ -681,6 +717,7 @@ async def run_all():
     await test_agent_context_compaction()
     await test_agent_mid_run_steering()
     await test_agent_delegation()
+    await test_mcp_client()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()
