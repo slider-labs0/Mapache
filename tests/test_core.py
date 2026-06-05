@@ -375,6 +375,31 @@ async def test_agent_reask_on_malformed():
     print("  PASS  agent_reask_on_malformed")
 
 
+async def test_agent_multi_tool_calls():
+    model = MockModel()
+    # One turn issuing two independent tool calls, then a final answer.
+    model.queue(json.dumps({"type": "tool_calls", "calls": [
+        {"tool": "shell", "args": {"cmd": "whoami"}},
+        {"tool": "shell", "args": {"cmd": "hostname"}},
+    ]}))
+    model.queue(json.dumps({"type": "response", "content": "both ran"}))
+
+    controller = AgentController(model_provider=model, use_function_calling=False)
+    controller.register_tool(ToolSchema(
+        name="shell", description="Run a shell command",
+        parameters={"type": "object", "properties": {"cmd": {"type": "string"}}, "required": ["cmd"]},
+    ))
+    await controller.start()
+
+    response = await controller.run("who and where am I", session_id="multi-test")
+
+    # Both calls dispatched within a single model turn (2 tools, 2 iterations).
+    assert response.tool_calls_made.count("shell") == 2, response.tool_calls_made
+    assert response.iterations == 2, response.iterations
+    assert response.content == "both ran"
+    print("  PASS  agent_multi_tool_calls")
+
+
 # ------------------------------------------------------------------ #
 # Model routing tests (Phase 7)
 # ------------------------------------------------------------------ #
@@ -490,6 +515,7 @@ async def run_all():
     await test_agent_max_iterations()
     await test_agent_plan_dispatches_and_seeds_todos()
     await test_agent_reask_on_malformed()
+    await test_agent_multi_tool_calls()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()

@@ -290,6 +290,9 @@ You must respond with a JSON object. Use one of these structures:
 To call a tool:
 {{"type": "tool_call", "tool": "<tool_name>", "args": {{...}}}}
 
+To call several INDEPENDENT tools at once (they run in parallel):
+{{"type": "tool_calls", "calls": [{{"tool": "<name>", "args": {{...}}}}, {{"tool": "<name>", "args": {{...}}}}]}}
+
 To give a final answer:
 {{"type": "response", "content": "<your response>"}}
 

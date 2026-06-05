@@ -215,6 +215,7 @@ class AgentController:
         self.context.add_user_message(user_input)
 
         full_response = ""
+        tools_used: list[str] = []
 
         while True:
             self._refresh_active_tools()
@@ -278,18 +279,13 @@ class AgentController:
                             self.context.inject_memory([refreshed])
                         continue
 
-                    if parsed.get("type") == "tool_call":
-                        tool_name = parsed["tool"]
-                        tool_args = self._apply_arg_fallbacks(tool_name, parsed.get("args", {}))
-                        tool_call_id = str(uuid4())[:8]
-                        yield f"[calling {tool_name}...]\n"
-                        result = await self._dispatch_tool(
-                            tool_name, tool_args, tool_call_id, session_id
-                        )
-                        tool_output = result.output if not result.error else f"ERROR: {result.error}"
-                        self.chain.on_tool_result(tool_name, tool_output)
-                        compressed = self.chain.get_compressed_tool_output(tool_name, tool_output)
-                        self.context.add_tool_result(tool_call_id, tool_name, compressed)
+                    if parsed.get("type") in ("tool_call", "tool_calls"):
+                        calls = parsed.get("calls") or [
+                            {"tool": parsed["tool"], "args": parsed.get("args", {})}
+                        ]
+                        names = ", ".join(c["tool"] for c in calls)
+                        yield f"[calling {names}...]\n"
+                        await self._execute_tool_calls(calls, session_id, tools_used)
                         continue
 
                     content = parsed.get("content", "")
@@ -417,50 +413,11 @@ class AgentController:
                     self.chain.update_todo(ref, "completed")
                 continue
 
-            if parsed.get("type") == "tool_call":
-                tool_name = parsed["tool"]
-                tool_args = self._apply_arg_fallbacks(tool_name, parsed.get("args", {}))
-                tool_call_id = str(uuid4())[:8]
-
-                # Confirmation for dangerous ops
-                if self.confirm_dangerous and self._is_dangerous(tool_name, tool_args):
-                    confirmed = await self._request_confirmation(tool_name, tool_args)
-                    if not confirmed:
-                        self.context.add_tool_result(
-                            tool_call_id, tool_name, "Operation cancelled by user."
-                        )
-                        continue
-
-                logger.info("Tool call: %s(%s)", tool_name, tool_args)
-                result = await self._dispatch_tool(
-                    tool_name, tool_args, tool_call_id, session_id
-                )
-                tools_used.append(tool_name)
-
-                # Notify conversation chain
-                tool_output = result.output if not result.error else f"ERROR: {result.error}"
-                self.chain.on_tool_result(tool_name, tool_output)
-
-                # Inject compressed output to keep context clean
-                compressed = self.chain.get_compressed_tool_output(tool_name, tool_output)
-                self.context.add_tool_result(
-                    tool_call_id=tool_call_id,
-                    tool_name=tool_name,
-                    result=compressed,
-                )
-
-                await self.bus.emit(
-                    "task.result" if not result.error else "task.error",
-                    {
-                        "task_id": tool_call_id,
-                        "tool_name": tool_name,
-                        "output": result.output,
-                        "error": result.error,
-                        "session_id": session_id,
-                    },
-                    source="controller",
-                    session_id=session_id,
-                )
+            if parsed.get("type") in ("tool_call", "tool_calls"):
+                calls = parsed.get("calls") or [
+                    {"tool": parsed["tool"], "args": parsed.get("args", {})}
+                ]
+                await self._execute_tool_calls(calls, session_id, tools_used)
                 continue
 
             content = parsed.get("content") or parsed.get("text", "")
@@ -513,24 +470,39 @@ class AgentController:
     # Response parsing
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def _normalize_call(raw_call: Any) -> Optional[dict[str, Any]]:
+        """Coerce one native or JSON tool call into {tool, args} or None."""
+        if not isinstance(raw_call, dict):
+            return None
+        fn = raw_call.get("function", raw_call)
+        name = fn.get("name") or fn.get("tool") or ""
+        if not name:
+            return None
+        args = fn.get("arguments")
+        if args is None:
+            args = fn.get("args", {})
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except json.JSONDecodeError:
+                args = {}
+        if not isinstance(args, dict):
+            args = {}
+        return {"tool": name, "args": args}
+
     def _parse_model_response(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, dict):
             tool_calls = raw.get("message", {}).get("tool_calls") or raw.get("tool_calls")
             if tool_calls:
-                first = tool_calls[0]
-                fn = first.get("function", first)
-                args = fn.get("arguments", {})
-                if isinstance(args, str):
-                    try:
-                        args = json.loads(args)
-                    except json.JSONDecodeError:
-                        args = {}
-                name = fn.get("name", "")
-                if not name:
-                    # Native tool call with no tool name — ask for a redo.
+                calls = [c for c in (self._normalize_call(tc) for tc in tool_calls) if c]
+                if not calls:
+                    # Native tool call(s) with no usable tool name — ask again.
                     return {"type": "malformed", "content": str(raw),
                             "reason": "tool call had no tool name"}
-                return {"type": "tool_call", "tool": name, "args": args}
+                if len(calls) == 1:
+                    return {"type": "tool_call", **calls[0]}
+                return {"type": "tool_calls", "calls": calls}
 
             content = raw.get("message", {}).get("content") or raw.get("content", "")
             raw = content
@@ -551,8 +523,10 @@ class AgentController:
 
         # Infer a missing/unknown type from the keys present — local models
         # frequently emit the right shape without the "type" tag.
-        if rtype not in ("tool_call", "plan", "todo_update", "response"):
-            if data.get("tool"):
+        if rtype not in ("tool_call", "tool_calls", "plan", "todo_update", "response"):
+            if isinstance(data.get("calls"), list):
+                rtype = "tool_calls"
+            elif data.get("tool"):
                 rtype = "tool_call"
             elif data.get("first_tool") or data.get("steps") or data.get("todos"):
                 rtype = "plan"
@@ -568,6 +542,19 @@ class AgentController:
                 # happens to contain JSON. Treat it as a plain response so we
                 # don't reask on incidental braces.
                 return {"type": "response", "content": data.get("content", raw)}
+
+        if rtype == "tool_calls":
+            raw_calls = data.get("calls")
+            if not isinstance(raw_calls, list):
+                return {"type": "malformed", "content": raw,
+                        "reason": "tool_calls missing a 'calls' list"}
+            calls = [c for c in (self._normalize_call(rc) for rc in raw_calls) if c]
+            if not calls:
+                return {"type": "malformed", "content": raw,
+                        "reason": "no valid calls in 'calls' list"}
+            if len(calls) == 1:
+                return {"type": "tool_call", **calls[0]}
+            return {"type": "tool_calls", "calls": calls}
 
         if rtype == "tool_call":
             tool = data.get("tool") or ""
@@ -696,6 +683,73 @@ class AgentController:
     # ------------------------------------------------------------------ #
     # Tool dispatch
     # ------------------------------------------------------------------ #
+
+    async def _execute_tool_calls(
+        self,
+        calls: list[dict[str, Any]],
+        session_id: str,
+        tools_used: list[str],
+    ) -> None:
+        """
+        Run one or more tool calls the model issued in a single turn.
+
+        Dangerous-op confirmation is handled sequentially up front (it may
+        prompt the user). The actual dispatches then run concurrently — the
+        model chose to batch these, so they are treated as independent — while
+        results are folded back into the conversation chain and context
+        serially, in the model's stated order, to keep state updates
+        deterministic.
+        """
+        approved: list[tuple[str, str, dict[str, Any]]] = []  # (id, name, args)
+        for call in calls:
+            tool_name = call["tool"]
+            tool_args = self._apply_arg_fallbacks(tool_name, call.get("args", {}))
+            tool_call_id = str(uuid4())[:8]
+
+            if self.confirm_dangerous and self._is_dangerous(tool_name, tool_args):
+                confirmed = await self._request_confirmation(tool_name, tool_args)
+                if not confirmed:
+                    self.context.add_tool_result(
+                        tool_call_id, tool_name, "Operation cancelled by user."
+                    )
+                    continue
+
+            logger.info("Tool call: %s(%s)", tool_name, tool_args)
+            approved.append((tool_call_id, tool_name, tool_args))
+
+        if not approved:
+            return
+
+        # Dispatch concurrently; preserve order when collecting results.
+        results = await asyncio.gather(*(
+            self._dispatch_tool(name, args, call_id, session_id)
+            for call_id, name, args in approved
+        ))
+
+        for (tool_call_id, tool_name, _args), result in zip(approved, results):
+            tools_used.append(tool_name)
+            tool_output = result.output if not result.error else f"ERROR: {result.error}"
+            self.chain.on_tool_result(tool_name, tool_output)
+
+            compressed = self.chain.get_compressed_tool_output(tool_name, tool_output)
+            self.context.add_tool_result(
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                result=compressed,
+            )
+
+            await self.bus.emit(
+                "task.result" if not result.error else "task.error",
+                {
+                    "task_id": tool_call_id,
+                    "tool_name": tool_name,
+                    "output": result.output,
+                    "error": result.error,
+                    "session_id": session_id,
+                },
+                source="controller",
+                session_id=session_id,
+            )
 
     async def _dispatch_tool(
         self,

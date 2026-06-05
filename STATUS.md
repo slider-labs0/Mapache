@@ -201,6 +201,13 @@ moltbook_feed, moltbook_comment, moltbook_search
   only the tools relevant to the current attack phase, keeping the function-
   calling payload small enough for local models (avoids the Ollama tool-schema
   overflow). This — not `--no-verifier` — is the fix for the 33-schema overflow.
+- **Multi-tool calls per turn** — the model can issue several independent tool
+  calls in one turn via `{"type":"tool_calls","calls":[{tool,args}, ...]}` (or
+  native multi `tool_calls`). `_execute_tool_calls` confirms dangerous ops
+  sequentially, dispatches the batch concurrently (`asyncio.gather`), then folds
+  results back into the chain/context serially in the model's stated order.
+  Saves model round-trips for independent actions (e.g. scanning two hosts). A
+  single-element batch collapses to a normal `tool_call`.
 - **Robust tool-calling** — `_parse_model_response` tolerates the ways local
   models mangle output: JSON fenced in ```json blocks, JSON embedded in prose
   (balanced, string-aware brace scan), and a missing `"type"` tag (inferred
