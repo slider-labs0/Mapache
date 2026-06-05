@@ -9,6 +9,7 @@ import argparse
 import asyncio
 import os
 import sys
+import threading
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -171,6 +172,13 @@ class MapacheCLI:
         self.confirm = args.confirm
         self.working_dir = os.path.abspath(args.dir)
 
+        # Single stdin reader → async queue. One consumer at a time: the REPL
+        # when idle, or the steering loop while a turn runs. Lets the operator
+        # redirect a running turn (or answer a confirm) without a second reader
+        # racing for stdin.
+        self._input_q: asyncio.Queue[str | None] | None = None
+        self._pending_confirm: asyncio.Future | None = None
+
         strategy_map = {
             "single":   RoutingStrategy.SINGLE,
             "pipeline": RoutingStrategy.PIPELINE,
@@ -205,7 +213,17 @@ class MapacheCLI:
         async def confirm_cb(tool_name: str, args: dict) -> bool:
             if not self.confirm:
                 return True
-            ans = input(f"\n  ⚠ Confirm {tool_name}({str(args)[:100]})? [Y/n] ").strip().lower()
+            print(f"\n  ⚠ Confirm {tool_name}({str(args)[:100]})? [Y/n] ", end="", flush=True)
+            # Read the answer via the single stdin reader (the steering loop
+            # routes the next typed line to this future) so we don't open a
+            # second competing reader on stdin.
+            loop = asyncio.get_event_loop()
+            fut: asyncio.Future = loop.create_future()
+            self._pending_confirm = fut
+            try:
+                ans = (await fut).strip().lower()
+            finally:
+                self._pending_confirm = None
             return ans != "n"
 
         # Phase 7 — per-role model routing. RoutedModel consults the
@@ -335,16 +353,33 @@ class MapacheCLI:
         if get_mapache_instructions(self.working_dir):
             print("  MAPACHE.md loaded")
 
-        print(f"\n  Type /help for commands\n")
+        print(f"\n  Type /help for commands")
+        print(f"  (you can type while the agent works to steer it mid-task)\n")
+
+        # One persistent background reader feeds every typed line into a queue.
+        loop = asyncio.get_event_loop()
+        self._input_q = asyncio.Queue()
+
+        def _stdin_reader() -> None:
+            for line in sys.stdin:
+                loop.call_soon_threadsafe(self._input_q.put_nowait, line.rstrip("\n"))
+            loop.call_soon_threadsafe(self._input_q.put_nowait, None)  # EOF
+
+        threading.Thread(target=_stdin_reader, daemon=True).start()
 
         try:
             while True:
+                print("you > ", end="", flush=True)
                 try:
-                    raw = input("you > ").strip()
-                except (EOFError, KeyboardInterrupt):
+                    raw = await self._input_q.get()
+                except (asyncio.CancelledError, KeyboardInterrupt):
+                    print("\nBye.")
+                    break
+                if raw is None:  # EOF (Ctrl+Z / Ctrl+D)
                     print("\nBye.")
                     break
 
+                raw = raw.strip()
                 if not raw:
                     continue
 
@@ -382,9 +417,10 @@ class MapacheCLI:
                     streamed = True
                 print(text, end="", flush=True)
 
-            response = await self.controller.run(
+            turn_task = asyncio.create_task(self.controller.run(
                 user_input, session_id=self.session_id, on_token=on_token
-            )
+            ))
+            response = await self._drive_turn(turn_task)
             self.session_id = response.session_id
             if streamed:
                 print()  # finish the streamed line
@@ -402,6 +438,37 @@ class MapacheCLI:
                 import traceback
                 traceback.print_exc()
         print()
+
+    async def _drive_turn(self, turn_task: asyncio.Task):
+        """
+        Await a turn while consuming typed lines as live steering.
+
+        Each line typed during the turn is routed to a pending confirmation
+        prompt if one is open, otherwise handed to controller.steer(). Lines
+        that arrive after the turn ends stay buffered in the queue for the
+        next REPL prompt (nothing is lost).
+        """
+        assert self._input_q is not None
+        while not turn_task.done():
+            get_task = asyncio.create_task(self._input_q.get())
+            done, _pending = await asyncio.wait(
+                {turn_task, get_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if get_task in done:
+                line = get_task.result()
+                if line is None:  # EOF mid-turn — stop steering, let turn finish
+                    continue
+                line = line.strip()
+                if self._pending_confirm is not None and not self._pending_confirm.done():
+                    self._pending_confirm.set_result(line)
+                elif line and self.controller is not None:
+                    self.controller.steer(line)
+                    print(f"\n  ↪ steering: {line}\n", flush=True)
+            else:
+                # Turn finished first; don't strand the queued get — its item
+                # (if any) remains buffered for the REPL.
+                get_task.cancel()
+        return turn_task.result()
 
     async def _run_shell_direct(self, cmd: str) -> None:
         if self.controller is None:

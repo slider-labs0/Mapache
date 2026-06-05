@@ -201,6 +201,16 @@ moltbook_feed, moltbook_comment, moltbook_search
   only the tools relevant to the current attack phase, keeping the function-
   calling payload small enough for local models (avoids the Ollama tool-schema
   overflow). This — not `--no-verifier` — is the fix for the 33-schema overflow.
+- **Mid-run steering** — a frontend can call `AgentController.steer(text)` (thread-
+  safe) to redirect a turn already in progress. Queued messages are drained at
+  the top of each loop iteration, injected as `[operator steering] …`, and run
+  through `apply_input_signals` so a freshly typed target / rescan updates the
+  attack state without disturbing the in-progress turn's bookkeeping; an
+  `agent.steer` event fires. The CLI now uses one background stdin reader → async
+  queue with a single consumer (REPL when idle, steering loop during a turn), so
+  the operator can type to steer (or answer a `--confirm` prompt) without a
+  second reader racing for stdin. The async messaging frontends can call
+  `steer()` directly.
 - **Context compaction** — when raw history outgrows its token budget, the
   controller summarizes the oldest turns into a running summary (a model call
   via `_maybe_compact`) and drops those messages, instead of silently trimming

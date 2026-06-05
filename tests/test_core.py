@@ -478,6 +478,46 @@ async def test_agent_context_compaction():
     print("  PASS  agent_context_compaction")
 
 
+async def test_agent_mid_run_steering():
+    # A steering message queued mid-turn must be injected into the context
+    # before the next model call and update the tracked target.
+    class SteerProbe:
+        supports_tools = False
+
+        def __init__(self):
+            self.turn = 0
+            self.ctrl = None
+            self.saw_steer = False
+
+        async def chat(self, messages, tools=None, json_mode=False, stream=False):
+            self.turn += 1
+            if self.turn == 1:
+                self.ctrl.steer("actually the target is 10.9.9.9, rescan it")
+                return json.dumps({"type": "tool_call", "tool": "shell", "args": {"cmd": "id"}})
+            joined = " ".join(m.get("content", "") for m in messages)
+            self.saw_steer = "[operator steering]" in joined and "10.9.9.9" in joined
+            return json.dumps({"type": "response", "content": "redirected"})
+
+    model = SteerProbe()
+    controller = AgentController(
+        model_provider=model, mode=AgentMode.AGENT, use_function_calling=False,
+    )
+    model.ctrl = controller
+    controller.register_tool(ToolSchema(
+        name="shell", description="Run a shell command",
+        parameters={"type": "object", "properties": {"cmd": {"type": "string"}}, "required": ["cmd"]},
+    ))
+    await controller.start()
+
+    response = await controller.run("start on 10.1.1.1", session_id="steer-test")
+
+    assert model.saw_steer, "steering message was not injected"
+    assert controller.chain.attack_state.target == "10.9.9.9"
+    assert response.content == "redirected"
+    assert controller._drain_steering() == []  # inbox fully drained
+    print("  PASS  agent_mid_run_steering")
+
+
 # ------------------------------------------------------------------ #
 # Model routing tests (Phase 7)
 # ------------------------------------------------------------------ #
@@ -596,6 +636,7 @@ async def run_all():
     await test_agent_multi_tool_calls()
     await test_agent_streaming_unified()
     await test_agent_context_compaction()
+    await test_agent_mid_run_steering()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()

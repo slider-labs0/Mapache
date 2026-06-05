@@ -273,16 +273,21 @@ class ConversationChain:
         self._turn_number = 0
         self._todos: list[TodoItem] = []
 
-    def on_turn_start(self, user_input: str) -> None:
-        self._turn_number += 1
+    def apply_input_signals(self, user_input: str) -> None:
+        """
+        Update attack state from a piece of operator input.
 
-        # Extract target from input. A freshly typed IP that differs from the
-        # current target overrides it — e.g. HTB reassigns the machine IP
-        # mid-session, and we must not keep scanning the dead host. When the
-        # target changes, stale per-target findings (ports, services, vulns)
-        # are cleared and the phase resets to recon. Hostnames only set the
-        # target when none exists yet, so a domain mentioned in passing can't
-        # hijack the active engagement.
+        Shared by `on_turn_start` and mid-run steering so a freshly typed
+        target or a rescan request takes effect either way, without disturbing
+        per-turn bookkeeping (turn counter, current-turn accumulator).
+
+        A freshly typed IP that differs from the current target overrides it —
+        e.g. HTB reassigns the machine IP mid-session, and we must not keep
+        scanning the dead host. When the target changes, stale per-target
+        findings (ports, services, vulns) are cleared and the phase resets to
+        recon. Hostnames only set the target when none exists yet, so a domain
+        mentioned in passing can't hijack the active engagement.
+        """
         target = self._extract_target(user_input)
         if target:
             is_ip = bool(re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", target))
@@ -306,6 +311,11 @@ class ConversationChain:
         if any(kw in user_input.lower() for kw in rescan_keywords):
             self.attack_state.open_ports = []
             self.attack_state.services = {}
+
+    def on_turn_start(self, user_input: str) -> None:
+        self._turn_number += 1
+
+        self.apply_input_signals(user_input)
 
         self._current_turn = TurnSummary(
             turn_number=self._turn_number,

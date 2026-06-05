@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, AsyncIterator, Callable, Optional
@@ -140,6 +141,13 @@ class AgentController:
 
         self._sessions: dict[str, dict[str, Any]] = {}
         self._register_handlers()
+
+        # Mid-run steering inbox: a frontend (CLI, Telegram, Discord) can call
+        # steer() while a turn is running to redirect it. Messages are drained
+        # at the top of each loop iteration. Guarded by a lock so steer() is
+        # safe to call from another thread.
+        self._steer_lock = threading.Lock()
+        self._steer_inbox: list[str] = []
 
         logger.info("AgentController initialized (mode=%s)", mode.value)
 
@@ -285,6 +293,10 @@ class AgentController:
             iteration += 1
             self._refresh_active_tools()
 
+            # Pull in any operator steering queued since the last step, so the
+            # turn can be redirected mid-flight without restarting the session.
+            await self._apply_steering(session_id)
+
             # Fold older turns into a running summary if we've outgrown the
             # token budget, so continuity survives a long engagement instead of
             # being hard-trimmed away.
@@ -418,6 +430,47 @@ class AgentController:
             iterations=iteration,
             error="max_iterations",
         )
+
+    # ------------------------------------------------------------------ #
+    # Mid-run steering
+    # ------------------------------------------------------------------ #
+
+    def steer(self, text: str) -> None:
+        """
+        Queue an operator message to redirect the turn currently in progress.
+
+        Thread-safe. The message is injected into the conversation before the
+        next model call, so the agent can react without the session being
+        restarted. A no-op if `text` is blank.
+        """
+        text = (text or "").strip()
+        if not text:
+            return
+        with self._steer_lock:
+            self._steer_inbox.append(text)
+
+    def _drain_steering(self) -> list[str]:
+        with self._steer_lock:
+            if not self._steer_inbox:
+                return []
+            pending = self._steer_inbox
+            self._steer_inbox = []
+        return pending
+
+    async def _apply_steering(self, session_id: str) -> None:
+        """Inject any queued steering messages into the live context."""
+        for msg in self._drain_steering():
+            logger.info("Steering injected: %r", msg[:80])
+            # Let a freshly typed target/rescan update the tracked attack state
+            # without disturbing the in-progress turn's bookkeeping.
+            self.chain.apply_input_signals(msg)
+            self.context.add_user_message(f"[operator steering] {msg}")
+            await self.bus.emit(
+                "agent.steer",
+                {"message": msg, "session_id": session_id},
+                source="controller",
+                session_id=session_id,
+            )
 
     # ------------------------------------------------------------------ #
     # Context compaction
