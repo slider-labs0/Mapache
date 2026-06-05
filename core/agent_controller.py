@@ -165,6 +165,7 @@ class AgentController:
         user_input: str,
         session_id: Optional[str] = None,
         stream: bool = False,
+        on_token: Optional[Callable[[str], None]] = None,
     ) -> AgentResponse:
         session_id = session_id or self._new_session()
         logger.info("Turn start — session=%s input=%r", session_id, user_input[:80])
@@ -178,7 +179,7 @@ class AgentController:
             self.context.inject_memory([chain_context])
 
         self.context.add_user_message(user_input)
-        response = await self._agent_loop(user_input, session_id)
+        response = await self._agent_loop(user_input, session_id, on_token=on_token)
 
         if response.content:
             self.context.add_assistant_message(response.content)
@@ -205,99 +206,37 @@ class AgentController:
         user_input: str,
         session_id: Optional[str] = None,
     ) -> AsyncIterator[str]:
-        session_id = session_id or self._new_session()
-        self.chain.on_turn_start(user_input)
+        """
+        Token-streaming view of a turn.
 
-        chain_context = self.chain.get_context_injection()
-        if chain_context:
-            self.context.inject_memory([chain_context])
+        Thin wrapper over `run()` so there is a single turn implementation: the
+        full ReAct loop (todos, reask, verifier, multi-tool) runs exactly as in
+        `run()`, and its streamed tokens are forwarded here via an `on_token`
+        callback bridged through a queue.
+        """
+        queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
 
-        self.context.add_user_message(user_input)
-
-        full_response = ""
-        tools_used: list[str] = []
-
-        while True:
-            self._refresh_active_tools()
-            context_payload = self.context.build(format="ollama")
-
+        async def _produce() -> None:
             try:
-                if hasattr(self.model, "chat_stream"):
-                    buffer = ""
-                    tool_call_detected = False
-                    tool_call_data: dict = {}
+                await self.run(
+                    user_input,
+                    session_id=session_id,
+                    on_token=queue.put_nowait,
+                )
+            except Exception as exc:  # surface as a final token, never hang
+                queue.put_nowait(f"\n[error: {exc}]")
+            finally:
+                queue.put_nowait(None)  # sentinel: stream finished
 
-                    async for token in self.model.chat_stream(
-                        messages=context_payload["messages"],
-                        tools=context_payload.get("tools"),
-                    ):
-                        if isinstance(token, dict) and token.get("type") == "tool_call":
-                            tool_call_detected = True
-                            tool_call_data = token
-                            break
-                        else:
-                            text = str(token)
-                            buffer += text
-                            full_response += text
-                            yield text
-
-                    if tool_call_detected:
-                        tool_name = tool_call_data.get("tool", "")
-                        tool_args = self._apply_arg_fallbacks(
-                            tool_name, tool_call_data.get("args", {})
-                        )
-                        tool_call_id = str(uuid4())[:8]
-                        yield f"\n[calling {tool_name}...]\n"
-                        result = await self._dispatch_tool(
-                            tool_name, tool_args, tool_call_id, session_id
-                        )
-                        tool_output = result.output if not result.error else f"ERROR: {result.error}"
-                        self.chain.on_tool_result(tool_name, tool_output)
-                        compressed = self.chain.get_compressed_tool_output(tool_name, tool_output)
-                        self.context.add_tool_result(tool_call_id, tool_name, compressed)
-                        continue
-                    else:
-                        self.chain.on_turn_end(full_response)
-                        if full_response:
-                            self.context.add_assistant_message(full_response)
-                        return
-                else:
-                    raw = await self.model.chat(
-                        messages=context_payload["messages"],
-                        tools=context_payload.get("tools"),
-                    )
-                    parsed = self._parse_model_response(raw)
-
-                    if parsed.get("todos"):
-                        self.chain.set_todos(parsed["todos"])
-
-                    if parsed.get("type") == "todo_update":
-                        for ref in parsed.get("completed") or []:
-                            self.chain.update_todo(ref, "completed")
-                        refreshed = self.chain.get_context_injection()
-                        if refreshed:
-                            self.context.inject_memory([refreshed])
-                        continue
-
-                    if parsed.get("type") in ("tool_call", "tool_calls"):
-                        calls = parsed.get("calls") or [
-                            {"tool": parsed["tool"], "args": parsed.get("args", {})}
-                        ]
-                        names = ", ".join(c["tool"] for c in calls)
-                        yield f"[calling {names}...]\n"
-                        await self._execute_tool_calls(calls, session_id, tools_used)
-                        continue
-
-                    content = parsed.get("content", "")
-                    full_response = content
-                    self.chain.on_turn_end(content)
-                    self.context.add_assistant_message(content)
-                    yield content
-                    return
-
-            except Exception as exc:
-                yield f"\n[error: {exc}]"
-                return
+        task = asyncio.create_task(_produce())
+        try:
+            while True:
+                token = await queue.get()
+                if token is None:
+                    break
+                yield token
+        finally:
+            await task
 
     def register_tool(self, schema: ToolSchema) -> None:
         self.context.register_tool(schema)
@@ -326,7 +265,12 @@ class AgentController:
         active = self.chain.active_tool_names(self.context.available_tools)
         self.context.set_active_tools(active)
 
-    async def _agent_loop(self, user_input: str, session_id: str) -> AgentResponse:
+    async def _agent_loop(
+        self,
+        user_input: str,
+        session_id: str,
+        on_token: Optional[Callable[[str], None]] = None,
+    ) -> AgentResponse:
         tools_used: list[str] = []
         iteration = 0
         verify_retries_left = self.verify_max_retries
@@ -356,9 +300,8 @@ class AgentController:
                 model_kwargs = {"json_mode": True}
 
             try:
-                raw_response = await self.model.chat(
-                    messages=context_payload["messages"],
-                    **model_kwargs,
+                raw_response = await self._chat(
+                    context_payload["messages"], model_kwargs, on_token
                 )
             except Exception as exc:
                 logger.error("Model call failed: %s", exc)
@@ -465,6 +408,59 @@ class AgentController:
             iterations=iteration,
             error="max_iterations",
         )
+
+    # ------------------------------------------------------------------ #
+    # Model call (streaming-aware)
+    # ------------------------------------------------------------------ #
+
+    async def _chat(
+        self,
+        messages: list[dict[str, Any]],
+        model_kwargs: dict[str, Any],
+        on_token: Optional[Callable[[str], None]],
+    ) -> Any:
+        """
+        Make one model call, streaming tokens to `on_token` when possible.
+
+        Streaming is used only when a callback is given, the model exposes
+        `chat_stream`, and we are in native tool-calling mode — JSON-mode
+        models would otherwise stream raw protocol JSON to the user. The
+        streamed pieces are reassembled into the same dict shape `chat`
+        returns, so the rest of the loop (parse, todos, reask, verifier,
+        multi-tool) is identical whether or not we streamed.
+        """
+        can_stream = (
+            on_token is not None
+            and self.context.use_function_calling
+            and hasattr(self.model, "chat_stream")
+        )
+        if not can_stream:
+            return await self.model.chat(messages=messages, **model_kwargs)
+
+        text_parts: list[str] = []
+        tool_call: Optional[dict[str, Any]] = None
+        async for piece in self.model.chat_stream(
+            messages=messages, tools=model_kwargs.get("tools")
+        ):
+            if isinstance(piece, dict) and piece.get("type") == "tool_call":
+                tool_call = piece
+                break
+            token = str(piece)
+            text_parts.append(token)
+            try:
+                on_token(token)
+            except Exception:  # a display callback must never break the loop
+                pass
+
+        message: dict[str, Any] = {"content": "".join(text_parts)}
+        if tool_call:
+            message["tool_calls"] = [{
+                "function": {
+                    "name": tool_call.get("tool", ""),
+                    "arguments": tool_call.get("args", {}),
+                }
+            }]
+        return {"message": message}
 
     # ------------------------------------------------------------------ #
     # Response parsing

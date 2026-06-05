@@ -400,6 +400,51 @@ async def test_agent_multi_tool_calls():
     print("  PASS  agent_multi_tool_calls")
 
 
+async def test_agent_streaming_unified():
+    # A native-tool-calling model exposing chat_stream: turn 1 streams thinking
+    # text then a tool call, turn 2 streams the final answer. Streaming must run
+    # through the full loop (tool dispatch happens), and tokens reach on_token.
+    class StreamModel:
+        supports_tools = True
+
+        def __init__(self):
+            self.turn = 0
+
+        async def chat(self, messages, tools=None, json_mode=False, stream=False):
+            return {"message": {"content": ""}}
+
+        async def chat_stream(self, messages, tools=None):
+            self.turn += 1
+            if self.turn == 1:
+                for t in ["Scanning ", "now. "]:
+                    yield t
+                yield {"type": "tool_call", "tool": "shell", "args": {"cmd": "nmap"}}
+            else:
+                for t in ["Ports ", "22,80 ", "open."]:
+                    yield t
+
+    model = StreamModel()
+    controller = AgentController(
+        model_provider=model, mode=AgentMode.AGENT, use_function_calling=True,
+    )
+    controller.register_tool(ToolSchema(
+        name="shell", description="Run a shell command",
+        parameters={"type": "object", "properties": {"cmd": {"type": "string"}}, "required": ["cmd"]},
+    ))
+    await controller.start()
+
+    tokens: list[str] = []
+    response = await controller.run("scan it", session_id="stream-test", on_token=tokens.append)
+
+    streamed = "".join(tokens)
+    assert "Scanning now." in streamed, streamed
+    assert "Ports 22,80 open." in streamed, streamed
+    assert "shell" in response.tool_calls_made
+    assert response.content == "Ports 22,80 open."
+    assert response.iterations == 2
+    print("  PASS  agent_streaming_unified")
+
+
 # ------------------------------------------------------------------ #
 # Model routing tests (Phase 7)
 # ------------------------------------------------------------------ #
@@ -516,6 +561,7 @@ async def run_all():
     await test_agent_plan_dispatches_and_seeds_todos()
     await test_agent_reask_on_malformed()
     await test_agent_multi_tool_calls()
+    await test_agent_streaming_unified()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()

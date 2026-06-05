@@ -370,9 +370,26 @@ class MapacheCLI:
         print()
         turn_id = self.memory.session.start_turn(user_input) if self.memory.session else None
         try:
-            response = await self.controller.run(user_input, session_id=self.session_id)
+            # Stream tokens live when the model supports it (native tool-calling
+            # models). The controller no-ops the callback in JSON mode, so
+            # `streamed` stays False there and we print the content normally.
+            streamed = False
+
+            def on_token(text: str) -> None:
+                nonlocal streamed
+                if not streamed:
+                    print("agent > ", end="", flush=True)
+                    streamed = True
+                print(text, end="", flush=True)
+
+            response = await self.controller.run(
+                user_input, session_id=self.session_id, on_token=on_token
+            )
             self.session_id = response.session_id
-            print(f"agent > {response.content}")
+            if streamed:
+                print()  # finish the streamed line
+            else:
+                print(f"agent > {response.content}")
             if response.tool_calls_made:
                 print(f"        (used: {', '.join(response.tool_calls_made)}, {response.iterations} steps)")
             if response.error and response.error != "max_iterations":

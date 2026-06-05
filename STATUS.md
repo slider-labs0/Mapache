@@ -201,6 +201,14 @@ moltbook_feed, moltbook_comment, moltbook_search
   only the tools relevant to the current attack phase, keeping the function-
   calling payload small enough for local models (avoids the Ollama tool-schema
   overflow). This — not `--no-verifier` — is the fix for the 33-schema overflow.
+- **Token streaming (unified)** — the live turn path streams model tokens to
+  the caller via an optional `on_token` callback on `run()`/`_agent_loop`. A
+  single streaming-aware `_chat` helper reassembles streamed pieces into the
+  same shape `chat()` returns, so todos/reask/verifier/multi-tool all behave
+  identically streamed or not. Streaming engages only for native tool-calling
+  models (JSON-mode models would stream raw protocol JSON, so they fall back to
+  a normal call). The CLI prints tokens live; the old `stream()` generator is
+  now a thin queue wrapper over `run()`, so there is one turn implementation.
 - **Multi-tool calls per turn** — the model can issue several independent tool
   calls in one turn via `{"type":"tool_calls","calls":[{tool,args}, ...]}` (or
   native multi `tool_calls`). `_execute_tool_calls` confirms dangerous ops
