@@ -597,6 +597,49 @@ async def test_mcp_client():
     print("  PASS  mcp_client")
 
 
+async def test_agent_duplicate_call_guard():
+    # The same tool+args repeated within a turn must run once; later identical
+    # calls are short-circuited with the cached result, breaking no-progress
+    # loops (the "fetch the same URL 5 times" bug).
+    class FetchStub:
+        def __init__(self):
+            self.hits = 0
+
+        async def dispatch(self, name, args, session_id):
+            self.hits += 1
+            return "blocked by robot policy"
+
+    class LoopModel:
+        supports_tools = False
+
+        def __init__(self):
+            self.n = 0
+
+        async def chat(self, messages, tools=None, json_mode=False, stream=False):
+            self.n += 1
+            if self.n <= 4:
+                return json.dumps({"type": "tool_call", "tool": "web_fetch",
+                                   "args": {"url": "http://x/wiki/VM"}})
+            return json.dumps({"type": "response", "content": "Virtual Machine"})
+
+    dispatcher = FetchStub()
+    controller = AgentController(
+        model_provider=LoopModel(), tool_dispatcher=dispatcher,
+        mode=AgentMode.AGENT, use_function_calling=False,
+    )
+    controller.register_tool(ToolSchema(
+        name="web_fetch", description="fetch a url",
+        parameters={"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]},
+    ))
+    await controller.start()
+
+    response = await controller.run("what does VM stand for", session_id="dup-test")
+
+    assert dispatcher.hits == 1, dispatcher.hits  # only the first identical call ran
+    assert response.content == "Virtual Machine"
+    print("  PASS  agent_duplicate_call_guard")
+
+
 # ------------------------------------------------------------------ #
 # Model routing tests (Phase 7)
 # ------------------------------------------------------------------ #
@@ -718,6 +761,7 @@ async def run_all():
     await test_agent_mid_run_steering()
     await test_agent_delegation()
     await test_mcp_client()
+    await test_agent_duplicate_call_guard()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()

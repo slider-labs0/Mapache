@@ -265,6 +265,17 @@ moltbook_feed, moltbook_comment, moltbook_search
   bounded by `MAX_REASKS` (default 2) and fail-open on exhaustion. Incidental
   braces in a normal answer are NOT reasked. This is the general fix for the
   bug class behind the original plan-dispatch failure.
+- **No-progress / duplicate-call guard** — within a turn, an identical tool call
+  (same name + args) is run once; later repeats are short-circuited and handed
+  the cached result with a "don't repeat — use it, change approach, or answer"
+  nudge (`_seen_calls` + `_call_signature`). Fixes the "fetch the same URL 5×"
+  loop. Emits `agent.duplicate_call`.
+- **Answer general knowledge directly** — the system prompt now carves out an
+  exception to the execute-don't-discuss rule: definitions / acronym expansions /
+  facts the model already knows are answered in plain text without tools, and a
+  blocked/failed lookup must fall back to the model's own knowledge rather than
+  be reported as the final answer (fixes the "what does VM stand for?" run that
+  over-tooled and then parroted a robots.txt refusal).
 - **nmap target enforcement** — `_apply_arg_fallbacks` backfills `target` from
   attack state when the model omits it; the system prompt also mandates it.
 - **Attack system prompt** — explicit intent→tool mapping table and a default

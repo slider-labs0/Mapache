@@ -328,6 +328,10 @@ class AgentController:
         iteration = 0
         verify_retries_left = self.verify_max_retries
         reasks_left = self.MAX_REASKS
+        # Signatures of tool calls already run this turn, mapped to their
+        # result, so an identical repeated call is short-circuited instead of
+        # re-run (breaks the "fetch the same URL 5 times" loop).
+        self._seen_calls: dict[str, str] = {}
 
         while iteration < self.MAX_ITERATIONS:
             iteration += 1
@@ -848,6 +852,14 @@ class AgentController:
     # Tool dispatch
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def _call_signature(tool_name: str, args: dict[str, Any]) -> str:
+        try:
+            arg_str = json.dumps(args, sort_keys=True, default=str)
+        except Exception:
+            arg_str = str(args)
+        return f"{tool_name}|{arg_str}"
+
     async def _execute_tool_calls(
         self,
         calls: list[dict[str, Any]],
@@ -864,11 +876,34 @@ class AgentController:
         serially, in the model's stated order, to keep state updates
         deterministic.
         """
+        seen = getattr(self, "_seen_calls", None)
+        if seen is None:
+            seen = self._seen_calls = {}
+
         approved: list[tuple[str, str, dict[str, Any]]] = []  # (id, name, args)
         for call in calls:
             tool_name = call["tool"]
             tool_args = self._apply_arg_fallbacks(tool_name, call.get("args", {}))
             tool_call_id = str(uuid4())[:8]
+
+            # No-progress guard: an identical call already run this turn is not
+            # re-dispatched. Hand back the prior result with a nudge to move on.
+            sig = self._call_signature(tool_name, tool_args)
+            if sig in seen:
+                logger.info("Duplicate tool call suppressed: %s", tool_name)
+                self.context.add_tool_result(
+                    tool_call_id, tool_name,
+                    f"You already called {tool_name} with these exact arguments "
+                    f"this turn; its result was:\n{seen[sig]}\n"
+                    "Do NOT repeat it. Use that result, try a different tool/args, "
+                    "or give your final answer.",
+                )
+                await self.bus.emit(
+                    "agent.duplicate_call",
+                    {"tool_name": tool_name, "session_id": session_id},
+                    source="controller", session_id=session_id,
+                )
+                continue
 
             if self.confirm_dangerous and self._is_dangerous(tool_name, tool_args):
                 confirmed = await self._request_confirmation(tool_name, tool_args)
@@ -896,6 +931,7 @@ class AgentController:
             self.chain.on_tool_result(tool_name, tool_output)
 
             compressed = self.chain.get_compressed_tool_output(tool_name, tool_output)
+            seen[self._call_signature(tool_name, _args)] = compressed
             self.context.add_tool_result(
                 tool_call_id=tool_call_id,
                 tool_name=tool_name,
