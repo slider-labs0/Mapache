@@ -212,6 +212,31 @@ moltbook_feed, moltbook_comment, moltbook_search
   `ConversationChain.always_tools` so phase-based subsetting keeps them exposed.
   Connection is fail-soft (a bad server never breaks startup) and clients are
   closed on exit.
+- **Self-authored tools (Hermes-style)** — a `create_tool` meta-tool lets the
+  model author a brand-new reusable tool at runtime: it writes the body of
+  `async def run(args, shell)`, which is compiled (errors handed back for self-
+  correction) and persisted as a hub-installable package under
+  `plugins/generated/<name>/` (`tool.py` + `manifest.json` carrying origin,
+  usage, lifecycle `state`, phase, and a sha256). The tool registers into the
+  ToolRegistry + model context + `ConversationChain.generated_tools` (phase-
+  tagged so it respects subsetting) and becomes callable the *next* loop
+  iteration — never dispatched in the response that created it. Trust model:
+  `origin:self` (agent-written) loads freely; `origin:hub` (downloaded) is
+  sha256-verified before compile and refuses to load if tampered. `GeneratedTool`
+  instances self-track `last_used`/`use_count`. The startup loader
+  (`GeneratedToolManager.load_all`) is fail-soft (a bad tool never breaks
+  startup, per the MCP precedent). See `tools/generated_tool.py` +
+  `tools/generated_tool_manager.py`. Model tools: `create_tool`,
+  `tool_list_generated`, `tool_delete` (all in `CORE_TOOLS`).
+- **Curator (tool-library GC)** — self-authored tools move through a reversible
+  `active → stale → archived` lifecycle so the create-tools loop can't pile up.
+  A usage rule auto-demotes unused tools to *stale* (a non-destructive label;
+  using one auto-promotes it back to active). The only permissioned step is
+  *stale → archived*: `/curate` proposes stale tools one at a time and, on the
+  operator's per-tool approval, unregisters them and moves their folder to
+  `plugins/archived/` (out of the load path). `/restore <name>` reverses it;
+  `/purge <name>` hard-deletes an already-archived tool (a deliberate two-step).
+  A non-blocking startup notice reports stale tools.
 - **Sub-agent delegation** — a built-in `delegate` tool lets the model spawn a
   focused child `AgentController` for one bounded subtask (e.g. "enumerate port
   80 and report") and get back only its conclusion, keeping the main context

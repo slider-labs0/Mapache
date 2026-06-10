@@ -36,6 +36,9 @@ CORE_TOOLS = {
     "memory_recall", "memory_save", "memory_target_store", "memory_target_get",
     # Built-in sub-agent delegation tool — always available when registered.
     "delegate",
+    # Self-authored tool meta-tools — always available so the agent can author,
+    # inspect, and retire its own tools regardless of attack phase.
+    "create_tool", "tool_list_generated", "tool_delete",
 }
 
 PHASE_TOOLS = {
@@ -277,6 +280,11 @@ class ConversationChain:
         # Tool names to always expose regardless of attack phase (e.g. MCP
         # tools, which don't belong to any phase but must stay callable).
         self.always_tools: set[str] = set()
+        # Self-authored (generated) tools mapped to the phase they're exposed in
+        # ("always" = every phase). Phase-tagging keeps the function-calling
+        # payload small as the generated-tool library grows. Survives target
+        # changes (these tools are not target-specific).
+        self.generated_tools: dict[str, str] = {}
 
     def apply_input_signals(self, user_input: str) -> None:
         """
@@ -523,6 +531,12 @@ class ConversationChain:
         for port in self.attack_state.open_ports:
             number = port.split("/")[0]
             wanted |= PORT_TOOLS.get(number, set())
+
+        # Self-authored tools tagged for this phase (or "always").
+        phase = self.attack_state.current_phase
+        for gname, gphase in self.generated_tools.items():
+            if gphase == "always" or gphase == phase:
+                wanted.add(gname)
 
         active = wanted & registered_set
         return active or registered_set

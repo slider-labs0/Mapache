@@ -41,6 +41,7 @@ from tools.filesystem_tool import (
 )
 from tools.tool_dispatcher import ToolDispatcher
 from tools.tool_registry import ToolRegistry
+from tools.generated_tool_manager import GeneratedToolManager, build_meta_tools
 
 try:
     from integrations.social.moltbook_tool import (
@@ -64,6 +65,9 @@ Commands:
   /help                  This help
   /tools                 List all tools
   /tools <tag>           Filter tools by tag
+  /curate                Review/archive unused self-authored tools
+  /restore <name>        Restore an archived self-authored tool
+  /purge <name>          Permanently delete an archived tool
   /models                Show model routing
   /pipeline <strategy>   Set strategy: single|pipeline|auto|hybrid
   /memory                Show memory stats
@@ -177,6 +181,7 @@ class MapacheCLI:
         self.registry: ToolRegistry | None = None
         self.routed: RoutedModel | None = None
         self.mcp: MCPManager | None = None
+        self.gen_manager: GeneratedToolManager | None = None
         self.memory = MemoryManager()
         self.confirm = args.confirm
         self.working_dir = os.path.abspath(args.dir)
@@ -334,6 +339,10 @@ class MapacheCLI:
             self.controller.tool_dispatcher = dispatcher
             self.controller.executor.set_tool_dispatcher(dispatcher)
 
+            # Self-authored tools (Hermes-style): register the create/list/delete
+            # meta-tools, then reload any tools the agent authored previously.
+            await self._setup_generated_tools(dispatcher)
+
             for schema in self.registry.get_context_schemas():
                 self.controller.register_tool(schema)
 
@@ -366,6 +375,32 @@ class MapacheCLI:
             self.controller.chain.always_tools |= set(self.mcp.tool_names)
             print(f"  MCP      : {len(mcp_tools)} tools from "
                   f"{len(self.mcp.clients)} server(s)")
+
+    async def _setup_generated_tools(self, dispatcher: ToolDispatcher) -> None:
+        """Register the meta-tools and reload the persisted generated-tool library."""
+        if self.registry is None or self.controller is None:
+            return
+
+        async def gen_shell(cmd: str) -> str:
+            return await dispatcher.dispatch("shell", {"cmd": cmd}, self.session_id or "")
+
+        self.gen_manager = GeneratedToolManager(
+            registry=self.registry,
+            controller=self.controller,
+            base_dir=self.working_dir,
+            shell=gen_shell,
+        )
+        for tool in build_meta_tools(self.gen_manager):
+            self.registry.register(tool)
+
+        stats = self.gen_manager.load_all()
+        if stats["loaded"] or stats["failed"]:
+            note = f"  Tools+   : {stats['loaded']} self-authored"
+            if stats["stale"]:
+                note += f", {stats['stale']} stale (/curate to review)"
+            if stats["failed"]:
+                note += f", {stats['failed']} failed to load"
+            print(note)
 
     async def run(self) -> None:
         if not await self.setup():
@@ -512,6 +547,39 @@ class MapacheCLI:
                 get_task.cancel()
         return turn_task.result()
 
+    async def _read_line(self) -> str:
+        """Read one line from the shared stdin queue (no second reader)."""
+        if self._input_q is None:
+            return ""
+        line = await self._input_q.get()
+        return "" if line is None else line
+
+    async def _curate(self) -> None:
+        """
+        Curator: propose archiving stale self-authored tools, one at a time,
+        and archive only those the user approves. Archiving is reversible
+        (/restore), so this never destroys work.
+        """
+        if not self.gen_manager:
+            print("  No generated-tool library.")
+            return
+        self.gen_manager.refresh_states()
+        candidates = self.gen_manager.stale_candidates()
+        if not candidates:
+            print("  No stale tools — the generated-tool library is clean.")
+            return
+        print(f"\n  {len(candidates)} stale tool(s). Archiving is reversible "
+              f"(/restore <name>).")
+        for name, reason in candidates:
+            print(f"\n  • {name} — {reason}")
+            print(f"    archive '{name}'? [y/N] ", end="", flush=True)
+            ans = (await self._read_line()).strip().lower()
+            if ans == "y":
+                print(f"    {self.gen_manager.archive(name)}")
+            else:
+                print(f"    kept '{name}'.")
+        print()
+
     async def _run_shell_direct(self, cmd: str) -> None:
         if self.controller is None:
             return
@@ -585,6 +653,28 @@ class MapacheCLI:
                     print()
                 else:
                     print(f"\n{self.registry.summary()}\n")
+
+        elif command == "/curate":
+            await self._curate()
+
+        elif command == "/restore":
+            if not self.gen_manager:
+                print("  No generated-tool library.")
+            elif len(parts) > 1:
+                print(f"  {self.gen_manager.restore(parts[1])}")
+            else:
+                archived = self.gen_manager.archived_names()
+                print(f"  Archived tools: {', '.join(archived) or 'none'}")
+                print("  Usage: /restore <name>")
+
+        elif command == "/purge":
+            if not self.gen_manager:
+                print("  No generated-tool library.")
+            elif len(parts) > 1:
+                print(f"  {self.gen_manager.purge(parts[1])}")
+            else:
+                print("  Permanently delete an archived tool. Usage: /purge <name>")
+                print(f"  Archived: {', '.join(self.gen_manager.archived_names()) or 'none'}")
 
         elif command == "/memory":
             sub = parts[1].lower() if len(parts) > 1 else ""

@@ -725,6 +725,172 @@ async def test_routing_strategy_switch_changes_executor():
 
 
 # ------------------------------------------------------------------ #
+# Self-authored tools (generated tools + curator) — feature A
+# ------------------------------------------------------------------ #
+
+import tempfile
+from datetime import datetime, timedelta, timezone
+
+from tools.tool_registry import ToolRegistry
+from tools.tool_dispatcher import ToolDispatcher
+from tools.generated_tool import (
+    STATE_ACTIVE, STATE_STALE, STATE_ARCHIVED,
+    write_generated_tool, load_generated_tool, load_manifest, save_manifest,
+    sha256_of,
+)
+from tools.generated_tool_manager import GeneratedToolManager, build_meta_tools
+
+
+def _gen_env(tmp: str):
+    """Build a registry + dispatcher + controller + manager rooted at tmp."""
+    registry = ToolRegistry()
+    dispatcher = ToolDispatcher(registry)
+    controller = AgentController(
+        model_provider=MockModel(), tool_dispatcher=dispatcher,
+        mode=AgentMode.AGENT,
+    )
+
+    async def fake_shell(cmd: str) -> str:
+        return f"ran:{cmd}"
+
+    mgr = GeneratedToolManager(registry, controller, base_dir=tmp, shell=fake_shell)
+    for t in build_meta_tools(mgr):
+        registry.register(t)
+    return registry, dispatcher, controller, mgr
+
+
+async def test_generated_tool_roundtrip():
+    with tempfile.TemporaryDirectory() as tmp:
+        async def shell(cmd):
+            return f"ran:{cmd}"
+
+        tool_dir = write_generated_tool(
+            tmp, "echo_host", "echo a host",
+            {"type": "object", "properties": {"host": {"type": "string"}}, "required": ["host"]},
+            'out = await shell("scan " + args["host"])\nreturn "got:" + out',
+            phase="recon",
+        )
+        tool = load_generated_tool(tool_dir, shell=shell)
+        assert tool.name == "echo_host"
+        assert tool.phase == "recon"
+        result = await tool(host="box")
+        assert result.success and result.output == "got:ran:scan box", result.output
+    print("  PASS  generated_tool_roundtrip")
+
+
+async def test_generated_tool_manager_create_and_dispatch():
+    with tempfile.TemporaryDirectory() as tmp:
+        registry, dispatcher, controller, mgr = _gen_env(tmp)
+
+        # Author a tool via the model-callable meta-tool (end-to-end wiring).
+        out = await dispatcher.dispatch("create_tool", {
+            "name": "greet",
+            "description": "greet a host",
+            "parameters": {"type": "object",
+                           "properties": {"host": {"type": "string"}},
+                           "required": ["host"]},
+            "code": 'return "hi " + args["host"]',
+            "phase": "recon",
+        })
+        assert "Created" in out, out
+
+        # Registered everywhere: registry, model context, and chain phase map.
+        assert registry.has("greet")
+        assert "greet" in controller.context.available_tools
+        assert controller.chain.generated_tools.get("greet") == "recon"
+
+        # Exposed for its phase, hidden in another phase.
+        controller.chain.attack_state.current_phase = "recon"
+        assert "greet" in controller.chain.active_tool_names(registry.list_names())
+        controller.chain.attack_state.current_phase = "post"
+        assert "greet" not in controller.chain.active_tool_names(registry.list_names())
+
+        # Callable, and usage is tracked on disk.
+        res = await dispatcher.dispatch("greet", {"host": "box"}, "")
+        assert res == "hi box", res
+        manifest = load_manifest(mgr.tools["greet"].tool_dir)
+        assert manifest["use_count"] == 1 and manifest["last_used"]
+    print("  PASS  generated_tool_manager_create_and_dispatch")
+
+
+async def test_generated_tool_create_rejects_bad():
+    with tempfile.TemporaryDirectory() as tmp:
+        registry, dispatcher, controller, mgr = _gen_env(tmp)
+        good_params = {"type": "object", "properties": {}}
+
+        assert "invalid tool name" in mgr.create("Bad Name", "d", good_params, "return 1")
+        assert "already exists" in mgr.create("create_tool", "d", good_params, "return 1")
+        assert "JSON Schema object" in mgr.create("ok1", "d", {"type": "array"}, "return 1")
+        assert "did not compile" in mgr.create("ok2", "d", good_params, "return (")
+        assert not registry.has("ok2")  # broken code never lands registered
+    print("  PASS  generated_tool_create_rejects_bad")
+
+
+async def test_generated_tool_curator_lifecycle():
+    with tempfile.TemporaryDirectory() as tmp:
+        registry, dispatcher, controller, mgr = _gen_env(tmp)
+        mgr.create("oneoff", "experiment", {"type": "object", "properties": {}},
+                   'return "ok"', phase="always")
+
+        # Force "never used, old" so the staleness rule fires.
+        tool = mgr.tools["oneoff"]
+        old = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+        tool.manifest["created"] = old
+        save_manifest(tool.tool_dir, tool.manifest)
+
+        assert mgr.refresh_states() == ["oneoff"]
+        assert tool.state == STATE_STALE
+        assert [n for n, _ in mgr.stale_candidates()] == ["oneoff"]
+
+        # Using a stale tool auto-promotes it back to active.
+        await dispatcher.dispatch("oneoff", {}, "")
+        assert mgr.tools["oneoff"].state == STATE_ACTIVE
+
+        # Purge refuses a live tool — a hard delete must be a deliberate two-step.
+        assert "must be archived" in mgr.purge("oneoff")
+
+        # Archive (the permissioned step): unregistered + folder moved aside.
+        assert "Archived" in mgr.archive("oneoff")
+        assert not registry.has("oneoff")
+        assert "oneoff" not in controller.context.available_tools
+        assert "oneoff" not in controller.chain.generated_tools
+        assert "oneoff" in mgr.archived_names()
+
+        # Restore brings it back, active and callable again.
+        assert "Restored" in mgr.restore("oneoff")
+        assert registry.has("oneoff")
+        assert mgr.tools["oneoff"].state == STATE_ACTIVE
+
+        # Finally, archive + purge actually removes it for good.
+        mgr.archive("oneoff")
+        assert "Purged" in mgr.purge("oneoff")
+        assert "oneoff" not in mgr.archived_names()
+    print("  PASS  generated_tool_curator_lifecycle")
+
+
+async def test_generated_tool_hub_checksum():
+    with tempfile.TemporaryDirectory() as tmp:
+        # A hub-origin tool whose tool.py is tampered must refuse to load.
+        tool_dir = write_generated_tool(
+            tmp, "hub_tool", "from the hub",
+            {"type": "object", "properties": {}}, 'return "ok"',
+            origin="hub",
+        )
+        # Loads clean while the checksum matches.
+        load_generated_tool(tool_dir, shell=None)
+        (tool_dir / "tool.py").write_text(
+            (tool_dir / "tool.py").read_text(encoding="utf-8") + "\n# tampered\n",
+            encoding="utf-8",
+        )
+        try:
+            load_generated_tool(tool_dir, shell=None)
+            raise AssertionError("tampered hub tool should not load")
+        except ValueError as exc:
+            assert "checksum" in str(exc)
+    print("  PASS  generated_tool_hub_checksum")
+
+
+# ------------------------------------------------------------------ #
 # Runner
 # ------------------------------------------------------------------ #
 
@@ -762,6 +928,13 @@ async def run_all():
     await test_agent_delegation()
     await test_mcp_client()
     await test_agent_duplicate_call_guard()
+
+    print("\nSelf-authored tools (feature A)")
+    await test_generated_tool_roundtrip()
+    await test_generated_tool_manager_create_and_dispatch()
+    await test_generated_tool_create_rejects_bad()
+    await test_generated_tool_curator_lifecycle()
+    await test_generated_tool_hub_checksum()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()
