@@ -983,6 +983,64 @@ def test_config_global_path_resolution():
 
 
 # ------------------------------------------------------------------ #
+# Cloud providers (feature G)
+# ------------------------------------------------------------------ #
+
+from core.config import MapacheConfig
+from models.providers.openai_compatible import OpenAICompatibleProvider
+from models.providers.ollama_provider import OllamaProvider
+from models.model_pool import ModelPool
+from models.model_registry import ModelProfile, Provider
+
+
+async def test_openai_provider_normalizes_response():
+    p = OpenAICompatibleProvider(model="anthropic/claude", base_url="https://x/v1",
+                                 api_key="sk-test")
+
+    async def fake_post(path, payload):
+        # Native OpenAI shape: choices[0].message with string tool arguments.
+        return {"choices": [{"message": {
+            "content": "hello",
+            "tool_calls": [{"type": "function", "function": {
+                "name": "shell", "arguments": '{"cmd":"id"}'}}],
+        }}]}
+
+    p._post = fake_post
+    out = await p.chat(messages=[{"role": "user", "content": "hi"}], tools=[{"x": 1}])
+    # Normalized to the {"message": {...}} shape the controller reads.
+    assert out["message"]["content"] == "hello"
+    call = out["message"]["tool_calls"][0]["function"]
+    assert call["name"] == "shell" and call["arguments"] == '{"cmd":"id"}'
+    await p.close()
+    print("  PASS  openai_provider_normalizes_response")
+
+
+def test_model_pool_provider_selection():
+    cfg = MapacheConfig.from_dict({"providers": {
+        "ollama": {"kind": "ollama", "base_url": "http://localhost:11434"},
+        "openrouter": {"kind": "openai_compatible", "base_url": "https://or/v1",
+                       "api_key": "sk-x", "models": ["anthropic/claude"]},
+    }})
+    pool = ModelPool(base_url="http://localhost:11434", config=cfg)
+    assert isinstance(pool.get("anthropic/claude"), OpenAICompatibleProvider)
+    assert isinstance(pool.get("qwen2.5:14b"), OllamaProvider)  # falls back to ollama
+    # Without a config it stays Ollama-only.
+    plain = ModelPool(base_url="http://localhost:11434")
+    assert isinstance(plain.get("anything"), OllamaProvider)
+    print("  PASS  model_pool_provider_selection")
+
+
+def test_model_profile_is_local_gate():
+    # A free cloud model must NOT count as local (else it bypasses --allow-cloud).
+    free_cloud = ModelProfile(id="x/y", provider=Provider.OPENROUTER,
+                              cost_per_1k_tokens=0.0)
+    assert free_cloud.is_local is False
+    local = ModelProfile(id="qwen2.5:14b", provider=Provider.OLLAMA)
+    assert local.is_local is True
+    print("  PASS  model_profile_is_local_gate")
+
+
+# ------------------------------------------------------------------ #
 # Runner
 # ------------------------------------------------------------------ #
 
@@ -1034,6 +1092,11 @@ async def run_all():
     test_config_env_layer_and_interpolation()
     test_config_provider_for_model_and_redaction()
     test_config_global_path_resolution()
+
+    print("\nCloud providers (feature G)")
+    await test_openai_provider_normalizes_response()
+    test_model_pool_provider_selection()
+    test_model_profile_is_local_gate()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()

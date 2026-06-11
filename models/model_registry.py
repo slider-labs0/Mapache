@@ -77,7 +77,10 @@ class ModelProfile:
 
     @property
     def is_local(self) -> bool:
-        return self.provider == Provider.OLLAMA or self.cost_per_1k_tokens == 0.0
+        # Local == runs on the local Ollama server. A *free* cloud model
+        # (cost==0) is still cloud, so it must NOT count as local — otherwise it
+        # would slip past the `--allow-cloud` / local_only OPSEC gate.
+        return self.provider == Provider.OLLAMA
 
     @property
     def best_role(self) -> ModelRole:
