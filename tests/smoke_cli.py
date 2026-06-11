@@ -161,12 +161,76 @@ def run_create_tool_scenario(model: str, boot_timeout: float, turn_timeout: floa
     return 0 if ok else 1
 
 
+import re as _re
+
+_ANSI = _re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
+
+
+def _clean(text: str) -> str:
+    return _ANSI.sub("", text).replace("\r", "")
+
+
+def run_broad_scenario(model: str, boot_timeout: float, turn_timeout: float) -> int:
+    """
+    Drive a realistic multi-feature session like a user would, and dump the
+    transcript for qualitative review. Exploratory — exits non-zero only on a
+    hang/crash, not on model wording.
+    """
+    shutil.rmtree(REPO / "plugins" / "generated" / "hex_encode", ignore_errors=True)
+
+    steps: list[tuple[str, str, float]] = [
+        ("general knowledge (expect NO tool)",
+         "What does the acronym RCE stand for? Answer in one sentence.", turn_timeout),
+        ("shell tool",
+         "Run the command whoami and tell me who the current user is.", turn_timeout),
+        ("create_tool + use (string tool)",
+         "Create a tool named hex_encode that takes a string argument s and returns "
+         "s encoded as hexadecimal. In the body use: return args['s'].encode().hex(). "
+         "Then call hex_encode on the string 'mapache' and show the result.", turn_timeout),
+        ("/tools (list registry)", "/tools", 30),
+        ("/curate (expect clean)", "/curate", 30),
+        ("/models (routing table)", "/models", 30),
+        ("/chain (attack state)", "/chain", 30),
+    ]
+
+    print(f"[broad] launching CLI with {model} …")
+    s = CliSession(model, REPO)
+    results: list[tuple[str, bool]] = []
+    try:
+        if not s.wait_for_prompt(1, boot_timeout):
+            print("[broad] FAIL — CLI never reached the first prompt")
+            print(_clean(s.text)[-800:])
+            return 1
+        count = 1
+        for label, text, timeout in steps:
+            s.send(text)
+            count += 1
+            ok = s.wait_for_prompt(count, timeout)
+            results.append((label, ok))
+            print(f"  [{'ok' if ok else 'TIMEOUT'}] {label}")
+            if not ok:
+                break
+        s.send("/quit")
+        s.close()
+    finally:
+        if s.proc.poll() is None:
+            s.proc.kill()
+
+    print("\n" + "=" * 70 + "\n[broad] FULL TRANSCRIPT\n" + "=" * 70)
+    print(_clean(s.text))
+    hung = [l for l, ok in results if not ok]
+    return 1 if hung else 0
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="qwen2.5:32b")
+    ap.add_argument("--scenario", choices=["create_tool", "broad"], default="create_tool")
     ap.add_argument("--boot-timeout", type=float, default=120.0)
     ap.add_argument("--turn-timeout", type=float, default=420.0)
     args = ap.parse_args()
+    if args.scenario == "broad":
+        sys.exit(run_broad_scenario(args.model, args.boot_timeout, args.turn_timeout))
     sys.exit(run_create_tool_scenario(args.model, args.boot_timeout, args.turn_timeout))
 
 

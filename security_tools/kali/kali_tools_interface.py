@@ -284,8 +284,12 @@ class KaliRunTool(BaseTool):
                 "Use kali_list to see available tools."
             )
 
-        # Build full command
-        full_cmd = f"{tool_path} {args}"
+        # Build full command. Quote the resolved path — on Windows shutil.which
+        # often returns a path with spaces (e.g. C:\Program Files (x86)\Nmap\
+        # nmap.EXE), which create_subprocess_shell would split at the space
+        # ("'C:\Program' is not recognized"). Double quotes are honored by both
+        # cmd.exe and /bin/sh.
+        full_cmd = f'"{tool_path}" {args}'
         cwd = working_dir if working_dir and os.path.isdir(working_dir) else None
 
         logger.info("Kali run: %s", full_cmd[:100])
