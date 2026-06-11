@@ -891,6 +891,98 @@ async def test_generated_tool_hub_checksum():
 
 
 # ------------------------------------------------------------------ #
+# Config layer (feature C0)
+# ------------------------------------------------------------------ #
+
+from pathlib import Path as _CfgPath
+from core.config import load_config, ProviderConfig, global_config_path
+
+
+def _write_json(path, data):
+    _CfgPath(path).write_text(json.dumps(data), encoding="utf-8")
+
+
+def test_config_defaults():
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg = load_config(working_dir=tmp, environ={},
+                          global_path=_CfgPath(tmp) / "nope.json")
+        assert cfg.default_model == "deepseek-coder:33b"
+        assert cfg.default_strategy == "single"
+        assert cfg.allow_cloud is False
+        assert cfg.providers["ollama"].is_usable          # local always usable
+        assert not cfg.providers["openrouter"].is_usable  # no key
+    print("  PASS  config_defaults")
+
+
+def test_config_precedence_chain():
+    with tempfile.TemporaryDirectory() as tmp:
+        gpath = _CfgPath(tmp) / "global.json"
+        _write_json(gpath, {"default_model": "from-global",
+                            "default_strategy": "auto"})
+        _write_json(_CfgPath(tmp) / "mapache.json", {"default_model": "from-project"})
+
+        # global < project: project wins on model, global still supplies strategy.
+        cfg = load_config(working_dir=tmp, environ={}, global_path=gpath)
+        assert cfg.default_model == "from-project"
+        assert cfg.default_strategy == "auto"
+
+        # CLI overrides win over everything.
+        cfg2 = load_config({"default_model": "from-cli"},
+                           working_dir=tmp, environ={}, global_path=gpath)
+        assert cfg2.default_model == "from-cli"
+    print("  PASS  config_precedence_chain")
+
+
+def test_config_env_layer_and_interpolation():
+    with tempfile.TemporaryDirectory() as tmp:
+        gpath = _CfgPath(tmp) / "g.json"
+        # api_key references an env var; env also supplies the ollama url.
+        _write_json(gpath, {"providers": {
+            "openrouter": {"kind": "openai_compatible",
+                           "api_key": "${OPENROUTER_API_KEY}",
+                           "models": ["x/y"], "enabled": True}}})
+        env = {"OPENROUTER_API_KEY": "sk-secret", "OLLAMA_URL": "http://host:1"}
+        cfg = load_config(working_dir=tmp, environ=env, global_path=gpath)
+        assert cfg.providers["openrouter"].api_key == "sk-secret"
+        assert cfg.providers["openrouter"].is_usable
+        assert cfg.ollama_url == "http://host:1"
+
+        # Unresolved ${VAR} collapses to empty (never a literal token).
+        cfg2 = load_config(working_dir=tmp, environ={}, global_path=gpath)
+        assert cfg2.providers["openrouter"].api_key == ""
+        assert not cfg2.providers["openrouter"].is_usable
+    print("  PASS  config_env_layer_and_interpolation")
+
+
+def test_config_provider_for_model_and_redaction():
+    with tempfile.TemporaryDirectory() as tmp:
+        gpath = _CfgPath(tmp) / "g.json"
+        _write_json(gpath, {"providers": {
+            "openrouter": {"kind": "openai_compatible", "api_key": "sk-abcdef",
+                           "models": ["anthropic/claude"], "enabled": True}}})
+        cfg = load_config(working_dir=tmp, environ={}, global_path=gpath)
+
+        # Cloud model routes to its provider; unknown model falls back to ollama.
+        assert cfg.provider_for_model("anthropic/claude").name == "openrouter"
+        assert cfg.provider_for_model("qwen2.5:14b").name == "ollama"
+        assert cfg.cloud_models() == ["anthropic/claude"]
+
+        # Redaction masks the key but keeps the tail for recognisability.
+        red = cfg.redacted()
+        assert red["providers"]["openrouter"]["api_key"] == "***cdef"
+        assert "sk-abcdef" not in json.dumps(red)
+    print("  PASS  config_provider_for_model_and_redaction")
+
+
+def test_config_global_path_resolution():
+    # $MAPACHE_CONFIG wins; otherwise USERPROFILE/HOME drives the default path.
+    assert global_config_path({"MAPACHE_CONFIG": "/tmp/x.json"}) == _CfgPath("/tmp/x.json")
+    p = global_config_path({"USERPROFILE": "/home/op"})
+    assert p.parts[-2:] == (".mapache", "config.json")
+    print("  PASS  config_global_path_resolution")
+
+
+# ------------------------------------------------------------------ #
 # Runner
 # ------------------------------------------------------------------ #
 
@@ -935,6 +1027,13 @@ async def run_all():
     await test_generated_tool_create_rejects_bad()
     await test_generated_tool_curator_lifecycle()
     await test_generated_tool_hub_checksum()
+
+    print("\nConfig layer (feature C0)")
+    test_config_defaults()
+    test_config_precedence_chain()
+    test_config_env_layer_and_interpolation()
+    test_config_provider_for_model_and_redaction()
+    test_config_global_path_resolution()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()

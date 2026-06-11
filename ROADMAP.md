@@ -131,16 +131,45 @@ Upgrade `cli/mapache_cli.py` from line-printing to a real TUI surface.
 - [ ] Keep a `--plain` fallback for piping / dumb terminals.
 - Touchpoints: `cli/mapache_cli.py`, `core/logger.py`.
 
-## C. Setup wizard  ⬜
-First-run `mapache setup` that gets a fresh machine ready.
+## C. Setup wizard + config layer  ⬜  ← building next (with G)
+The config layer is the shared foundation C and G both stand on. Today there is
+**no config file** — settings come from argparse + a few `os.environ` reads. MCP's
+`load_mcp_config(mcp.json)` is the precedent to mirror.
 
-- [ ] Detect/validate Ollama, pull a default model, check optional bins
-      (nmap, msfconsole, john, tor).
-- [ ] Prompt for + store provider API keys (OpenRouter, Nous — see G) and
-      Telegram/Discord tokens into a config file (not committed).
-- [ ] Write a starter `mapache.json` / `.env`; verify with a smoke test turn.
-- [ ] Idempotent re-run that reports what's already configured.
-- Touchpoints: new `setup/` or `cli/setup_wizard.py`, config loader.
+**Scope decisions (2026-06-10):**
+- **Config home: global + project override.** Secrets/providers live in user-global
+  `~/.mapache/config.json`; an optional project-local `mapache.json` overrides
+  non-secret prefs. Precedence: **CLI flag > project > global > env > built-in
+  default**. Keys stay out of repos.
+- **Secrets: plaintext in the user-dir JSON + `${ENV_VAR}` interpolation.** A value
+  like `"${OPENROUTER_KEY}"` is resolved from the environment at load, so the
+  security-conscious can keep keys in env only; others can paste them into the
+  user-dir file (chmod 600 / documented .gitignore). No keyring dependency.
+- **Full wizard now** (not just the loader): detect Ollama + offer to pull a default
+  model, check optional bins, prompt provider keys + Telegram/Discord tokens, write
+  the config, and smoke-test.
+
+**C0 — config loader (`core/config.py`):**  ✅ shipped 2026-06-10
+- [x] Typed load/merge across the precedence chain (CLI > project > global > env >
+      default); `${ENV}` interpolation (unresolved → empty, never a literal token);
+      `MapacheConfig` / `ProviderConfig` / `MessagingConfig` typed view.
+- [x] Schema: `providers` (ollama + openrouter + nous entries with base_url, key,
+      model list, enabled), `default_model`, `default_strategy`, `allow_cloud`,
+      `max_vram_gb`, `messaging` tokens. Helpers: `provider_for_model`,
+      `cloud_models`, `usable_providers`, `ollama_url`.
+- [x] Fail-soft file loads; `redacted()` for display. Tests: 5 in `tests/test_core.py`.
+- [ ] CLI consumes `MapacheConfig` (replace scattered `args.*`) and `mapache config
+      show` — lands with the C1 subcommand layer / G bootstrap, not standalone.
+
+**C1 — wizard (`cli/setup_wizard.py`, `mapache setup`):**
+- [ ] Detect/validate Ollama, offer to pull a default model; check optional bins
+      (nmap, msfconsole, john, tor) and report what's missing.
+- [ ] Prompt for provider API keys (OpenRouter, Nous — G) and Telegram/Discord
+      tokens; write them to `~/.mapache/config.json`.
+- [ ] Smoke-test one turn against the chosen default model; idempotent re-run that
+      reports what's already configured.
+- Touchpoints: new `core/config.py`, `cli/setup_wizard.py`, `cli/mapache_cli.py`
+  (consume config), `cli/__main__` / entry for the `setup` subcommand.
 
 ## D. Update manager  ⬜
 Keep an installed Mapache current.
@@ -171,17 +200,40 @@ Agent records what the user has done / prefers over time.
 - [ ] Dedup / size-cap so it doesn't grow unbounded (reuse compaction ideas).
 - Touchpoints: `memory/` (new store), `core/context_builder.py`.
 
-## G. More LLM providers — OpenRouter + Nous Portal  ⬜
-Currently only `providers/ollama_provider.py` exists.
+## G. More LLM providers — OpenRouter + Nous Portal  ⬜  ← building next (with C)
+Only `providers/ollama_provider.py` exists, and `ModelPool.get()` hardcodes it.
+The routing layer is already cloud-aware (`local_only`, HYBRID,
+`_best_cloud_for_role`) and the `Provider` enum already lists OPENROUTER/OPENAI/
+ANTHROPIC — so the gap is just the provider class + a provider-aware pool, fed by
+the config layer (C0).
 
-- [ ] `providers/openrouter_provider.py` and `providers/nous_provider.py`
-      implementing the same provider facade (chat, streaming, tool-calling).
-- [ ] Register them in `models/model_pool.py` / `routed_model.py` so the routing
-      engine can pick them; honor `--allow-cloud` for any non-local provider.
-- [ ] Key handling via the setup wizard (C); model-id namespacing per provider.
-- [ ] Update `model_registry.py` role scores to know about the new model ids.
-- Touchpoints: `models/providers/`, `models/model_pool.py`,
-  `models/routed_model.py`, `models/model_registry.py`.
+**Scope decisions (2026-06-10):**
+- **One `OpenAICompatibleProvider`, two config entries.** OpenRouter and Nous are
+  both OpenAI `/chat/completions`-shaped; they differ only by `base_url` + key, so
+  one class covers both (base URLs configurable, since Nous's endpoint isn't pinned).
+- **Normalize to the existing shape.** The provider translates OpenAI's
+  `choices[0].message` into the `{"message": {...}}` dict the controller already
+  parses (`raw["message"]["tool_calls"]/["content"]`) — a true drop-in, no
+  controller changes. SSE streaming reassembled the same way for `chat_stream`.
+- **Fix `ModelProfile.is_local`.** It currently returns True when
+  `cost_per_1k_tokens == 0.0`, so a *free* cloud model would bypass `--allow-cloud`.
+  Tighten to `provider == Provider.OLLAMA` so the OPSEC gate actually holds.
+- **Warn, don't block (OPSEC).** Startup banner when any cloud model is active for a
+  role; a one-time per-session warning the first time a call routes to a cloud
+  provider (`RoutedModel` emits `model.cloud_call`; CLI prints the warning).
+
+- [ ] `models/providers/openai_compatible.py` — `OpenAICompatibleProvider` matching
+      the OllamaProvider surface (`chat`, `chat_stream`, `supports_tools`,
+      `extract_content`, `list_models`, `is_available`, `close`, `model`).
+- [ ] Provider-aware `ModelPool`: build the right provider per model id from the
+      config's provider entries (kind + base_url + key), not a single Ollama URL.
+- [ ] Register cloud `ModelProfile`s (from config) so routing + `is_local`/
+      `--allow-cloud` filtering work; CLI bootstrap no longer assumes the primary
+      is an Ollama model (skip the "is Ollama running" gate for a cloud primary).
+- [ ] OPSEC warning wiring (startup + first cloud call).
+- Touchpoints: `models/providers/openai_compatible.py`, `models/model_pool.py`,
+  `models/routed_model.py`, `models/model_registry.py`, `cli/mapache_cli.py`,
+  `core/config.py`.
 
 ## H. Remote execution — SSH + Docker  ⬜
 Run tools/commands somewhere other than the local shell.
