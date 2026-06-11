@@ -261,6 +261,89 @@ Browse + install community "skills" (tools / prompt packs / MCP configs).
 
 ---
 
+# Differentiators vs Hermes Agent (J–P)
+
+Hermes Agent (Nous Research, Feb 2026) is the general-purpose analogue of much of
+A–I: self-improving skills, layered memory, multi-platform, model-agnostic. We do
+**not** out-general it. Mapache's edge is depth where a generic assistant
+structurally won't follow: **offensive security + local-first OPSEC + auditable,
+signed artifacts.** J–P are the features that widen that gap.
+
+## J. Rules-of-Engagement guardrails  ⬜
+Authorized-pentest scoping the agent enforces itself.
+
+- [ ] Define an engagement scope: in-scope target allowlist (IPs/CIDRs/hosts) +
+      forbidden actions; loaded per engagement (config / a `scope.json`).
+- [ ] Enforce in the dispatch path — a tool call against an out-of-scope target is
+      **refused** (not run) with a logged reason; ties into `ConversationChain`
+      attack-state + `_apply_arg_fallbacks` (which already backfills `target`).
+- [ ] Makes autonomous/long-running operation safe to leave unattended. A generic
+      agent has no concept of scope — this is trust infrastructure only a security
+      tool needs.
+- Touchpoints: `tools/tool_dispatcher.py`, `core/conversation_chain.py`,
+  `core/agent_controller.py`, config.
+
+## K. Auditable engagement log  ⬜
+A structured, timestamped, exportable trail of everything the agent did.
+
+- [ ] Append-only log of every tool call, decision, finding, RoE refusal, and
+      model route — sourced from the existing `EventBus` (most events already fire).
+- [ ] Exportable (JSONL + human-readable) for compliance, debrief, and as the raw
+      material for reporting (L) and skill-synthesis (N).
+- [ ] Cheap to build (subscribe to the bus); compounds into L and N.
+- Touchpoints: new `core/engagement_log.py`, `core/event_bus.py` subscribers.
+
+## L. Automated reporting / deliverables  ⬜
+Turn the `reporting` phase into an actual pentest report.
+
+- [ ] Generate a structured report (findings, severity, evidence, remediation,
+      timeline) from the engagement log (K) + attack-state.
+- [ ] Markdown/HTML/PDF export; this is the artifact clients pay for — Hermes
+      gives you a chat history, Mapache gives you a deliverable.
+- Touchpoints: new `reporting/`, consumes K + `ConversationChain`.
+
+## M. Exploit / CVE grounding  ⬜
+Recon → prioritized attack plan, not just raw scan output.
+
+- [ ] Correlate discovered service versions → known CVEs/exploits via a live feed
+      (NVD/ExploitDB) + RAG over the existing vector store; deeper than the current
+      `searchsploit` tool call.
+- [ ] Feed correlations into attack-state vulns + the suggested-next-step logic.
+- Touchpoints: `memory/vector_store.py`, `security_tools/kali/` (searchsploit),
+  `core/conversation_chain.py`.
+
+## N. Skill synthesis from exploit chains  ⬜  (extends A + I)
+Close the self-improvement loop, the offensive way.
+
+- [ ] After a successful chain (recon→vuln→exploit→root), the agent auto-authors a
+      reusable tool via `create_tool` that replays it — Hermes' "learn from
+      experience", specialized to attack techniques.
+- [ ] Synthesized skills are shareable via the hub (I) as signed packages — the
+      niche network effect. Hub **signing/provenance** lives here too (extends I's
+      checksum-only safety to signatures).
+- Touchpoints: `tools/generated_tool_manager.py` (A), `hub/` (I),
+  `core/engagement_log.py` (K).
+
+## O. Hybrid OPSEC routing  ⬜  (extends G)
+Make "target data never leaves the box" a guarantee, not a warning.
+
+- [ ] Cloud model allowed for abstract reasoning/planning, but any call whose
+      payload touches target data (scan output, creds, exploit detail) is **pinned
+      to a local executor** — enforced in the router, not left to a warning.
+- [ ] Builds on G's provider awareness + the existing `local_only`/HYBRID routing.
+- Touchpoints: `models/routing_engine.py`, `models/routed_model.py`, `core/config.py`.
+
+## P. Multi-agent engagement orchestration  ⬜  (extends delegation)
+Parallel sub-agents across a network engagement.
+
+- [ ] Spawn focused sub-agents per host/service with a **shared** attack-state and
+      a coordinating lead, instead of one bounded subtask at a time.
+- [ ] Builds on the existing `delegate` tool + `_merge_subagent_state`; needs a
+      shared-state model and a higher `MAX_DELEGATION_DEPTH`/fan-out budget.
+- Touchpoints: `core/agent_controller.py` (delegation), `core/conversation_chain.py`.
+
+---
+
 ## Suggested ordering (dependencies)
 
 1. **C (setup)** + **G (providers)** — providers need key storage; do together.
@@ -270,3 +353,11 @@ Browse + install community "skills" (tools / prompt packs / MCP configs).
 5. **A (self-authored tools)** — safety-sensitive; needs the confirm/flag plumbing.
 6. **I (community hub)** — depends on A's tool-install path + MCP config.
 7. **D (update manager)** — last; benefits from a settled file layout.
+
+**Differentiators (J–P)** layer on top of the foundation, ranked by leverage-vs-effort:
+1. **J (RoE guardrails)** — cheap, high-trust, unlocks safe autonomy; builds on attack-state.
+2. **K (engagement log)** — cheap (subscribe to the bus); compounds into L + N.
+3. **L (automated reporting)** — high client value, medium effort; needs K.
+4. **N (skill synthesis) + I signing** — the network-effect play; extends A + I.
+5. **O (hybrid OPSEC routing)** — the defining guarantee; extends G.
+6. **M (CVE grounding)** and **P (multi-agent orchestration)** — higher effort, do later.
