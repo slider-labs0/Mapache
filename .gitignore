@@ -4,3 +4,9 @@ __pycache__/
 .venv/
 venv/
 *.log
+
+# Runtime data, not source
+mapache.json
+.mapache/
+plugins/generated/
+plugins/archived/
