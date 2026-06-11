@@ -18,7 +18,7 @@ consulted them.
 
 from __future__ import annotations
 
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Callable, Optional
 
 from models.model_registry import ModelRole
 from models.routing_engine import RoutingEngine, RoutingStrategy
@@ -37,12 +37,17 @@ class RoutedModel:
         pool: ModelPool,
         primary_model_id: str,
         default_role: ModelRole = ModelRole.EXECUTOR,
+        on_cloud_call: Optional[Callable[[str], None]] = None,
     ) -> None:
         self.routing = routing_engine
         self.pool = pool
         self.primary_model_id = primary_model_id
         self.default_role = default_role
         self._calls: dict[str, int] = {}  # model_id -> call count
+        # OPSEC: fired once per cloud model the first time a call routes to it,
+        # so the operator is told target data is leaving the machine.
+        self.on_cloud_call = on_cloud_call
+        self._warned_cloud: set[str] = set()
 
     # ------------------------------------------------------------------ #
     # Routing
@@ -55,6 +60,18 @@ class RoutedModel:
 
     def _provider_for(self, role: ModelRole):
         return self.pool.get(self.model_for(role))
+
+    def _note_cloud(self, model_id: str) -> None:
+        """Fire the OPSEC warning once the first time a cloud model is used."""
+        if not self.on_cloud_call or model_id in self._warned_cloud:
+            return
+        profile = self.routing.registry.get(model_id)
+        if profile is not None and not profile.is_local:
+            self._warned_cloud.add(model_id)
+            try:
+                self.on_cloud_call(model_id)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------ #
     # Provider interface (matches OllamaProvider)
@@ -75,6 +92,7 @@ class RoutedModel:
     ) -> Any:
         role = role or self.default_role
         model_id = self.model_for(role)
+        self._note_cloud(model_id)
         self._calls[model_id] = self._calls.get(model_id, 0) + 1
         provider = self.pool.get(model_id)
         return await provider.chat(
@@ -92,6 +110,7 @@ class RoutedModel:
     ) -> AsyncIterator[str | dict]:
         role = role or self.default_role
         model_id = self.model_for(role)
+        self._note_cloud(model_id)
         self._calls[model_id] = self._calls.get(model_id, 0) + 1
         provider = self.pool.get(model_id)
         async for token in provider.chat_stream(messages=messages, tools=tools):

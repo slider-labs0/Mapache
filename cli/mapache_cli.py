@@ -18,7 +18,10 @@ from core.logger import get_logger, setup_logging
 from integrations.mcp import MCPManager, load_mcp_config
 from core.project_context import build_project_context, get_mapache_instructions
 from memory.memory_manager import MemoryManager
-from models.model_registry import ModelRegistry, ModelRole
+from models.model_registry import (
+    ModelRegistry, ModelRole, ModelProfile, ModelCapabilities, Provider,
+)
+from core.config import load_config
 from models.routing_engine import RoutingEngine, RoutingStrategy
 from models.model_pool import ModelPool
 from models.routed_model import RoutedModel
@@ -182,6 +185,7 @@ class MapacheCLI:
         self.routed: RoutedModel | None = None
         self.mcp: MCPManager | None = None
         self.gen_manager: GeneratedToolManager | None = None
+        self.config = None  # MapacheConfig, loaded in setup()
         self.memory = MemoryManager()
         self.confirm = args.confirm
         self.working_dir = os.path.abspath(args.dir)
@@ -202,25 +206,46 @@ class MapacheCLI:
         self.strategy = strategy_map.get(args.strategy.lower(), RoutingStrategy.AUTO)
 
     async def setup(self) -> bool:
-        primary = OllamaProvider(
-            model=self.args.model,
-            base_url=self.args.ollama_url,
-        )
+        # Config layer (C0): provider entries (incl. cloud keys/URLs) + defaults.
+        # CLI flags still drive the primary model/strategy; config supplies the
+        # cloud providers the router can reach.
+        self.config = load_config(working_dir=self.working_dir)
+        allow_cloud = self.args.allow_cloud or self.config.allow_cloud
 
-        if not await primary.is_available():
-            print(f"\n  ✗  Cannot reach Ollama at {self.args.ollama_url}")
-            print(f"     Run: ollama serve\n")
-            return False
+        # Provider-aware pool: builds Ollama or OpenAI-compatible per model id.
+        pool = ModelPool(base_url=self.args.ollama_url, config=self.config)
+        primary_prov = self.config.provider_for_model(self.args.model)
+        primary_is_cloud = primary_prov is not None and primary_prov.is_cloud
 
-        available = await primary.list_models()
-        model_base = self.args.model.split(":")[0]
-        if available and not any(model_base in m for m in available):
-            print(f"\n  ⚠  Model '{self.args.model}' not found.")
-            pull = input(f"     Pull it now? [y/N] ").strip().lower()
-            if pull == "y":
-                await primary.pull_model(self.args.model)
-            else:
+        if primary_is_cloud:
+            if not allow_cloud:
+                print(f"\n  ✗  '{self.args.model}' is a cloud model "
+                      f"({primary_prov.name}); re-run with --allow-cloud.\n")
                 return False
+            if not primary_prov.is_usable:
+                print(f"\n  ✗  Cloud provider '{primary_prov.name}' has no API key.")
+                print(f"     Set it in ~/.mapache/config.json or its env var.\n")
+                return False
+            primary = pool.get(self.args.model)  # OpenAICompatibleProvider
+            available = self.config.cloud_models() or [self.args.model]
+        else:
+            primary = OllamaProvider(model=self.args.model, base_url=self.args.ollama_url)
+            pool.register(self.args.model, primary)  # reuse the built client
+            if not await primary.is_available():
+                print(f"\n  ✗  Cannot reach Ollama at {self.args.ollama_url}")
+                print(f"     Run: ollama serve\n")
+                return False
+            local_models = await primary.list_models()
+            model_base = self.args.model.split(":")[0]
+            if local_models and not any(model_base in m for m in local_models):
+                print(f"\n  ⚠  Model '{self.args.model}' not found.")
+                pull = input(f"     Pull it now? [y/N] ").strip().lower()
+                if pull == "y":
+                    await primary.pull_model(self.args.model)
+                else:
+                    return False
+            # Local models + any usable cloud models the router may also pick.
+            available = (local_models or [self.args.model]) + self.config.cloud_models()
 
         mode = AgentMode.CHAT if self.args.no_tools else AgentMode.AGENT
 
@@ -245,17 +270,23 @@ class MapacheCLI:
         # model for the role (the agent loop runs as EXECUTOR). With one
         # model installed this collapses to that single model.
         registry = ModelRegistry()
+        self._register_cloud_models(registry)  # so routing + the OPSEC gate see them
         routing = RoutingEngine(
             registry,
             strategy=self.strategy,
             primary_model_id=self.args.model,
-            local_only=not self.args.allow_cloud,
+            local_only=not allow_cloud,
             max_vram_gb=float(self.args.max_vram),
         )
         routing.set_available_models(available or [self.args.model])
-        pool = ModelPool(base_url=self.args.ollama_url)
-        pool.register(self.args.model, primary)  # reuse the already-built client
-        self.routed = RoutedModel(routing, pool, primary_model_id=self.args.model)
+
+        def _opsec_warn(model_id: str) -> None:
+            print(f"\n  ⚠ OPSEC: routing to CLOUD model '{model_id}' — target/scan/"
+                  f"cred context is leaving this machine.\n", flush=True)
+
+        self.routed = RoutedModel(routing, pool, primary_model_id=self.args.model,
+                                  on_cloud_call=_opsec_warn)
+        self._warn_cloud_roles(registry)  # startup banner if a role is cloud
 
         # Opt-in verifier (--verify): route the verification call to the
         # VERIFIER-role model so it can use a higher-quality model than the loop.
@@ -348,6 +379,49 @@ class MapacheCLI:
 
         await self.controller.start(inject_project_context=not self.args.no_context)
         return True
+
+    def _register_cloud_models(self, registry: ModelRegistry) -> None:
+        """Register configured cloud models so routing + the OPSEC gate see them.
+
+        Without a profile, the routing engine's local_only filter can't tell a
+        model is cloud (a missing profile isn't filtered), so cloud models must
+        be registered for --allow-cloud to actually gate them.
+        """
+        if self.config is None:
+            return
+        name_map = {
+            "openrouter": Provider.OPENROUTER, "nous": Provider.NOUS,
+            "openai": Provider.OPENAI, "anthropic": Provider.ANTHROPIC,
+        }
+        for prov in self.config.usable_providers():
+            if not prov.is_cloud:
+                continue
+            penum = name_map.get(prov.name, Provider.OPENAI)
+            for mid in prov.models:
+                registry.register(ModelProfile(
+                    id=mid, provider=penum, display_name=mid,
+                    planner_score=0.90, executor_score=0.85, verifier_score=0.90,
+                    capabilities=ModelCapabilities(
+                        supports_tools=True, context_window=32768,
+                        max_output_tokens=4096),
+                    speed_score=0.80, quality_score=0.90,
+                    cost_per_1k_tokens=0.001, tags=["cloud", prov.name],
+                ))
+
+    def _warn_cloud_roles(self, registry: ModelRegistry) -> None:
+        """Startup OPSEC banner listing any role that resolves to a cloud model."""
+        if self.routed is None:
+            return
+        cloud = []
+        for role in (ModelRole.PLANNER, ModelRole.EXECUTOR, ModelRole.VERIFIER):
+            mid = self.routed.model_for(role)
+            prof = registry.get(mid)
+            if prof is not None and not prof.is_local:
+                cloud.append((role.value, mid))
+        if cloud:
+            print("\n  ⚠ OPSEC: cloud model(s) active — data will leave this machine:")
+            for role, mid in cloud:
+                print(f"      {role:9s} → {mid}")
 
     async def _connect_mcp(self) -> None:
         """Load mcp.json, connect to each server, register its tools."""

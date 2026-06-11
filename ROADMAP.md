@@ -200,7 +200,7 @@ Agent records what the user has done / prefers over time.
 - [ ] Dedup / size-cap so it doesn't grow unbounded (reuse compaction ideas).
 - Touchpoints: `memory/` (new store), `core/context_builder.py`.
 
-## G. More LLM providers — OpenRouter + Nous Portal  ⬜  ← building next (with C)
+## G. More LLM providers — OpenRouter + Nous Portal  🟡  ← core shipped 2026-06-11
 Only `providers/ollama_provider.py` exists, and `ModelPool.get()` hardcodes it.
 The routing layer is already cloud-aware (`local_only`, HYBRID,
 `_best_cloud_for_role`) and the `Provider` enum already lists OPENROUTER/OPENAI/
@@ -222,15 +222,19 @@ the config layer (C0).
   role; a one-time per-session warning the first time a call routes to a cloud
   provider (`RoutedModel` emits `model.cloud_call`; CLI prints the warning).
 
-- [ ] `models/providers/openai_compatible.py` — `OpenAICompatibleProvider` matching
-      the OllamaProvider surface (`chat`, `chat_stream`, `supports_tools`,
-      `extract_content`, `list_models`, `is_available`, `close`, `model`).
-- [ ] Provider-aware `ModelPool`: build the right provider per model id from the
-      config's provider entries (kind + base_url + key), not a single Ollama URL.
-- [ ] Register cloud `ModelProfile`s (from config) so routing + `is_local`/
-      `--allow-cloud` filtering work; CLI bootstrap no longer assumes the primary
-      is an Ollama model (skip the "is Ollama running" gate for a cloud primary).
-- [ ] OPSEC warning wiring (startup + first cloud call).
+- [x] `models/providers/openai_compatible.py` — `OpenAICompatibleProvider` matching
+      the OllamaProvider surface; normalizes to `{"message": {...}}`; SSE streaming.
+- [x] Provider-aware `ModelPool` — builds the right provider per model id from the
+      config's provider entries; Ollama-only without a config.
+- [x] Cloud `ModelProfile`s registered from config (`_register_cloud_models`) so
+      routing + the `local_only`/`--allow-cloud` gate see them; CLI bootstrap takes
+      a cloud-primary path (no "is Ollama running" gate) and refuses a cloud primary
+      unless `--allow-cloud` + a key are present. `is_local` fixed (local == Ollama).
+- [x] OPSEC warning wiring — startup banner (`_warn_cloud_roles`) for any cloud
+      role + one-time per-session warning on first cloud call (`RoutedModel.on_cloud_call`).
+- [ ] **Remaining:** end-to-end verification against a real OpenRouter/Nous key
+      (can't be tested until a key is configured) — local bootstrap re-verified via
+      the create_tool smoke. C1 wizard will prompt for the keys.
 - Touchpoints: `models/providers/openai_compatible.py`, `models/model_pool.py`,
   `models/routed_model.py`, `models/model_registry.py`, `cli/mapache_cli.py`,
   `core/config.py`.

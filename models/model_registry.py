@@ -37,6 +37,7 @@ class Provider(str, Enum):
     OPENROUTER  = "openrouter"
     HUGGINGFACE = "huggingface"
     ANTHROPIC   = "anthropic"
+    NOUS        = "nous"
 
 
 @dataclass
