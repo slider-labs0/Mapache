@@ -319,6 +319,18 @@ moltbook_feed, moltbook_comment, moltbook_search
   target-shaped keys / URLs) to avoid mistaking a wordlist path for a target.
   CLI shows a startup banner, a `/scope` command, and a live `⛔ RoE: refused …`
   line. `core/engagement_scope.py`; example in `scope.example.json`.
+- **Auditable engagement log (feature K)** — an append-only JSONL trail
+  (`core/engagement_log.py`, `EngagementLog`) of the whole session, fed purely by
+  the `EventBus` (it subscribes, never drives). Records every tool call (with
+  args + outcome), finding (flag/credential/vuln/open-port), and RoE refusal,
+  plus delegate/verify/duplicate events — a curated topic allowlist, one flushed
+  line per record (crash-safe), frozen after `close()`. Two small controller
+  emits make it faithful: `task.result`/`.error` now carry `args`, and
+  `_emit_new_findings` fires `agent.finding` when the attack state gains a
+  flag/cred/vuln/port (so the trail records *when* each was found). On by default
+  (writes to `engagements/`, gitignored; `--no-engagement-log` to disable);
+  `export_markdown()` renders a findings list + timeline (the seed for reporting,
+  L). CLI: startup path, exit summary, `/log` and `/log export`.
 - **Attack system prompt** — explicit intent→tool mapping table and a default
   recon → enumerate → exploit → post → report workflow that blocks exploitation
   before a scan returns open ports.

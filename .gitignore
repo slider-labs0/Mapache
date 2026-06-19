@@ -10,3 +10,5 @@ mapache.json
 .mapache/
 plugins/generated/
 plugins/archived/
+engagements/
+scope.json

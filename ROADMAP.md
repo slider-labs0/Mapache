@@ -309,15 +309,28 @@ Authorized-pentest scoping the agent enforces itself.
 - Touchpoints: `core/engagement_scope.py` (new), `core/agent_controller.py`,
   `tools/tool_dispatcher.py`, `cli/mapache_cli.py`, `scope.example.json`.
 
-## K. Auditable engagement log  ⬜
+## K. Auditable engagement log  ✅  ← shipped 2026-06-19
 A structured, timestamped, exportable trail of everything the agent did.
 
-- [ ] Append-only log of every tool call, decision, finding, RoE refusal, and
-      model route — sourced from the existing `EventBus` (most events already fire).
-- [ ] Exportable (JSONL + human-readable) for compliance, debrief, and as the raw
-      material for reporting (L) and skill-synthesis (N).
-- [ ] Cheap to build (subscribe to the bus); compounds into L and N.
-- Touchpoints: new `core/engagement_log.py`, `core/event_bus.py` subscribers.
+- [x] Append-only JSONL trail (`core/engagement_log.py`, `EngagementLog`) fed by
+      the `EventBus`: every tool call (with args + outcome), finding
+      (flag/cred/vuln/port), and RoE refusal, plus delegate/verify/duplicate
+      events. Subscribes to a curated topic allowlist (signal, not noise); each
+      line is flushed (crash-safe) and frozen after `close()` (an audit trail
+      isn't retro-edited).
+- [x] Two small controller emits make the trail faithful: `task.result`/`.error`
+      now carry `args`, and `_emit_new_findings` fires `agent.finding` for newly
+      discovered flags/creds/vulns/ports (timestamps *when* each was found, which
+      the attack-state snapshot can't). This is also where J's
+      `agent.scope_refused` lands.
+- [x] Exportable: `export_markdown()` renders a findings list + readable timeline
+      — the seed L (reporting) builds on. CLI: on by default (writes to
+      `engagements/`, gitignored), `--no-engagement-log` to disable, `/log` and
+      `/log export` commands, path shown at startup + summary on exit.
+- [x] Tests: 2 in `tests/test_core.py` (log capture/JSONL/export + controller
+      emits). Suite 47/47.
+- Touchpoints: `core/engagement_log.py` (new), `core/agent_controller.py`
+  (`task.result` args + `agent.finding`), `cli/mapache_cli.py`, `.gitignore`.
 
 ## L. Automated reporting / deliverables  ⬜
 Turn the `reporting` phase into an actual pentest report.

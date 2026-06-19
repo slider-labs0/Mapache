@@ -23,6 +23,7 @@ from models.model_registry import (
 )
 from core.config import load_config
 from core.engagement_scope import load_scope
+from core.engagement_log import EngagementLog
 from models.routing_engine import RoutingEngine, RoutingStrategy
 from models.model_pool import ModelPool
 from models.routed_model import RoutedModel
@@ -80,6 +81,8 @@ Commands:
   /memory targets        List stored targets
   /chain                 Show current attack state
   /scope                 Show Rules-of-Engagement scope (in-scope targets)
+  /log                   Show engagement-log summary
+  /log export            Write a Markdown engagement report
   /history               Show conversation history
   /clear                 Clear history and reset attack state
   /context               Show project context
@@ -188,6 +191,7 @@ class MapacheCLI:
         self.mcp: MCPManager | None = None
         self.gen_manager: GeneratedToolManager | None = None
         self.scope = None  # EngagementScope, loaded in setup()
+        self.engagement_log: EngagementLog | None = None  # feature K, started in run()
         self.memory = MemoryManager()
         self.confirm = args.confirm
         self.working_dir = os.path.abspath(args.dir)
@@ -550,6 +554,22 @@ class MapacheCLI:
         self.session_id = session.session_id
         stats = self.memory.stats()
 
+        # Engagement log (feature K): an append-only audit trail of this session,
+        # fed by the controller's event bus. On by default; --no-engagement-log
+        # disables it. Path printed below so it is never a silent side effect.
+        if not self.args.no_engagement_log and self.controller is not None:
+            import datetime as _dt
+            stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+            log_path = os.path.join(self.working_dir, "engagements",
+                                    f"engagement-{stamp}.jsonl")
+            self.engagement_log = EngagementLog(path=log_path, session_id=self.session_id)
+            self.engagement_log.attach(self.controller.bus, metadata={
+                "model": self.model, "strategy": self.strategy.value,
+                "working_dir": self.working_dir,
+                "scope": self.scope.name if (self.scope and self.scope.active) else None,
+                "roe_enforced": bool(self.scope and self.scope.active),
+            })
+
         print(BANNER)
         print(f"  Model    : {self.model}")
         print(f"  Strategy : {self.strategy.value}")
@@ -563,6 +583,9 @@ class MapacheCLI:
             print(f"  RoE      : ENFORCED — in-scope {self.scope.targets_summary()}")
         else:
             print(f"  RoE      : off (no scope.json)")
+
+        if self.engagement_log:
+            print(f"  Log      : {self.engagement_log.path}")
 
         if self.routed:
             print(f"\n{self.routed.explain()}")
@@ -620,6 +643,14 @@ class MapacheCLI:
 
                 await self._agent_turn(raw)
         finally:
+            if self.engagement_log:
+                self.engagement_log.close(summary={
+                    "target": self.controller.chain.attack_state.target
+                    if self.controller else None,
+                    "flags": len(self.controller.chain.attack_state.flags)
+                    if self.controller else 0,
+                })
+                print(f"  Engagement log: {self.engagement_log.summary()}")
             if self.mcp:
                 await self.mcp.close_all()
             await self.memory.end_session()
@@ -757,6 +788,19 @@ class MapacheCLI:
                 if injection:
                     print(f"\n{injection}")
                 print()
+
+        elif command == "/log":
+            if not self.engagement_log:
+                print("  Engagement log is off (--no-engagement-log).")
+            elif len(parts) > 1 and parts[1].lower() == "export":
+                out = self.engagement_log.export_markdown()
+                print(f"  Exported Markdown report → {out}")
+            else:
+                print(f"\n  {self.engagement_log.summary()}")
+                counts = self.engagement_log.counts()
+                for kind, n in sorted(counts.items()):
+                    print(f"    {kind:16s} {n}")
+                print("  /log export  → write a Markdown timeline\n")
 
         elif command == "/scope":
             if self.scope and self.scope.active:
@@ -961,6 +1005,9 @@ def parse_args() -> argparse.Namespace:
                         help="Path to a scope.json defining Rules-of-Engagement "
                              "(in-scope targets, forbidden tools/patterns). "
                              "Enforced in the dispatch path. Ignored if absent.")
+    parser.add_argument("--no-engagement-log", action="store_true",
+                        help="Disable the append-only engagement audit log "
+                             "(written to engagements/ by default).")
     parser.add_argument("--confirm", action="store_true")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--log-dir", default=os.environ.get("MAPACHE_LOG_DIR"))

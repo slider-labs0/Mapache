@@ -1261,6 +1261,93 @@ async def test_controller_scope_refusal():
 
 
 # ------------------------------------------------------------------ #
+# Auditable engagement log (feature K)
+# ------------------------------------------------------------------ #
+
+import tempfile
+from core.engagement_log import EngagementLog
+
+
+async def test_engagement_log_captures_and_exports():
+    with tempfile.TemporaryDirectory() as tmp:
+        bus = EventBus()
+        log = EngagementLog(path=_CfgPath(tmp) / "eng.jsonl", session_id="s1")
+        log.attach(bus, metadata={"model": "m"})
+
+        await bus.emit("task.result", {
+            "tool_name": "nmap_scan", "args": {"target": "10.0.0.1"},
+            "output": "22/tcp open ssh", "error": None, "session_id": "s1"})
+        await bus.emit("agent.finding", {
+            "finding_type": "open_port", "value": "22/tcp",
+            "target": "10.0.0.1", "session_id": "s1"})
+        await bus.emit("agent.scope_refused", {
+            "tool_name": "nmap_scan", "reason": "out of scope", "session_id": "s1"})
+        await bus.emit("some.other.topic", {"x": 1})  # not in the allowlist → ignored
+        log.close(summary={"flags": 0})
+
+        c = log.counts()
+        assert c["tool_call"] == 1 and c["finding"] == 1 and c["scope_refused"] == 1
+        assert c["session_start"] == 1 and c["session_end"] == 1
+
+        # JSONL: one valid-JSON line per record; bracketed by start/end.
+        lines = (_CfgPath(tmp) / "eng.jsonl").read_text(encoding="utf-8").strip().splitlines()
+        assert len(lines) == len(log.records)
+        recs = [json.loads(ln) for ln in lines]
+        assert recs[0]["kind"] == "session_start" and recs[-1]["kind"] == "session_end"
+        # The off-allowlist topic left no trace.
+        assert all(r["kind"] != "other" for r in recs)
+
+        # Records are frozen after close (an audit trail isn't retroactively edited).
+        log.record("tool_call", {"tool": "late"})
+        assert log.counts()["tool_call"] == 1
+
+        # Markdown export carries the finding + a readable timeline.
+        md = log.export_markdown().read_text(encoding="utf-8")
+        assert "Findings" in md and "22/tcp" in md and "nmap_scan" in md
+    print("  PASS  engagement_log_captures_and_exports")
+
+
+async def test_controller_emits_tool_call_and_finding_events():
+    # The controller feeds the log: task.result now carries args, and a newly
+    # discovered flag fires agent.finding.
+    model = MockModel()
+    model.queue({"message": {"content": "", "tool_calls": [
+        {"function": {"name": "shell", "arguments": {"cmd": "cat root.txt"}}}]}})
+    model.queue({"message": {"content": "Flag captured."}})
+
+    controller = AgentController(model_provider=model, mode=AgentMode.AGENT)
+    controller.register_tool(ToolSchema(
+        name="shell", description="run",
+        parameters={"type": "object", "properties": {"cmd": {"type": "string"}},
+                    "required": ["cmd"]}))
+
+    class FakeDispatcher:
+        async def dispatch(self, name, args, session_id=""):
+            return "uid=0(root) — HTB{rooted_box}"
+    controller.tool_dispatcher = FakeDispatcher()
+
+    tool_calls: list[dict] = []
+    findings: list[dict] = []
+
+    async def cap_tool(e):
+        tool_calls.append(e.data)
+
+    async def cap_find(e):
+        findings.append(e.data)
+    controller.bus.subscribe("task.result", cap_tool)
+    controller.bus.subscribe("agent.finding", cap_find)
+    await controller.start()
+
+    await controller.run("get the flag", session_id="k-test")
+
+    assert tool_calls and tool_calls[0]["tool_name"] == "shell"
+    assert tool_calls[0]["args"] == {"cmd": "cat root.txt"}  # args ride the event now
+    assert any(f["finding_type"] == "flag" and "HTB{rooted_box}" in f["value"]
+               for f in findings)
+    print("  PASS  controller_emits_tool_call_and_finding_events")
+
+
+# ------------------------------------------------------------------ #
 # Runner
 # ------------------------------------------------------------------ #
 
@@ -1331,6 +1418,10 @@ async def run_all():
     test_scope_forbidden_tools_and_patterns()
     test_scope_load_fail_soft()
     await test_controller_scope_refusal()
+
+    print("\nEngagement log (feature K)")
+    await test_engagement_log_captures_and_exports()
+    await test_controller_emits_tool_call_and_finding_events()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()

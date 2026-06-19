@@ -956,7 +956,11 @@ class AgentController:
         for (tool_call_id, tool_name, _args), result in zip(approved, results):
             tools_used.append(tool_name)
             tool_output = result.output if not result.error else f"ERROR: {result.error}"
+            # Snapshot findings so newly-discovered ones can be emitted as their
+            # own timeline events (feature K's engagement log subscribes to these).
+            before = self._finding_snapshot()
             self.chain.on_tool_result(tool_name, tool_output)
+            await self._emit_new_findings(before, session_id)
 
             compressed = self.chain.get_compressed_tool_output(tool_name, tool_output)
             seen[self._call_signature(tool_name, _args)] = compressed
@@ -971,12 +975,42 @@ class AgentController:
                 {
                     "task_id": tool_call_id,
                     "tool_name": tool_name,
+                    "args": _args,
                     "output": result.output,
                     "error": result.error,
                     "session_id": session_id,
                 },
                 source="controller",
                 session_id=session_id,
+            )
+
+    def _finding_snapshot(self) -> tuple[set, set, set, set]:
+        st = self.chain.attack_state
+        return (set(st.flags), set(st.credentials),
+                set(st.vulnerabilities), set(st.open_ports))
+
+    async def _emit_new_findings(
+        self, before: tuple[set, set, set, set], session_id: str
+    ) -> None:
+        """Emit `agent.finding` for anything the last tool result newly revealed.
+
+        Gives the engagement log (feature K) a timestamped record of *when* each
+        flag/credential/vuln/port was discovered, which the attack-state snapshot
+        alone can't convey.
+        """
+        st = self.chain.attack_state
+        old_flags, old_creds, old_vulns, old_ports = before
+        new: list[tuple[str, str]] = []
+        new += [("flag", v) for v in st.flags if v not in old_flags]
+        new += [("credential", v) for v in st.credentials if v not in old_creds]
+        new += [("vulnerability", v) for v in st.vulnerabilities if v not in old_vulns]
+        new += [("open_port", v) for v in st.open_ports if v not in old_ports]
+        for kind, value in new:
+            await self.bus.emit(
+                "agent.finding",
+                {"finding_type": kind, "value": value,
+                 "target": st.target, "session_id": session_id},
+                source="controller", session_id=session_id,
             )
 
     # ------------------------------------------------------------------ #
