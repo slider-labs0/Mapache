@@ -106,6 +106,7 @@ class EngagementLog:
                     "reason": data.get("reason"), "args": data.get("args")}
         if kind in ("delegate_start", "delegate_end"):
             return {"session": session, "task": data.get("task"),
+                    "operator": data.get("operator"),
                     "depth": data.get("depth"), "iterations": data.get("iterations")}
         if kind == "verify_retry":
             return {"session": session, "reason": data.get("reason"),

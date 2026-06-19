@@ -80,6 +80,7 @@ Commands:
   /memory search <q>     Search memory
   /memory targets        List stored targets
   /chain                 Show current attack state
+  /operators             List specialist sub-agents (delegation roster)
   /scope                 Show Rules-of-Engagement scope (in-scope targets)
   /log                   Show engagement-log summary
   /log export            Write a Markdown engagement report
@@ -801,6 +802,12 @@ class MapacheCLI:
                 for kind, n in sorted(counts.items()):
                     print(f"    {kind:16s} {n}")
                 print("  /log export  → write a Markdown timeline\n")
+
+        elif command == "/operators":
+            from core.operators import roster_summary
+            print("\n  Specialist operators (delegate task=… operator=<name>):\n")
+            print(roster_summary())
+            print()
 
         elif command == "/scope":
             if self.scope and self.scope.active:

@@ -237,16 +237,31 @@ moltbook_feed, moltbook_comment, moltbook_search
   `plugins/archived/` (out of the load path). `/restore <name>` reverses it;
   `/purge <name>` hard-deletes an already-archived tool (a deliberate two-step).
   A non-blocking startup notice reports stale tools.
-- **Sub-agent delegation** — a built-in `delegate` tool lets the model spawn a
-  focused child `AgentController` for one bounded subtask (e.g. "enumerate port
-  80 and report") and get back only its conclusion, keeping the main context
-  clean. The child shares the parent's model, tool dispatcher, and registered
-  tools, and is seeded with the live target/ports; it runs its own ReAct loop in
-  a separate context. Findings (flags, creds, vulns, ports) merge back into the
-  parent attack state on completion. Recursion is bounded by
-  `MAX_DELEGATION_DEPTH` (1) — a sub-agent is not offered the delegate tool, so
-  it can't spawn its own. `delegate` is in `CORE_TOOLS` so phase-subsetting keeps
-  it exposed. Async frontends fire `agent.delegate.start/end` events.
+- **Sub-agent delegation + operator specialists (feature P)** — a built-in
+  `delegate(task, operator=…)` tool lets the model spawn a focused child
+  `AgentController` for one bounded subtask and get back only its conclusion.
+  Recursion is bounded by `MAX_DELEGATION_DEPTH` (1) — a sub-agent isn't offered
+  the delegate tool. `delegate` is in `CORE_TOOLS` so phase-subsetting keeps it
+  exposed; `agent.delegate.start/end` events fire (with the operator label).
+  - **Shared blackboard:** the child references the lead's `AttackState` by
+    reference (`shared_state`), so its findings are live in the lead's state with
+    no merge-back; `allow_state_reset=False` stops a child's task wording from
+    reassigning the target / wiping the shared findings. The child also shares
+    the lead's event bus, so its tool calls / findings / RoE refusals land in the
+    same engagement log (K). Parallel-safe (asyncio-atomic state mutations);
+    dispatch is sequential for now (single-GPU), `gather` fan-out is a later
+    drop-in once cloud routing (G) carries the load.
+  - **Operators** (`core/operators.py`): a Decepticon-style roster (recon, web,
+    exploit, post, osint, cloud_hunter, contract_auditor, reverser, analyst,
+    phisher, mobile/wireless/iot/ics, forensicator, supply_chain). Naming one in
+    `delegate` runs the child with that operator's **focused system prompt + a
+    small curated tool subset** instead of the lead's generalist prompt + full
+    toolset — the local-model win (smaller payload, narrower decisions). The
+    specialist tooling each names (frida, binwalk, semgrep, evilginx2, modbus…)
+    runs through `kali_run`/`shell` or is authored with `create_tool`. Role
+    constraints (read-only, RoE-gated, needs-hardware, deconflict-first) render
+    into the prompt and reinforce the RoE gate. `/operators` lists the roster;
+    `suggest_next_step` nudges the right specialist from open ports/services.
 - **Mid-run steering** — a frontend can call `AgentController.steer(text)` (thread-
   safe) to redirect a turn already in progress. Queued messages are drained at
   the top of each loop iteration, injected as `[operator steering] …`, and run

@@ -21,6 +21,7 @@ from .context_builder import ContextBuilder, Message, ToolSchema
 from .conversation_chain import AttackState, ConversationChain
 from .engagement_scope import EngagementScope
 from .event_bus import Event, EventBus
+from .operators import get_operator, operator_names
 from .executor import Executor
 from .logger import get_logger
 from .project_context import build_project_context
@@ -174,10 +175,12 @@ class AgentController:
                 description=(
                     "Spawn a focused sub-agent to fully complete ONE bounded "
                     "subtask (e.g. 'enumerate the web service on port 80 and "
-                    "report findings'), then return only its conclusion. Use "
-                    "for self-contained chunks of work to keep the main thread "
-                    "clean. The sub-agent shares your tools and the current "
-                    "target/ports but has its own scratch context."
+                    "report findings'), then return only its conclusion. Pass "
+                    "`operator` to run the subtask as a specialist (a tighter "
+                    "prompt + tools — e.g. web_operator for a web app, "
+                    "iot_operator for an embedded device); omit it for a "
+                    "generalist. The sub-agent shares the live attack state but "
+                    "has its own scratch context. See /operators."
                 ),
                 parameters={
                     "type": "object",
@@ -185,7 +188,13 @@ class AgentController:
                         "task": {
                             "type": "string",
                             "description": "The complete, self-contained subtask for the sub-agent.",
-                        }
+                        },
+                        "operator": {
+                            "type": "string",
+                            "enum": operator_names(),
+                            "description": "Optional specialist to run the subtask as. "
+                                           "Omit for a generalist sub-agent.",
+                        },
                     },
                     "required": ["task"],
                 },
@@ -1030,26 +1039,32 @@ class AgentController:
     async def _run_subagent(self, args: dict[str, Any], session_id: str) -> str:
         """
         Spawn a focused child agent for one bounded subtask and return its
-        conclusion. The child shares this agent's model, tool dispatcher, and
-        registered tools, and is seeded with the current target/ports, but runs
-        its own ReAct loop in a separate context so the main thread stays clean.
-        Findings (flags, creds, vulns, ports) are merged back on completion.
+        conclusion. The child shares this agent's model, tool dispatcher, and the
+        live attack-state blackboard, but runs its own ReAct loop in a separate
+        context so the main thread stays clean.
+
+        If `operator` names a specialist (feature P), the child gets that
+        operator's focused system prompt and a small curated tool subset instead
+        of the lead's generalist prompt + full toolset — the local-model win.
         """
         task = (args.get("task") or args.get("goal") or "").strip()
         if not task:
             return "[delegate] No task provided."
 
+        operator = get_operator(args.get("operator"))
+        # An operator's toolset is already small and curated, so phase-based
+        # subsetting (which keys off the shared phase) is turned off for it.
         child = AgentController(
             model_provider=self.model,
             tool_dispatcher=self.tool_dispatcher,
-            system_prompt=self.context.system_prompt,
+            system_prompt=operator.system_prompt if operator else self.context.system_prompt,
             mode=self.mode,
             use_function_calling=self.context.use_function_calling,
             max_context_tokens=self.context.max_context_tokens,
             working_dir=self.working_dir,
             confirm_dangerous=self.confirm_dangerous,
             confirm_callback=self.confirm_callback,
-            enable_tool_subsetting=self.enable_tool_subsetting,
+            enable_tool_subsetting=self.enable_tool_subsetting and operator is None,
             enable_verifier=False,            # keep sub-agents lean
             enable_compaction=self.enable_compaction,
             enable_delegation=True,           # actually gated by depth
@@ -1064,18 +1079,24 @@ class AgentController:
             # refusals land in the same engagement log (feature K) as the lead's.
             bus=self.bus,
         )
-        # Give the child the same tools (it registers no delegate of its own
-        # once at max depth, so just skip copying that one).
+        # Give the child its tools: an operator gets only its curated subset
+        # (intersected with what's registered); a generalist gets everything.
+        # The delegate tool itself is never copied (a sub-agent can't re-delegate).
         for schema in self.context._tools.values():
             if schema.name == DELEGATE_TOOL:
+                continue
+            if operator is not None and schema.name not in operator.tools:
                 continue
             child.register_tool(schema)
 
         await child.start(inject_project_context=False)
-        logger.info("Delegating subtask (depth=%d): %r", child.delegation_depth, task[:80])
+        op_label = operator.name if operator else "generalist"
+        logger.info("Delegating subtask (depth=%d, operator=%s): %r",
+                    child.delegation_depth, op_label, task[:80])
         await self.bus.emit(
             "agent.delegate.start",
-            {"task": task[:200], "depth": child.delegation_depth, "session_id": session_id},
+            {"task": task[:200], "operator": op_label,
+             "depth": child.delegation_depth, "session_id": session_id},
             source="controller", session_id=session_id,
         )
 

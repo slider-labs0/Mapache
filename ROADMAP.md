@@ -372,14 +372,31 @@ Make "target data never leaves the box" a guarantee, not a warning.
 - [ ] Builds on G's provider awareness + the existing `local_only`/HYBRID routing.
 - Touchpoints: `models/routing_engine.py`, `models/routed_model.py`, `core/config.py`.
 
-## P. Multi-agent engagement orchestration  ⬜  (extends delegation)
-Parallel sub-agents across a network engagement.
+## P. Multi-agent engagement orchestration  🟡  ← core shipped 2026-06-19 (Decepticon-inspired)
+Specialist sub-agents coordinated by a lead over a shared blackboard.
 
-- [ ] Spawn focused sub-agents per host/service with a **shared** attack-state and
-      a coordinating lead, instead of one bounded subtask at a time.
-- [ ] Builds on the existing `delegate` tool + `_merge_subagent_state`; needs a
-      shared-state model and a higher `MAX_DELEGATION_DEPTH`/fan-out budget.
-- Touchpoints: `core/agent_controller.py` (delegation), `core/conversation_chain.py`.
+- [x] **Shared attack-state blackboard** (1/3). Sub-agents reference the lead's
+      `AttackState` directly (`shared_state` + `allow_state_reset`), so findings
+      are live with no copy-down/merge-back; `_merge_subagent_state` removed. A
+      shared event bus means operator actions land in the engagement log (K).
+      Parallel-safe (asyncio-atomic mutations); dispatch sequential for now.
+- [x] **Operator specialists** (2/3, `core/operators.py`). Decepticon-style
+      roster: recon/web/exploit/post + osint, cloud_hunter, contract_auditor,
+      reverser, analyst, phisher, mobile/wireless/iot/ics operators,
+      forensicator, supply_chain. `delegate(task, operator=…)` runs the subtask
+      with the operator's **focused prompt + small curated tool subset** (the
+      local-model win); domain tooling runs via kali_run/shell or create_tool.
+      Role constraints (read-only, RoE-gated, needs-hardware, deconflict-first)
+      render into the prompt and reinforce J.
+- [x] **Surfacing** (3/3). `/operators` roster, `delegate` enum, attack-state
+      `suggest_next_step` nudges the right specialist from open ports/services
+      (`suggest_operators`). Tests: 4 in `tests/test_core.py`.
+- [ ] **Remaining:** true parallel fan-out (`asyncio.gather` over operators)
+      once cloud routing (G) carries the load — single-GPU stays sequential;
+      per-operator model routing (cheap-local recon vs stronger exploit, ties to
+      O); per-host sub-states for multi-host engagements.
+- Touchpoints: `core/agent_controller.py`, `core/conversation_chain.py`,
+  `core/operators.py` (new), `core/engagement_log.py`, `cli/mapache_cli.py`.
 
 ---
 

@@ -173,7 +173,13 @@ class AttackState:
             if "6379" in ports:
                 suggestions.append("Redis found — often unauthenticated")
             if suggestions:
-                return "Based on open ports: " + "; ".join(suggestions)
+                base = "Based on open ports: " + "; ".join(suggestions)
+                from .operators import suggest_operators
+                ops = suggest_operators(self.open_ports, self.services)
+                if ops:
+                    base += (f". Specialists available — delegate with operator=: "
+                             f"{', '.join(ops)}")
+                return base
             return f"Enumerate discovered services on {self.target}"
 
         if self.current_phase == "exploitation":

@@ -1385,6 +1385,74 @@ def test_lead_state_reset_still_works():
     print("  PASS  lead_state_reset_still_works")
 
 
+def test_operator_roster():
+    from core.operators import get_operator, operator_names, GENERALIST_ALIASES
+    names = operator_names()
+    for expected in ["recon_operator", "web_operator", "exploit_operator",
+                     "post_operator", "osint_operator", "iot_operator",
+                     "cloud_hunter", "contract_auditor", "reverser", "analyst",
+                     "phisher", "mobile_operator", "wireless_operator",
+                     "ics_operator", "forensicator", "supply_chain_operator"]:
+        assert expected in names, expected
+
+    # Lookup is case-insensitive; the web operator has a tight, focused toolset.
+    web = get_operator("Web_Operator")
+    assert web is not None
+    assert "kali_run" in web.tools and "nmap_scan" not in web.tools
+    assert "Web Operator" in web.system_prompt and "ONE objective" in web.system_prompt
+
+    # Role constraints are rendered into the prompt (and reinforce feature J).
+    assert "READ-ONLY" in get_operator("osint_operator").system_prompt
+    assert "deconfliction" in get_operator("phisher").system_prompt
+    assert "lab/canary" in get_operator("ics_operator").system_prompt
+    assert "hardware passthrough" in get_operator("wireless_operator").system_prompt
+
+    # Generalist aliases resolve to "no specialist".
+    for alias in GENERALIST_ALIASES:
+        assert get_operator(alias) is None
+    assert get_operator("not_a_real_operator") is None
+    print("  PASS  operator_roster")
+
+
+async def test_delegate_operator_dispatch():
+    # delegate(operator="web_operator") runs the subtask as the specialist: the
+    # operator label flows to agent.delegate.start (so the engagement log records
+    # it) and the turn completes.
+    class Dispatcher:
+        async def dispatch(self, name, args, session_id):
+            return "ok"
+
+    class DelegModel:
+        supports_tools = False
+
+        async def chat(self, messages, tools=None, json_mode=False, stream=False):
+            joined = " ".join(m.get("content", "") for m in messages)
+            if "subagent result" in joined:                 # lead, after the child
+                return json.dumps({"type": "response", "content": "done"})
+            if "Web Operator" in joined:                    # the specialist child
+                return json.dumps({"type": "response", "content": "web enumerated"})
+            return json.dumps({"type": "tool_call", "tool": "delegate",  # lead, first
+                               "args": {"task": "enumerate the web app",
+                                        "operator": "web_operator"}})
+
+    controller = AgentController(model_provider=DelegModel(), tool_dispatcher=Dispatcher(),
+                                 mode=AgentMode.AGENT, use_function_calling=False)
+    controller.register_tool(ToolSchema(name="kali_run", description="run",
+        parameters={"type": "object", "properties": {"tool": {"type": "string"}}}))
+
+    events: list[dict] = []
+
+    async def cap(e):
+        events.append(e.data)
+    controller.bus.subscribe("agent.delegate.start", cap)
+    await controller.start()
+
+    resp = await controller.run("test the website", session_id="op-test")
+    assert events and events[0]["operator"] == "web_operator"
+    assert resp.content == "done"
+    print("  PASS  delegate_operator_dispatch")
+
+
 # ------------------------------------------------------------------ #
 # Runner
 # ------------------------------------------------------------------ #
@@ -1461,9 +1529,11 @@ async def run_all():
     await test_engagement_log_captures_and_exports()
     await test_controller_emits_tool_call_and_finding_events()
 
-    print("\nMulti-agent blackboard (feature P)")
+    print("\nMulti-agent blackboard + operators (feature P)")
     test_shared_blackboard_semantics()
     test_lead_state_reset_still_works()
+    test_operator_roster()
+    await test_delegate_operator_dispatch()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()
