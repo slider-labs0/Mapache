@@ -1153,6 +1153,114 @@ def test_model_profile_is_local_gate():
 
 
 # ------------------------------------------------------------------ #
+# Rules-of-Engagement guardrails (feature J)
+# ------------------------------------------------------------------ #
+
+from core.engagement_scope import EngagementScope, load_scope
+
+
+def test_scope_inactive_allows_everything():
+    s = EngagementScope()
+    assert not s.active
+    # A wordlist path that vaguely resembles a host must not be flagged when no
+    # scope is defined (and the precision rules keep it safe even if it were).
+    assert s.check("kali_run",
+                   {"args": "dir -w /usr/share/wordlists/common.txt"}).allowed
+    print("  PASS  scope_inactive_allows_everything")
+
+
+def test_scope_target_allowlist():
+    s = EngagementScope.from_dict(
+        {"name": "eng", "targets": ["10.10.10.0/24", "acme.example.com"]})
+    assert s.active
+    # In-scope IP inside the CIDR.
+    assert s.check("nmap_scan", {"target": "10.10.10.5"}).allowed
+    # Out-of-scope IP refused; the reason names the offending target.
+    d = s.check("nmap_scan", {"target": "8.8.8.8"})
+    assert not d.allowed and "8.8.8.8" in d.reason
+    # Subdomain of an allowed host is in scope; an unrelated host is not.
+    assert s.check("web_fetch", {"url": "https://api.acme.example.com/x"}).allowed
+    assert not s.check("web_fetch", {"url": "http://evil.com/"}).allowed
+    # Loopback + local utility calls are the operator's own box → allowed.
+    assert s.check("shell", {"cmd": "whoami"}).allowed
+    assert s.check("nmap_scan", {"target": "127.0.0.1"}).allowed
+    # A bare filename in a non-target arg key is NOT treated as a host.
+    assert s.check("kali_run", {"args": "-w common.txt -u 10.10.10.5"}).allowed
+    print("  PASS  scope_target_allowlist")
+
+
+def test_scope_fallback_target_and_ip_in_command():
+    s = EngagementScope.from_dict({"targets": ["10.10.10.0/24"]})
+    # A backfilled target (model omitted it) is still checked.
+    assert not s.check("nmap_scan", {}, fallback_target="9.9.9.9").allowed
+    assert s.check("nmap_scan", {}, fallback_target="10.10.10.7").allowed
+    # An out-of-scope IP embedded in a free-form shell command is caught.
+    assert not s.check("shell", {"cmd": "telnet 9.9.9.9 23"}).allowed
+    print("  PASS  scope_fallback_target_and_ip_in_command")
+
+
+def test_scope_forbidden_tools_and_patterns():
+    s = EngagementScope.from_dict({
+        "targets": ["10.10.10.0/24"],
+        "forbidden_tools": ["msf_run"],
+        "forbidden_patterns": ["rm -rf"],
+    })
+    # Forbidden tool refused even against an in-scope target.
+    assert not s.check("msf_run", {"target": "10.10.10.5"}).allowed
+    # Forbidden command pattern refused.
+    assert not s.check("shell", {"cmd": "rm -rf /"}).allowed
+    # Otherwise-permitted call still allowed.
+    assert s.check("nmap_scan", {"target": "10.10.10.5"}).allowed
+    print("  PASS  scope_forbidden_tools_and_patterns")
+
+
+def test_scope_load_fail_soft():
+    # Missing path / file → an inactive scope (fail-soft, never raises).
+    assert not load_scope(None).active
+    assert not load_scope(_CfgPath("does") / "not" / "exist.json").active
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _CfgPath(tmp) / "scope.json"
+        _write_json(p, {"targets": ["10.0.0.0/8"]})
+        s = load_scope(p)
+        assert s.active and s.check("nmap_scan", {"target": "10.1.2.3"}).allowed
+    print("  PASS  scope_load_fail_soft")
+
+
+async def test_controller_scope_refusal():
+    # The controller refuses an out-of-scope tool call before dispatch, feeds the
+    # refusal back to the model, and emits agent.scope_refused (feeds K later).
+    model = MockModel()
+    model.queue({"message": {"content": "", "tool_calls": [
+        {"function": {"name": "nmap_scan", "arguments": {"target": "8.8.8.8"}}}]}})
+    model.queue({"message": {"content": "That target is out of scope; stopping."}})
+
+    scope = EngagementScope.from_dict({"name": "eng", "targets": ["10.10.10.0/24"]})
+    controller = AgentController(model_provider=model, mode=AgentMode.AGENT, scope=scope)
+    controller.register_tool(ToolSchema(
+        name="nmap_scan", description="scan",
+        parameters={"type": "object", "properties": {"target": {"type": "string"}},
+                    "required": ["target"]}))
+
+    refused: list[dict] = []
+
+    async def _capture(event):
+        refused.append(event.data)
+    controller.bus.subscribe("agent.scope_refused", _capture)
+    await controller.start()
+
+    response = await controller.run("scan 8.8.8.8", session_id="scope-test")
+
+    assert refused and refused[0]["tool_name"] == "nmap_scan"
+    # Refused calls are never dispatched, so they don't count as tools used.
+    assert "nmap_scan" not in response.tool_calls_made
+    # The model saw the refusal in the next turn's context.
+    second = model.calls[1]["messages"]
+    assert any("REFUSED by engagement scope" in (m.get("content") or "")
+               for m in second)
+    print("  PASS  controller_scope_refusal")
+
+
+# ------------------------------------------------------------------ #
 # Runner
 # ------------------------------------------------------------------ #
 
@@ -1215,6 +1323,14 @@ async def run_all():
     await test_openai_provider_normalizes_response()
     test_model_pool_provider_selection()
     test_model_profile_is_local_gate()
+
+    print("\nRules-of-Engagement (feature J)")
+    test_scope_inactive_allows_everything()
+    test_scope_target_allowlist()
+    test_scope_fallback_target_and_ip_in_command()
+    test_scope_forbidden_tools_and_patterns()
+    test_scope_load_fail_soft()
+    await test_controller_scope_refusal()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()

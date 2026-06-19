@@ -303,6 +303,22 @@ moltbook_feed, moltbook_comment, moltbook_search
   over-tooled and then parroted a robots.txt refusal).
 - **nmap target enforcement** — `_apply_arg_fallbacks` backfills `target` from
   attack state when the model omits it; the system prompt also mandates it.
+- **Rules-of-Engagement guardrails (feature J)** — an optional `scope.json`
+  (`--scope`, mirrors `mcp.json`) defines the engagement: an in-scope target
+  allowlist (IPs/CIDRs via `ipaddress`, hostnames with subdomain match), plus
+  forbidden tools and forbidden argument patterns. The gate runs in the dispatch
+  path — in the controller's `_execute_tool_calls`, **after** `_apply_arg_fallbacks`
+  so the backfilled target is checked — and **refuses** an out-of-scope/forbidden
+  call before it runs: it's never dispatched, the refusal is fed back to the
+  model, and `agent.scope_refused` fires (the first input to a future audit log).
+  A defense-in-depth re-check in `ToolDispatcher` covers generated-tool shell
+  calls that bypass the controller; sub-agents inherit the scope so delegation
+  stays bounded. **Inactive when no `scope.json` is present**, so default
+  behavior is unchanged. Loopback / local utility calls allowed by default. Host
+  extraction favors precision (IPs from any arg; bare hostnames only from
+  target-shaped keys / URLs) to avoid mistaking a wordlist path for a target.
+  CLI shows a startup banner, a `/scope` command, and a live `⛔ RoE: refused …`
+  line. `core/engagement_scope.py`; example in `scope.example.json`.
 - **Attack system prompt** — explicit intent→tool mapping table and a default
   recon → enumerate → exploit → post → report workflow that blocks exploitation
   before a scan returns open ports.

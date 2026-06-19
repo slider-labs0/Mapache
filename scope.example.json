@@ -1,0 +1,18 @@
+{
+  "_comment": "Rules-of-Engagement scope (feature J). Copy to scope.json in your working dir (or pass --scope <path>) to enforce. Mapache refuses any tool call against an out-of-scope target, a forbidden tool, or a forbidden argument pattern — before it runs. Delete this file (or leave no scope.json) to disable enforcement entirely.",
+  "name": "ACME external pentest 2026-06",
+  "targets": [
+    "10.10.10.0/24",
+    "10.129.0.0/16",
+    "acme.example.com"
+  ],
+  "forbidden_tools": [
+    "msf_run"
+  ],
+  "forbidden_patterns": [
+    "rm -rf",
+    "shutdown",
+    "mkfs"
+  ],
+  "allow_loopback": true
+}

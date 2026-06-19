@@ -284,19 +284,30 @@ A–I: self-improving skills, layered memory, multi-platform, model-agnostic. We
 structurally won't follow: **offensive security + local-first OPSEC + auditable,
 signed artifacts.** J–P are the features that widen that gap.
 
-## J. Rules-of-Engagement guardrails  ⬜
+## J. Rules-of-Engagement guardrails  ✅  ← shipped 2026-06-19
 Authorized-pentest scoping the agent enforces itself.
 
-- [ ] Define an engagement scope: in-scope target allowlist (IPs/CIDRs/hosts) +
-      forbidden actions; loaded per engagement (config / a `scope.json`).
-- [ ] Enforce in the dispatch path — a tool call against an out-of-scope target is
-      **refused** (not run) with a logged reason; ties into `ConversationChain`
-      attack-state + `_apply_arg_fallbacks` (which already backfills `target`).
-- [ ] Makes autonomous/long-running operation safe to leave unattended. A generic
-      agent has no concept of scope — this is trust infrastructure only a security
-      tool needs.
-- Touchpoints: `tools/tool_dispatcher.py`, `core/conversation_chain.py`,
-  `core/agent_controller.py`, config.
+- [x] Engagement scope (`core/engagement_scope.py`): in-scope target allowlist
+      (IPs/CIDRs via `ipaddress`, hostnames with subdomain match) + forbidden
+      tools + forbidden arg patterns. Loaded per engagement from `scope.json`
+      (`--scope`, mirrors `mcp.json`); fail-soft + **inactive when absent** so
+      existing behavior is unchanged until limits are defined. Loopback/local
+      utility calls allowed by default (`allow_loopback`). Example:
+      `scope.example.json`.
+- [x] Enforced in the dispatch path. Primary gate is in the controller's
+      `_execute_tool_calls`, **after `_apply_arg_fallbacks`** so the backfilled
+      `target` is checked too; refused calls are never dispatched, the refusal is
+      fed back to the model, and `agent.scope_refused` is emitted on the bus
+      (first raw material for K). Defense-in-depth re-check in `ToolDispatcher`
+      catches generated-tool shell calls that bypass the controller gate.
+      Sub-agents inherit the scope, so delegation stays bounded.
+- [x] CLI: `--scope`, startup banner (`RoE: ENFORCED …`), `/scope` command, and a
+      live `⛔ RoE: refused …` line on each refusal. Host extraction favors
+      precision (IPs from any arg; bare hostnames only from target-shaped keys /
+      URLs) so a wordlist path isn't mistaken for a target. Tests: 6 in
+      `tests/test_core.py` (5 unit + 1 controller-gate).
+- Touchpoints: `core/engagement_scope.py` (new), `core/agent_controller.py`,
+  `tools/tool_dispatcher.py`, `cli/mapache_cli.py`, `scope.example.json`.
 
 ## K. Auditable engagement log  ⬜
 A structured, timestamped, exportable trail of everything the agent did.

@@ -19,6 +19,7 @@ from uuid import uuid4
 
 from .context_builder import ContextBuilder, Message, ToolSchema
 from .conversation_chain import ConversationChain
+from .engagement_scope import EngagementScope
 from .event_bus import Event, EventBus
 from .executor import Executor
 from .logger import get_logger
@@ -111,10 +112,14 @@ class AgentController:
         enable_compaction: bool = True,
         enable_delegation: bool = True,
         delegation_depth: int = 0,
+        scope: Optional[EngagementScope] = None,
     ) -> None:
         self.model = model_provider
         self.tool_dispatcher = tool_dispatcher
         self.mode = mode
+        # Rules-of-Engagement guardrails (feature J). An absent/inactive scope
+        # allows everything, so this is a no-op until an operator defines limits.
+        self.scope = scope or EngagementScope()
         self.working_dir = working_dir
         self.confirm_dangerous = confirm_dangerous
         self.confirm_callback = confirm_callback
@@ -886,6 +891,29 @@ class AgentController:
             tool_args = self._apply_arg_fallbacks(tool_name, call.get("args", {}))
             tool_call_id = str(uuid4())[:8]
 
+            # Rules-of-Engagement gate (feature J): refuse an out-of-scope or
+            # forbidden action before it runs. No-op unless a scope is loaded.
+            # Checked after arg-fallbacks so the backfilled target is seen too.
+            decision = self.scope.check(
+                tool_name, tool_args,
+                fallback_target=self.chain.attack_state.target,
+            )
+            if not decision.allowed:
+                logger.warning("RoE refused %s: %s", tool_name, decision.reason)
+                self.context.add_tool_result(
+                    tool_call_id, tool_name,
+                    f"REFUSED by engagement scope: {decision.reason}.\n"
+                    "This action was NOT executed. Do not retry it — choose an "
+                    "in-scope target, or tell the operator the task is out of scope.",
+                )
+                await self.bus.emit(
+                    "agent.scope_refused",
+                    {"tool_name": tool_name, "reason": decision.reason,
+                     "args": tool_args, "session_id": session_id},
+                    source="controller", session_id=session_id,
+                )
+                continue
+
             # No-progress guard: an identical call already run this turn is not
             # re-dispatched. Hand back the prior result with a nudge to move on.
             sig = self._call_signature(tool_name, tool_args)
@@ -982,6 +1010,7 @@ class AgentController:
             enable_compaction=self.enable_compaction,
             enable_delegation=True,           # actually gated by depth
             delegation_depth=self.delegation_depth + 1,
+            scope=self.scope,                 # sub-agents stay in scope too
         )
         # Give the child the same tools (it registers no delegate of its own
         # once at max depth, so just skip copying that one).

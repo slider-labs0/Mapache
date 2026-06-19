@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
+from core.engagement_scope import EngagementScope
 from plugins.sdk.base_tool import Permission, ToolResult
 from tools.tool_registry import (
     PermissionDeniedError,
@@ -39,10 +40,18 @@ class ToolDispatcher:
         output = await dispatcher.dispatch("nmap_scan", {"host": "192.168.1.1"}, session_id)
     """
 
-    def __init__(self, registry: ToolRegistry) -> None:
+    def __init__(
+        self, registry: ToolRegistry, scope: Optional[EngagementScope] = None
+    ) -> None:
         self.registry = registry
+        # Rules-of-Engagement gate (feature J), defense-in-depth: the controller
+        # already gates the model's calls, but generated tools dispatch shell
+        # directly through here, bypassing that gate — so re-check at the choke
+        # point every tool actually flows through. Inactive scope → no-op.
+        self.scope = scope or EngagementScope()
         self._call_count: int = 0
         self._error_count: int = 0
+        self._refused_count: int = 0
 
     async def dispatch(
         self,
@@ -83,6 +92,18 @@ class ToolDispatcher:
             logger.warning("Permission denied: %s", exc)
             return f"Error: {exc}"
 
+        # 3b. Rules-of-Engagement scope (feature J). No attack-state target is
+        # available here (that's the controller's gate); this catches forbidden
+        # tools/patterns and any host named directly in the args.
+        decision = self.scope.check(tool_name, args)
+        if not decision.allowed:
+            self._refused_count += 1
+            logger.warning("RoE refused %s: %s", tool_name, decision.reason)
+            return (
+                f"REFUSED by engagement scope: {decision.reason}. "
+                "This action was NOT executed."
+            )
+
         # 4. Validate arguments
         try:
             validated_args = validate_args(tool_name, tool.parameters, args)
@@ -121,6 +142,10 @@ class ToolDispatcher:
     @property
     def error_count(self) -> int:
         return self._error_count
+
+    @property
+    def refused_count(self) -> int:
+        return self._refused_count
 
     @property
     def success_rate(self) -> float:

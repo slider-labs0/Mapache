@@ -22,6 +22,7 @@ from models.model_registry import (
     ModelRegistry, ModelRole, ModelProfile, ModelCapabilities, Provider,
 )
 from core.config import load_config
+from core.engagement_scope import load_scope
 from models.routing_engine import RoutingEngine, RoutingStrategy
 from models.model_pool import ModelPool
 from models.routed_model import RoutedModel
@@ -78,6 +79,7 @@ Commands:
   /memory search <q>     Search memory
   /memory targets        List stored targets
   /chain                 Show current attack state
+  /scope                 Show Rules-of-Engagement scope (in-scope targets)
   /history               Show conversation history
   /clear                 Clear history and reset attack state
   /context               Show project context
@@ -185,6 +187,7 @@ class MapacheCLI:
         self.routed: RoutedModel | None = None
         self.mcp: MCPManager | None = None
         self.gen_manager: GeneratedToolManager | None = None
+        self.scope = None  # EngagementScope, loaded in setup()
         self.memory = MemoryManager()
         self.confirm = args.confirm
         self.working_dir = os.path.abspath(args.dir)
@@ -248,6 +251,14 @@ class MapacheCLI:
         # Effective config (incl. provider entries + cloud keys/URLs) was resolved
         # in __init__ across the precedence chain; use the resolved attributes.
         allow_cloud = self.allow_cloud
+
+        # Rules-of-Engagement scope (feature J). Loaded from scope.json in the
+        # working dir (or --scope); inactive when absent, so behavior is
+        # unchanged until an operator defines limits. Mirrors mcp.json handling.
+        scope_path = self.args.scope
+        if not os.path.isabs(scope_path):
+            scope_path = os.path.join(self.working_dir, scope_path)
+        self.scope = load_scope(scope_path)
 
         # Provider-aware pool: builds Ollama or OpenAI-compatible per model id.
         pool = ModelPool(base_url=self.ollama_url, config=self.config)
@@ -343,7 +354,9 @@ class MapacheCLI:
             enable_tool_subsetting=not self.args.all_tools,
             enable_verifier=self.args.verify,
             verifier_caller=verifier_caller,
+            scope=self.scope,
         )
+        self._wire_scope_notifier()
 
         if not self.args.no_tools:
             self.registry = ToolRegistry(granted_permissions={
@@ -403,7 +416,7 @@ class MapacheCLI:
             # they're indistinguishable from built-ins to the model.
             await self._connect_mcp()
 
-            dispatcher = ToolDispatcher(self.registry)
+            dispatcher = ToolDispatcher(self.registry, scope=self.scope)
             self.controller.tool_dispatcher = dispatcher
             self.controller.executor.set_tool_dispatcher(dispatcher)
 
@@ -459,6 +472,22 @@ class MapacheCLI:
             print("\n  ⚠ OPSEC: cloud model(s) active — data will leave this machine:")
             for role, mid in cloud:
                 print(f"      {role:9s} → {mid}")
+
+    def _wire_scope_notifier(self) -> None:
+        """Print a visible line whenever the RoE gate refuses a call (feature J).
+
+        The refusal is also fed to the model as a tool result, but the operator
+        should see it live — it's the signal that the guardrail is doing its job.
+        """
+        if self.controller is None:
+            return
+
+        async def _on_refused(event) -> None:
+            data = event.data or {}
+            print(f"\n  ⛔ RoE: refused {data.get('tool_name')} — "
+                  f"{data.get('reason')}\n", flush=True)
+
+        self.controller.bus.subscribe("agent.scope_refused", _on_refused)
 
     async def _connect_mcp(self) -> None:
         """Load mcp.json, connect to each server, register its tools."""
@@ -530,8 +559,16 @@ class MapacheCLI:
         print(f"  ToolSubset: {'off (all tools)' if self.args.all_tools else 'on (phase-based)'}")
         print(f"  Memory   : {stats['notes']} notes, {stats['knowledge_entries']} facts")
 
+        if self.scope and self.scope.active:
+            print(f"  RoE      : ENFORCED — in-scope {self.scope.targets_summary()}")
+        else:
+            print(f"  RoE      : off (no scope.json)")
+
         if self.routed:
             print(f"\n{self.routed.explain()}")
+
+        if self.scope and self.scope.active:
+            print(f"\n{self.scope.summary()}")
 
         if self.registry:
             print(f"\n  Tools    : {len(self.registry.list_names())} registered")
@@ -720,6 +757,15 @@ class MapacheCLI:
                 if injection:
                     print(f"\n{injection}")
                 print()
+
+        elif command == "/scope":
+            if self.scope and self.scope.active:
+                print(f"\n{self.scope.summary()}\n")
+            else:
+                print("\n  RoE scope: off — no scope.json loaded. Create one in the "
+                      "working dir to\n  restrict targets/actions. Example:")
+                print('    {"name": "engagement", "targets": ["10.10.10.0/24"],')
+                print('     "forbidden_tools": ["msf_run"]}\n')
 
         elif command == "/models":
             if self.routed:
@@ -911,6 +957,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mcp-config", default="mcp.json",
                         help="Path to an mcp.json (Claude-Desktop-style) listing "
                              "MCP servers to connect to. Ignored if absent.")
+    parser.add_argument("--scope", default="scope.json",
+                        help="Path to a scope.json defining Rules-of-Engagement "
+                             "(in-scope targets, forbidden tools/patterns). "
+                             "Enforced in the dispatch path. Ignored if absent.")
     parser.add_argument("--confirm", action="store_true")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--log-dir", default=os.environ.get("MAPACHE_LOG_DIR"))
