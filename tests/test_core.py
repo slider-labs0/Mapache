@@ -1348,6 +1348,44 @@ async def test_controller_emits_tool_call_and_finding_events():
 
 
 # ------------------------------------------------------------------ #
+# Multi-agent blackboard (feature P, increment 1)
+# ------------------------------------------------------------------ #
+
+from core.conversation_chain import AttackState
+
+
+def test_shared_blackboard_semantics():
+    # A sub-agent shares the lead's AttackState by reference (no copy): findings
+    # are live immediately, and the sub-agent can't reset the shared engagement.
+    shared = AttackState(target="10.10.10.5", open_ports=["80/tcp"],
+                         current_phase="enumeration")
+    child = AgentController(model_provider=MockModel(), shared_state=shared,
+                            allow_state_reset=False)
+    assert child.chain.attack_state is shared  # same object, not a snapshot
+
+    child.chain.attack_state.add_flag("HTB{live}")
+    assert "HTB{live}" in shared.flags  # visible to the lead with no merge step
+
+    # The sub-agent's task wording must not hijack the target or wipe findings.
+    child.chain.apply_input_signals("now scan 9.9.9.9 and rescan everything")
+    assert shared.target == "10.10.10.5"
+    assert shared.open_ports == ["80/tcp"]
+    print("  PASS  shared_blackboard_semantics")
+
+
+def test_lead_state_reset_still_works():
+    # The lead (allow_state_reset=True, the default) still reassigns on a new IP
+    # and clears stale ports — the operator-facing behavior is unchanged.
+    chain = ConversationChain()
+    chain.attack_state.target = "10.0.0.1"
+    chain.attack_state.open_ports = ["22/tcp"]
+    chain.apply_input_signals("switch to 10.0.0.2")
+    assert chain.attack_state.target == "10.0.0.2"
+    assert chain.attack_state.open_ports == []
+    print("  PASS  lead_state_reset_still_works")
+
+
+# ------------------------------------------------------------------ #
 # Runner
 # ------------------------------------------------------------------ #
 
@@ -1422,6 +1460,10 @@ async def run_all():
     print("\nEngagement log (feature K)")
     await test_engagement_log_captures_and_exports()
     await test_controller_emits_tool_call_and_finding_events()
+
+    print("\nMulti-agent blackboard (feature P)")
+    test_shared_blackboard_semantics()
+    test_lead_state_reset_still_works()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()

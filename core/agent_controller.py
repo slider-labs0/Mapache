@@ -18,7 +18,7 @@ from typing import Any, AsyncIterator, Callable, Optional
 from uuid import uuid4
 
 from .context_builder import ContextBuilder, Message, ToolSchema
-from .conversation_chain import ConversationChain
+from .conversation_chain import AttackState, ConversationChain
 from .engagement_scope import EngagementScope
 from .event_bus import Event, EventBus
 from .executor import Executor
@@ -113,6 +113,9 @@ class AgentController:
         enable_delegation: bool = True,
         delegation_depth: int = 0,
         scope: Optional[EngagementScope] = None,
+        shared_state: Optional["AttackState"] = None,
+        allow_state_reset: bool = True,
+        bus: Optional[EventBus] = None,
     ) -> None:
         self.model = model_provider
         self.tool_dispatcher = tool_dispatcher
@@ -142,8 +145,10 @@ class AgentController:
         self.verify_max_retries = verify_max_retries
         self.verifier_caller = verifier_caller
 
-        # Core subsystems
-        self.bus = EventBus()
+        # Core subsystems. A shared bus may be injected (a delegated sub-agent
+        # reuses the lead's bus so its events reach the same engagement log).
+        self.bus = bus or EventBus()
+        self._owns_bus = bus is None
         self.context = ContextBuilder(
             system_prompt=system_prompt,
             max_context_tokens=max_context_tokens,
@@ -153,7 +158,9 @@ class AgentController:
         # `!cmd` shortcut and tool dispatch); it no longer drives a parallel
         # event-bus execution pipeline.
         self.executor = Executor(self.bus)
-        self.chain = ConversationChain()
+        self.chain = ConversationChain(
+            shared_state=shared_state, allow_state_reset=allow_state_reset
+        )
 
         # Wire subsystems
         self.executor.set_model_caller(self._call_model_raw)
@@ -185,7 +192,10 @@ class AgentController:
             ))
 
         self._sessions: dict[str, dict[str, Any]] = {}
-        self._register_handlers()
+        # Only the bus owner registers the shared error handler, so a shared bus
+        # doesn't accumulate a duplicate per delegated sub-agent.
+        if self._owns_bus:
+            self._register_handlers()
 
         # Mid-run steering inbox: a frontend (CLI, Telegram, Discord) can call
         # steer() while a turn is running to redirect it. Messages are drained
@@ -1045,6 +1055,14 @@ class AgentController:
             enable_delegation=True,           # actually gated by depth
             delegation_depth=self.delegation_depth + 1,
             scope=self.scope,                 # sub-agents stay in scope too
+            # Blackboard: the child shares the lead's AttackState by reference,
+            # so its findings are live in the lead's state — no merge-back. It
+            # may not reset/reassign the shared target from its task wording.
+            shared_state=self.chain.attack_state,
+            allow_state_reset=False,
+            # Share the event bus so the child's tool calls, findings, and RoE
+            # refusals land in the same engagement log (feature K) as the lead's.
+            bus=self.bus,
         )
         # Give the child the same tools (it registers no delegate of its own
         # once at max depth, so just skip copying that one).
@@ -1052,13 +1070,6 @@ class AgentController:
             if schema.name == DELEGATE_TOOL:
                 continue
             child.register_tool(schema)
-
-        # Seed the child with the live engagement context.
-        pst, cst = self.chain.attack_state, child.chain.attack_state
-        cst.target = pst.target
-        cst.open_ports = list(pst.open_ports)
-        cst.services = dict(pst.services)
-        cst.current_phase = pst.current_phase
 
         await child.start(inject_project_context=False)
         logger.info("Delegating subtask (depth=%d): %r", child.delegation_depth, task[:80])
@@ -1070,7 +1081,8 @@ class AgentController:
 
         result = await child.run(task, session_id=f"{session_id}:sub")
 
-        self._merge_subagent_state(child)
+        # No merge-back: the child shared the lead's AttackState by reference, so
+        # its findings are already live in the lead's state.
         await self.bus.emit(
             "agent.delegate.end",
             {"task": task[:200], "iterations": result.iterations, "session_id": session_id},
@@ -1081,20 +1093,6 @@ class AgentController:
         if result.error and not content:
             content = f"[subagent error: {result.error}]"
         return f"[subagent result]\n{content[:4000]}"
-
-    def _merge_subagent_state(self, child: "AgentController") -> None:
-        """Fold a finished sub-agent's findings back into the parent state."""
-        cst, pst = child.chain.attack_state, self.chain.attack_state
-        for flag in cst.flags:
-            pst.add_flag(flag)
-        for cred in cst.credentials:
-            pst.add_credential(cred)
-        for vuln in cst.vulnerabilities:
-            pst.add_vulnerability(vuln)
-        for port in cst.open_ports:
-            if port not in pst.open_ports:
-                pst.open_ports.append(port)
-        pst.services.update(cst.services)
 
     async def _dispatch_tool(
         self,

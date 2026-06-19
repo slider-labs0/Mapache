@@ -269,8 +269,20 @@ class ConversationChain:
         extra_context = chain.get_context_injection()
     """
 
-    def __init__(self, max_turn_summaries: int = 10) -> None:
-        self.attack_state = AttackState()
+    def __init__(
+        self,
+        max_turn_summaries: int = 10,
+        shared_state: Optional[AttackState] = None,
+        allow_state_reset: bool = True,
+    ) -> None:
+        # Multi-agent blackboard (feature P): when an operator sub-agent is given
+        # the lead's AttackState here, both reference the SAME object, so a
+        # finding one records is immediately visible to the lead and siblings —
+        # no copy-down / merge-back. `allow_state_reset` is False for sub-agents
+        # so their task text can't reassign the engagement target or clear the
+        # shared findings (only the lead, taking operator input, may do that).
+        self.attack_state = shared_state if shared_state is not None else AttackState()
+        self._allow_state_reset = allow_state_reset
         self._turn_summaries: list[TurnSummary] = []
         self._current_turn: Optional[TurnSummary] = None
         self._current_goal: str = ""
@@ -306,7 +318,7 @@ class ConversationChain:
             is_ip = bool(re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", target))
             if not self.attack_state.target:
                 self.attack_state.target = target
-            elif is_ip and target != self.attack_state.target:
+            elif self._allow_state_reset and is_ip and target != self.attack_state.target:
                 self.attack_state.target = target
                 self.attack_state.open_ports = []
                 self.attack_state.services = {}
@@ -315,13 +327,14 @@ class ConversationChain:
                 # New engagement — the old plan no longer applies.
                 self._todos = []
 
-        # Detect explicit rescan requests — clear cached data
+        # Detect explicit rescan requests — clear cached data. Lead-only: a
+        # sub-agent must not wipe the shared blackboard from its task wording.
         rescan_keywords = [
             "rescan", "scan again", "re-scan", "fresh scan",
             "new scan", "check again", "update scan", "perform a new",
             "do another scan", "run the scan again",
         ]
-        if any(kw in user_input.lower() for kw in rescan_keywords):
+        if self._allow_state_reset and any(kw in user_input.lower() for kw in rescan_keywords):
             self.attack_state.open_ports = []
             self.attack_state.services = {}
 
