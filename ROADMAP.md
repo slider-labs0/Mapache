@@ -391,10 +391,15 @@ Specialist sub-agents coordinated by a lead over a shared blackboard.
 - [x] **Surfacing** (3/3). `/operators` roster, `delegate` enum, attack-state
       `suggest_next_step` nudges the right specialist from open ports/services
       (`suggest_operators`). Tests: 4 in `tests/test_core.py`.
-- [ ] **Remaining:** true parallel fan-out (`asyncio.gather` over operators)
-      once cloud routing (G) carries the load — single-GPU stays sequential;
-      per-operator model routing (cheap-local recon vs stronger exploit, ties to
-      O); per-host sub-states for multi-host engagements.
+- [x] **Parallel fan-out** (`delegate_parallel`): runs several operators
+      concurrently (`asyncio.gather`) over the shared blackboard, capped at
+      `MAX_FANOUT`. A correctness win now (single-GPU serializes at the provider),
+      a wall-clock win once cloud routing (G) serves calls concurrently. Same-host
+      / multi-angle by design — children share one AttackState.
+- [ ] **Remaining:** per-host sub-states for true multi-host engagements (today
+      `delegate_parallel` is same-host; dispatch different hosts as separate
+      `delegate` calls); per-operator model routing (cheap-local recon vs stronger
+      exploit, ties to O).
 - Touchpoints: `core/agent_controller.py`, `core/conversation_chain.py`,
   `core/operators.py` (new), `core/engagement_log.py`, `cli/mapache_cli.py`.
 

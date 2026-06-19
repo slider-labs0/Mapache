@@ -262,6 +262,13 @@ moltbook_feed, moltbook_comment, moltbook_search
     constraints (read-only, RoE-gated, needs-hardware, deconflict-first) render
     into the prompt and reinforce the RoE gate. `/operators` lists the roster;
     `suggest_next_step` nudges the right specialist from open ports/services.
+  - **Parallel fan-out:** `delegate_parallel(tasks=[{task, operator}…])` runs
+    several operators concurrently (`asyncio.gather`, capped at `MAX_FANOUT`) over
+    the shared blackboard — several angles on the current host at once. A
+    correctness/orchestration win on a single GPU (model calls serialize at the
+    provider) that becomes a wall-clock win once cloud routing (G) serves them
+    concurrently. Same-host by design (children share one AttackState); per-host
+    sub-states for true multi-host parallel are the remaining P item.
 - **Mid-run steering** — a frontend can call `AgentController.steer(text)` (thread-
   safe) to redirect a turn already in progress. Queued messages are drained at
   the top of each loop iteration, injected as `[operator steering] …`, and run

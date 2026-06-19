@@ -34,8 +34,8 @@ CORE_TOOLS = {
     "shell",
     "file_read", "file_write", "file_edit", "file_list", "file_search",
     "memory_recall", "memory_save", "memory_target_store", "memory_target_get",
-    # Built-in sub-agent delegation tool — always available when registered.
-    "delegate",
+    # Built-in sub-agent delegation tools — always available when registered.
+    "delegate", "delegate_parallel",
     # Self-authored tool meta-tools — always available so the agent can author,
     # inspect, and retire its own tools regardless of attack phase.
     "create_tool", "tool_list_generated", "tool_delete",

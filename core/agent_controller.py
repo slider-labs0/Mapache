@@ -33,8 +33,9 @@ DANGEROUS_PATTERNS = [
     "delete from", ":(){:|:&};:", "mkfs", "dd if=",
 ]
 
-# Name of the built-in tool the model calls to spawn a focused sub-agent.
+# Names of the built-in tools the model calls to spawn focused sub-agents.
 DELEGATE_TOOL = "delegate"
+DELEGATE_PARALLEL_TOOL = "delegate_parallel"
 
 VERIFIER_SYSTEM_PROMPT = """You are a verification module for an offensive-security agent. \
 Given the user's goal and the agent's final response, decide whether the response actually \
@@ -94,6 +95,8 @@ class AgentController:
     # sub-agent cannot spawn its own sub-agents (no recursion bomb). Depth 0 is
     # the top-level agent; with this set to 1 only it can delegate.
     MAX_DELEGATION_DEPTH = 1
+    # Max concurrent operators a single delegate_parallel call may fan out to.
+    MAX_FANOUT = 6
 
     def __init__(
         self,
@@ -197,6 +200,34 @@ class AgentController:
                         },
                     },
                     "required": ["task"],
+                },
+            ))
+            self.context.register_tool(ToolSchema(
+                name=DELEGATE_PARALLEL_TOOL,
+                description=(
+                    "Run SEVERAL operator subtasks at once over the shared attack "
+                    "state — e.g. enumerate the web app and search for exploits on "
+                    "the same host concurrently. Each entry is {task, operator?}. "
+                    "Use only for independent angles on the CURRENT target; "
+                    "dispatch different hosts as separate delegate calls."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "tasks": {
+                            "type": "array",
+                            "description": "Independent subtasks to run concurrently.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "task": {"type": "string"},
+                                    "operator": {"type": "string", "enum": operator_names()},
+                                },
+                                "required": ["task"],
+                            },
+                        },
+                    },
+                    "required": ["tasks"],
                 },
             ))
 
@@ -1050,8 +1081,56 @@ class AgentController:
         task = (args.get("task") or args.get("goal") or "").strip()
         if not task:
             return "[delegate] No task provided."
+        return await self._spawn_and_run(task, args.get("operator"), session_id, "sub")
 
-        operator = get_operator(args.get("operator"))
+    async def _run_parallel_subagents(self, args: dict[str, Any], session_id: str) -> str:
+        """
+        Run several operator subtasks concurrently over the shared blackboard
+        (feature P). Each child references the lead's AttackState, so findings
+        from all of them accumulate live in one place.
+
+        On a single GPU the model calls serialize at the provider, so this is a
+        correctness/orchestration win that turns into a wall-clock win once cloud
+        routing (G) serves the calls concurrently. Fan-out is capped, and these
+        children are at delegation depth 1 so none can fan out further.
+
+        NOTE: the children share ONE AttackState, so this is intended for several
+        angles on the *current* target/host. Cross-host isolation (a per-host
+        sub-state) is the remaining P item; until then, dispatch different hosts
+        in separate sequential `delegate` calls.
+        """
+        raw_tasks = args.get("tasks") or []
+        tasks: list[tuple[str, Optional[str]]] = []
+        for item in raw_tasks:
+            if isinstance(item, dict):
+                t = (item.get("task") or item.get("goal") or "").strip()
+                if t:
+                    tasks.append((t, item.get("operator")))
+            elif isinstance(item, str) and item.strip():
+                tasks.append((item.strip(), None))
+        if not tasks:
+            return "[delegate_parallel] No tasks provided."
+        if len(tasks) > self.MAX_FANOUT:
+            logger.info("delegate_parallel: capping %d tasks to %d",
+                        len(tasks), self.MAX_FANOUT)
+            tasks = tasks[: self.MAX_FANOUT]
+
+        results = await asyncio.gather(*(
+            self._spawn_and_run(t, op, session_id, f"par{i}")
+            for i, (t, op) in enumerate(tasks)
+        ))
+        joined = "\n\n".join(
+            f"[{op or 'generalist'}] {t}\n{res}"
+            for (t, op), res in zip(tasks, results)
+        )
+        return f"[delegate_parallel — {len(tasks)} operators]\n\n{joined}"
+
+    async def _spawn_and_run(
+        self, task: str, operator_name: Optional[str], session_id: str, suffix: str,
+    ) -> str:
+        """Build one specialized (or generalist) child, run the task, return its
+        conclusion. Shared by single and parallel delegation."""
+        operator = get_operator(operator_name)
         # An operator's toolset is already small and curated, so phase-based
         # subsetting (which keys off the shared phase) is turned off for it.
         child = AgentController(
@@ -1081,9 +1160,9 @@ class AgentController:
         )
         # Give the child its tools: an operator gets only its curated subset
         # (intersected with what's registered); a generalist gets everything.
-        # The delegate tool itself is never copied (a sub-agent can't re-delegate).
+        # The delegation tools are never copied (a sub-agent can't re-delegate).
         for schema in self.context._tools.values():
-            if schema.name == DELEGATE_TOOL:
+            if schema.name in (DELEGATE_TOOL, DELEGATE_PARALLEL_TOOL):
                 continue
             if operator is not None and schema.name not in operator.tools:
                 continue
@@ -1100,13 +1179,14 @@ class AgentController:
             source="controller", session_id=session_id,
         )
 
-        result = await child.run(task, session_id=f"{session_id}:sub")
+        result = await child.run(task, session_id=f"{session_id}:{suffix}")
 
         # No merge-back: the child shared the lead's AttackState by reference, so
         # its findings are already live in the lead's state.
         await self.bus.emit(
             "agent.delegate.end",
-            {"task": task[:200], "iterations": result.iterations, "session_id": session_id},
+            {"task": task[:200], "operator": op_label,
+             "iterations": result.iterations, "session_id": session_id},
             source="controller", session_id=session_id,
         )
 
@@ -1123,9 +1203,11 @@ class AgentController:
         session_id: str,
     ) -> ToolCallResult:
         # Built-in delegation: handled by the controller, not the dispatcher.
-        if tool_name == DELEGATE_TOOL:
+        if tool_name in (DELEGATE_TOOL, DELEGATE_PARALLEL_TOOL):
+            runner = (self._run_parallel_subagents
+                      if tool_name == DELEGATE_PARALLEL_TOOL else self._run_subagent)
             try:
-                output = await self._run_subagent(tool_args, session_id)
+                output = await runner(tool_args, session_id)
                 return ToolCallResult(
                     tool_name=tool_name, tool_call_id=tool_call_id, output=output,
                 )

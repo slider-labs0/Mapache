@@ -1453,6 +1453,47 @@ async def test_delegate_operator_dispatch():
     print("  PASS  delegate_operator_dispatch")
 
 
+async def test_delegate_parallel_fans_out():
+    # delegate_parallel runs several operators concurrently over the shared
+    # blackboard; both children dispatch and the lead gets a combined result.
+    class Dispatcher:
+        async def dispatch(self, name, args, session_id):
+            return "ok"
+
+    class DelegModel:
+        supports_tools = False
+
+        async def chat(self, messages, tools=None, json_mode=False, stream=False):
+            joined = " ".join(m.get("content", "") for m in messages)
+            if "Web Operator" in joined:                       # web child
+                return json.dumps({"type": "response", "content": "web done"})
+            if "Exploit Operator" in joined:                   # exploit child
+                return json.dumps({"type": "response", "content": "exploit done"})
+            if "delegate_parallel —" in joined or "subagent result" in joined:
+                return json.dumps({"type": "response", "content": "all done"})  # lead, after
+            return json.dumps({"type": "tool_call", "tool": "delegate_parallel", "args": {
+                "tasks": [{"task": "enumerate web", "operator": "web_operator"},
+                          {"task": "find exploits", "operator": "exploit_operator"}]}})
+
+    controller = AgentController(model_provider=DelegModel(), tool_dispatcher=Dispatcher(),
+                                 mode=AgentMode.AGENT, use_function_calling=False)
+    controller.register_tool(ToolSchema(name="kali_run", description="run",
+        parameters={"type": "object", "properties": {"tool": {"type": "string"}}}))
+
+    started: list[str] = []
+
+    async def cap(e):
+        started.append(e.data.get("operator"))
+    controller.bus.subscribe("agent.delegate.start", cap)
+    await controller.start()
+
+    resp = await controller.run("assess the host", session_id="par-test")
+    assert "delegate_parallel" in resp.tool_calls_made
+    assert set(started) == {"web_operator", "exploit_operator"}  # both fanned out
+    assert resp.content == "all done"
+    print("  PASS  delegate_parallel_fans_out")
+
+
 # ------------------------------------------------------------------ #
 # Runner
 # ------------------------------------------------------------------ #
@@ -1534,6 +1575,7 @@ async def run_all():
     test_lead_state_reset_still_works()
     test_operator_roster()
     await test_delegate_operator_dispatch()
+    await test_delegate_parallel_fans_out()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()
