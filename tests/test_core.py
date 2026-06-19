@@ -1495,6 +1495,58 @@ async def test_delegate_parallel_fans_out():
 
 
 # ------------------------------------------------------------------ #
+# Automated reporting (feature L)
+# ------------------------------------------------------------------ #
+
+from reporting import build_report
+
+
+def test_report_builder():
+    st = AttackState(
+        target="10.10.10.5", open_ports=["23/tcp", "445/tcp"],
+        services={"23": "telnet", "445": "microsoft-ds"},
+        vulnerabilities=["CVE-2017-0144"], credentials=["admin:password123"],
+        flags=["HTB{rooted}"], current_phase="post")
+    records = [
+        {"ts": "t1", "kind": "finding", "finding_type": "vulnerability",
+         "value": "CVE-2017-0144"},
+        {"ts": "t2", "kind": "tool_call", "tool": "nmap_scan", "ok": True},
+        {"ts": "t3", "kind": "scope_refused", "tool": "msf_run", "reason": "out of scope"},
+    ]
+    report = build_report(st, records, {"Model": "qwen"})
+
+    # Findings span vuln, credential, notable services, and the flag.
+    types = {f.finding_type for f in report.findings}
+    assert {"vulnerability", "credential", "service", "flag"} <= types
+    # Service rules fired (telnet + SMB are High); severity tally is populated.
+    assert report.severity_counts()["High"] >= 3
+    # First-seen timestamp wired from the engagement-log records.
+    vuln = next(f for f in report.findings if f.finding_type == "vulnerability")
+    assert vuln.discovered == "t1"
+    # Markdown deliverable has the sections, evidence, remediation, and timeline.
+    md = report.to_markdown()
+    for needle in ("# Penetration Test Report", "Executive summary", "Findings",
+                   "Remediation", "CVE-2017-0144", "Methodology"):
+        assert needle in md, needle
+    # Self-contained HTML.
+    doc = report.to_html()
+    assert doc.startswith("<!doctype html>") and "Findings" in doc
+    print("  PASS  report_builder")
+
+
+def test_report_redaction_and_empty():
+    # Redaction masks the secret half of a credential everywhere it renders.
+    st = AttackState(target="x", credentials=["root:hunter2"])
+    r = build_report(st, [], {}, redact_secrets=True)
+    cred = next(f for f in r.findings if f.finding_type == "credential")
+    assert cred.evidence == "root:****" and "hunter2" not in r.to_markdown()
+    # An empty engagement still produces a graceful, finding-free report.
+    empty = build_report(AttackState(), [], {})
+    assert empty.findings == [] and "no findings" in empty.to_markdown().lower()
+    print("  PASS  report_redaction_and_empty")
+
+
+# ------------------------------------------------------------------ #
 # Runner
 # ------------------------------------------------------------------ #
 
@@ -1576,6 +1628,10 @@ async def run_all():
     test_operator_roster()
     await test_delegate_operator_dispatch()
     await test_delegate_parallel_fans_out()
+
+    print("\nAutomated reporting (feature L)")
+    test_report_builder()
+    test_report_redaction_and_empty()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()

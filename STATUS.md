@@ -353,6 +353,17 @@ moltbook_feed, moltbook_comment, moltbook_search
   (writes to `engagements/`, gitignored; `--no-engagement-log` to disable);
   `export_markdown()` renders a findings list + timeline (the seed for reporting,
   L). CLI: startup path, exit summary, `/log` and `/log export`.
+- **Automated reporting (feature L)** — `reporting/report_builder.py` turns the
+  engagement log (K) records + the attack-state blackboard into a structured
+  pentest report: findings for vulns, captured credentials, notable exposed
+  services (telnet/SMB/RDP/Redis/…), and flags, each with a severity and concrete
+  remediation; first-seen timestamps from the log; an executive-summary severity
+  tally; a methodology timeline; a tool-activity appendix. **Deterministic and
+  offline** — no LLM call, so it is reproducible, testable, and never sends
+  findings to a third party (the local-first OPSEC story holds end to end). An
+  LLM narrative pass and precise CVSS scoring (feature M) are layered
+  enhancements. Markdown + self-contained HTML export (PDF = print the HTML);
+  optional secret redaction. CLI: `/report [md|html|both]` → `engagements/`.
 - **Attack system prompt** — explicit intent→tool mapping table and a default
   recon → enumerate → exploit → post → report workflow that blocks exploitation
   before a scan returns open ports.

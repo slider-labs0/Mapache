@@ -332,14 +332,25 @@ A structured, timestamped, exportable trail of everything the agent did.
 - Touchpoints: `core/engagement_log.py` (new), `core/agent_controller.py`
   (`task.result` args + `agent.finding`), `cli/mapache_cli.py`, `.gitignore`.
 
-## L. Automated reporting / deliverables  ⬜
+## L. Automated reporting / deliverables  ✅  ← shipped 2026-06-19
 Turn the `reporting` phase into an actual pentest report.
 
-- [ ] Generate a structured report (findings, severity, evidence, remediation,
-      timeline) from the engagement log (K) + attack-state.
-- [ ] Markdown/HTML/PDF export; this is the artifact clients pay for — Hermes
-      gives you a chat history, Mapache gives you a deliverable.
-- Touchpoints: new `reporting/`, consumes K + `ConversationChain`.
+- [x] `reporting/report_builder.py` (`build_report`, `EngagementReport`,
+      `Finding`): structured report from the engagement log (K) records + the
+      attack-state blackboard. Findings for vulns, captured credentials, notable
+      exposed services (telnet/SMB/RDP/Redis/…), and flags, each with a severity
+      and concrete remediation; first-seen timestamps wired from the log;
+      executive-summary severity tally; methodology timeline; tool-activity
+      appendix.
+- [x] **Deterministic + offline** — no LLM call, so it is reproducible, testable,
+      and never sends findings to a third party (local-first OPSEC holds end to
+      end). An LLM narrative pass and precise CVSS scoring (via M) are layered
+      enhancements, not prerequisites.
+- [x] Markdown + self-contained HTML export (PDF = print the HTML; a weasyprint
+      backend can drop in later, kept dependency-free). Optional secret redaction.
+      CLI `/report [md|html|both]` writes to `engagements/`. Tests: 2.
+- Touchpoints: `reporting/` (new), `cli/mapache_cli.py`; consumes K records +
+  `AttackState`.
 
 ## M. Exploit / CVE grounding  ⬜
 Recon → prioritized attack plan, not just raw scan output.

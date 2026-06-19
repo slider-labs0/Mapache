@@ -83,7 +83,8 @@ Commands:
   /operators             List specialist sub-agents (delegation roster)
   /scope                 Show Rules-of-Engagement scope (in-scope targets)
   /log                   Show engagement-log summary
-  /log export            Write a Markdown engagement report
+  /log export            Write a Markdown engagement-log timeline
+  /report [md|html|both] Generate a structured pentest report (findings/severity)
   /history               Show conversation history
   /clear                 Clear history and reset attack state
   /context               Show project context
@@ -760,6 +761,45 @@ class MapacheCLI:
                 print(f"    kept '{name}'.")
         print()
 
+    async def _generate_report(self, fmt: str) -> None:
+        """Build a structured engagement report (feature L) from the blackboard +
+        engagement-log records and write Markdown / HTML under engagements/."""
+        if self.controller is None:
+            return
+        import datetime as _dt
+        from reporting import build_report
+
+        records = self.engagement_log.records if self.engagement_log else []
+        meta = {
+            "Model": self.model,
+            "Scope": self.scope.name if (self.scope and self.scope.active) else "none",
+            "RoE enforced": bool(self.scope and self.scope.active),
+            "Session": self.session_id,
+        }
+        report = build_report(self.controller.chain.attack_state, records, meta)
+
+        stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+        out_dir = os.path.join(self.working_dir, "engagements")
+        os.makedirs(out_dir, exist_ok=True)
+        written: list[str] = []
+        if fmt in ("md", "markdown", "both"):
+            path = os.path.join(out_dir, f"report-{stamp}.md")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(report.to_markdown())
+            written.append(path)
+        if fmt in ("html", "both"):
+            path = os.path.join(out_dir, f"report-{stamp}.html")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(report.to_html())
+            written.append(path)
+
+        counts = report.severity_counts()
+        sev = ", ".join(f"{n} {s.lower()}" for s, n in counts.items() if n) or "no findings"
+        print(f"\n  Report ({len(report.findings)} findings — {sev}):")
+        for path in written:
+            print(f"    {path}")
+        print()
+
     async def _run_shell_direct(self, cmd: str) -> None:
         if self.controller is None:
             return
@@ -802,6 +842,9 @@ class MapacheCLI:
                 for kind, n in sorted(counts.items()):
                     print(f"    {kind:16s} {n}")
                 print("  /log export  → write a Markdown timeline\n")
+
+        elif command == "/report":
+            await self._generate_report(parts[1].lower() if len(parts) > 1 else "both")
 
         elif command == "/operators":
             from core.operators import roster_summary
