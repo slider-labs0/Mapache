@@ -343,3 +343,42 @@ def load_config(
     merged["_sources"] = sources
 
     return MapacheConfig.from_dict(merged)
+
+
+# --------------------------------------------------------------------------- #
+# Writing (the setup wizard, C1)
+# --------------------------------------------------------------------------- #
+
+
+def load_global_raw(
+    path: Optional[Path] = None, *, environ: Optional[dict[str, str]] = None
+) -> dict[str, Any]:
+    """Read the global config file verbatim — no merge, no `${VAR}` resolution.
+
+    The wizard edits this raw dict so that secrets kept as `${ENV}` placeholders
+    (or values supplied only by the environment) are preserved on save rather
+    than baked into the file as literals.
+    """
+    gpath = path if path is not None else global_config_path(environ)
+    return _load_json_file(Path(gpath))
+
+
+def save_global_config(
+    data: dict[str, Any],
+    path: Optional[Path] = None,
+    *,
+    environ: Optional[dict[str, str]] = None,
+) -> Path:
+    """Write the global config JSON, creating `~/.mapache/` if needed.
+
+    Best-effort tightens permissions to 0600 (a no-op on Windows) since this
+    file may hold plaintext secrets.
+    """
+    gpath = Path(path if path is not None else global_config_path(environ))
+    gpath.parent.mkdir(parents=True, exist_ok=True)
+    gpath.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    try:
+        os.chmod(gpath, 0o600)
+    except OSError:
+        pass
+    return gpath

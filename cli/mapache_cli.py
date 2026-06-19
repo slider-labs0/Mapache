@@ -185,10 +185,21 @@ class MapacheCLI:
         self.routed: RoutedModel | None = None
         self.mcp: MCPManager | None = None
         self.gen_manager: GeneratedToolManager | None = None
-        self.config = None  # MapacheConfig, loaded in setup()
         self.memory = MemoryManager()
         self.confirm = args.confirm
         self.working_dir = os.path.abspath(args.dir)
+
+        # Config layer (C0/C1). Resolve the effective settings across the full
+        # precedence chain — CLI flag > project > global > env > default — by
+        # handing load_config ONLY the flags the operator explicitly passed
+        # (sparse overrides). This is what makes `mapache setup`'s saved
+        # default_model / strategy / allow_cloud actually take effect on a bare
+        # `python -m cli` launch; an explicit flag still wins over the file.
+        self.config = load_config(self._cli_overrides(args), working_dir=self.working_dir)
+        self.model = self.config.default_model
+        self.ollama_url = self.config.ollama_url
+        self.max_vram = self.config.max_vram_gb
+        self.allow_cloud = self.config.allow_cloud
 
         # Single stdin reader → async queue. One consumer at a time: the REPL
         # when idle, or the steering loop while a turn runs. Lets the operator
@@ -203,49 +214,75 @@ class MapacheCLI:
             "auto":     RoutingStrategy.AUTO,
             "hybrid":   RoutingStrategy.HYBRID,
         }
-        self.strategy = strategy_map.get(args.strategy.lower(), RoutingStrategy.AUTO)
+        self.strategy = strategy_map.get(self.config.default_strategy.lower(),
+                                         RoutingStrategy.AUTO)
+
+    @staticmethod
+    def _cli_overrides(args: argparse.Namespace) -> dict:
+        """Build the sparse top-precedence override layer from explicit flags.
+
+        Only keys the operator actually set on the command line appear, so unset
+        flags fall through to the project/global/env/default layers rather than
+        clobbering them. The config-backed flags default to None in parse_args()
+        precisely so "not passed" is distinguishable here.
+        """
+        ov: dict = {}
+        if args.model is not None:
+            ov["default_model"] = args.model
+        if args.strategy is not None:
+            ov["default_strategy"] = args.strategy
+        if args.ollama_url is not None:
+            ov["providers"] = {"ollama": {"base_url": args.ollama_url}}
+        if args.max_vram is not None:
+            try:
+                ov["max_vram_gb"] = float(args.max_vram)
+            except ValueError:
+                pass
+        # --allow-cloud is an on-switch only: passing it forces cloud on, but
+        # omitting it must not turn off a config that enabled cloud.
+        if args.allow_cloud:
+            ov["allow_cloud"] = True
+        return ov
 
     async def setup(self) -> bool:
-        # Config layer (C0): provider entries (incl. cloud keys/URLs) + defaults.
-        # CLI flags still drive the primary model/strategy; config supplies the
-        # cloud providers the router can reach.
-        self.config = load_config(working_dir=self.working_dir)
-        allow_cloud = self.args.allow_cloud or self.config.allow_cloud
+        # Effective config (incl. provider entries + cloud keys/URLs) was resolved
+        # in __init__ across the precedence chain; use the resolved attributes.
+        allow_cloud = self.allow_cloud
 
         # Provider-aware pool: builds Ollama or OpenAI-compatible per model id.
-        pool = ModelPool(base_url=self.args.ollama_url, config=self.config)
-        primary_prov = self.config.provider_for_model(self.args.model)
+        pool = ModelPool(base_url=self.ollama_url, config=self.config)
+        primary_prov = self.config.provider_for_model(self.model)
         primary_is_cloud = primary_prov is not None and primary_prov.is_cloud
 
         if primary_is_cloud:
             if not allow_cloud:
-                print(f"\n  ✗  '{self.args.model}' is a cloud model "
+                print(f"\n  ✗  '{self.model}' is a cloud model "
                       f"({primary_prov.name}); re-run with --allow-cloud.\n")
                 return False
             if not primary_prov.is_usable:
                 print(f"\n  ✗  Cloud provider '{primary_prov.name}' has no API key.")
                 print(f"     Set it in ~/.mapache/config.json or its env var.\n")
                 return False
-            primary = pool.get(self.args.model)  # OpenAICompatibleProvider
-            available = self.config.cloud_models() or [self.args.model]
+            primary = pool.get(self.model)  # OpenAICompatibleProvider
+            available = self.config.cloud_models() or [self.model]
         else:
-            primary = OllamaProvider(model=self.args.model, base_url=self.args.ollama_url)
-            pool.register(self.args.model, primary)  # reuse the built client
+            primary = OllamaProvider(model=self.model, base_url=self.ollama_url)
+            pool.register(self.model, primary)  # reuse the built client
             if not await primary.is_available():
-                print(f"\n  ✗  Cannot reach Ollama at {self.args.ollama_url}")
+                print(f"\n  ✗  Cannot reach Ollama at {self.ollama_url}")
                 print(f"     Run: ollama serve\n")
                 return False
             local_models = await primary.list_models()
-            model_base = self.args.model.split(":")[0]
+            model_base = self.model.split(":")[0]
             if local_models and not any(model_base in m for m in local_models):
-                print(f"\n  ⚠  Model '{self.args.model}' not found.")
+                print(f"\n  ⚠  Model '{self.model}' not found.")
                 pull = input(f"     Pull it now? [y/N] ").strip().lower()
                 if pull == "y":
-                    await primary.pull_model(self.args.model)
+                    await primary.pull_model(self.model)
                 else:
                     return False
             # Local models + any usable cloud models the router may also pick.
-            available = (local_models or [self.args.model]) + self.config.cloud_models()
+            available = (local_models or [self.model]) + self.config.cloud_models()
 
         mode = AgentMode.CHAT if self.args.no_tools else AgentMode.AGENT
 
@@ -274,17 +311,17 @@ class MapacheCLI:
         routing = RoutingEngine(
             registry,
             strategy=self.strategy,
-            primary_model_id=self.args.model,
+            primary_model_id=self.model,
             local_only=not allow_cloud,
-            max_vram_gb=float(self.args.max_vram),
+            max_vram_gb=float(self.max_vram),
         )
-        routing.set_available_models(available or [self.args.model])
+        routing.set_available_models(available or [self.model])
 
         def _opsec_warn(model_id: str) -> None:
             print(f"\n  ⚠ OPSEC: routing to CLOUD model '{model_id}' — target/scan/"
                   f"cred context is leaving this machine.\n", flush=True)
 
-        self.routed = RoutedModel(routing, pool, primary_model_id=self.args.model,
+        self.routed = RoutedModel(routing, pool, primary_model_id=self.model,
                                   on_cloud_call=_opsec_warn)
         self._warn_cloud_roles(registry)  # startup banner if a role is cloud
 
@@ -485,7 +522,7 @@ class MapacheCLI:
         stats = self.memory.stats()
 
         print(BANNER)
-        print(f"  Model    : {self.args.model}")
+        print(f"  Model    : {self.model}")
         print(f"  Strategy : {self.strategy.value}")
         print(f"  Dir      : {self.working_dir}")
         print(f"  Confirm  : {'on' if self.confirm else 'off'}")
@@ -695,7 +732,7 @@ class MapacheCLI:
                         print(f"    {model_id:30s} {n}")
                 print()
             else:
-                print(f"\n  Active model : {self.args.model}\n")
+                print(f"\n  Active model : {self.model}\n")
 
         elif command == "/pipeline":
             if len(parts) > 1 and self.routed:
@@ -837,18 +874,28 @@ class MapacheCLI:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Mapache — Offensive security AI agent")
-    parser.add_argument("--model", "-m",
-                        default=os.environ.get("MAPACHE_MODEL", "deepseek-coder:33b"))
-    parser.add_argument("--ollama-url",
-                        default=os.environ.get("OLLAMA_URL", "http://localhost:11434"))
+    parser = argparse.ArgumentParser(
+        description="Mapache — Offensive security AI agent",
+        epilog="Subcommands: `mapache setup` (interactive config), "
+               "`mapache config show|path` (inspect config). "
+               "With no subcommand, launches the agent REPL.")
+    # Config-backed flags default to None so MapacheCLI._cli_overrides can tell
+    # "explicitly passed" from "unset". When unset they fall through to the
+    # project/global/env/default layers (env vars like MAPACHE_MODEL / OLLAMA_URL
+    # are handled by the config env layer, not baked in here as argparse
+    # defaults — that keeps the precedence CLI > project > global > env right).
+    parser.add_argument("--model", "-m", default=None,
+                        help="Primary model id (default: from config / "
+                             "MAPACHE_MODEL env / built-in default)")
+    parser.add_argument("--ollama-url", default=None)
     parser.add_argument("--dir", "-d", default=os.getcwd())
-    parser.add_argument("--strategy", default="single",
+    parser.add_argument("--strategy", default=None,
                         choices=["single", "pipeline", "auto", "hybrid"],
-                        help="single (default): always use --model. "
+                        help="single: always use --model. "
                              "auto/pipeline/hybrid: route per role across "
-                             "installed models (may pick a model other than --model)")
-    parser.add_argument("--max-vram", default="12")
+                             "installed models (may pick a model other than "
+                             "--model). Default: from config (single).")
+    parser.add_argument("--max-vram", default=None)
     parser.add_argument("--allow-cloud", action="store_true")
     parser.add_argument("--verify", action="store_true",
                         help="Enable the opt-in verifier: after a final answer, a "
@@ -871,6 +918,19 @@ def parse_args() -> argparse.Namespace:
 
 
 async def main() -> None:
+    # Subcommand layer (C1). `setup` and `config` are dispatched before the
+    # REPL's flag parser so the bare `python -m cli [--flags]` invocation keeps
+    # launching the agent exactly as before.
+    argv = sys.argv[1:]
+    if argv and argv[0] == "setup":
+        from cli.setup_wizard import run_setup
+        setup_logging(level="WARNING")  # keep the wizard's prompts uncluttered
+        sys.exit(await run_setup(argv[1:]))
+    if argv and argv[0] == "config":
+        from cli.setup_wizard import run_config_cmd
+        setup_logging(level="WARNING")
+        sys.exit(await run_config_cmd(argv[1:]))
+
     args = parse_args()
     setup_logging(level="DEBUG" if args.debug else "INFO", log_dir=args.log_dir)
     cli = MapacheCLI(args)

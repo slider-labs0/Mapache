@@ -131,7 +131,7 @@ Upgrade `cli/mapache_cli.py` from line-printing to a real TUI surface.
 - [ ] Keep a `--plain` fallback for piping / dumb terminals.
 - Touchpoints: `cli/mapache_cli.py`, `core/logger.py`.
 
-## C. Setup wizard + config layer  ⬜  ← building next (with G)
+## C. Setup wizard + config layer  ✅  ← shipped (C0 2026-06-10, C1 2026-06-15)
 The config layer is the shared foundation C and G both stand on. Today there is
 **no config file** — settings come from argparse + a few `os.environ` reads. MCP's
 `load_mcp_config(mcp.json)` is the precedent to mirror.
@@ -161,15 +161,26 @@ The config layer is the shared foundation C and G both stand on. Today there is
 - [ ] CLI consumes `MapacheConfig` (replace scattered `args.*`) and `mapache config
       show` — lands with the C1 subcommand layer / G bootstrap, not standalone.
 
-**C1 — wizard (`cli/setup_wizard.py`, `mapache setup`):**
-- [ ] Detect/validate Ollama, offer to pull a default model; check optional bins
-      (nmap, msfconsole, john, tor) and report what's missing.
-- [ ] Prompt for provider API keys (OpenRouter, Nous — G) and Telegram/Discord
-      tokens; write them to `~/.mapache/config.json`.
-- [ ] Smoke-test one turn against the chosen default model; idempotent re-run that
-      reports what's already configured.
-- Touchpoints: new `core/config.py`, `cli/setup_wizard.py`, `cli/mapache_cli.py`
-  (consume config), `cli/__main__` / entry for the `setup` subcommand.
+**C1 — wizard (`cli/setup_wizard.py`, `mapache setup`):**  ✅ shipped 2026-06-15
+- [x] Detect/validate Ollama, offer to pull a default model; check optional bins
+      (nmap, msfconsole, john, tor, …) and report what's missing.
+- [x] Prompt for provider API keys (OpenRouter, Nous — G) + exposed model ids and
+      Telegram/Discord tokens; write them to `~/.mapache/config.json`.
+- [x] Smoke-test one turn against the chosen default model; idempotent re-run that
+      shows each current value as the default and preserves secrets on Enter.
+- [x] Subcommand layer in `cli/mapache_cli.main()`: `setup` + `config show|path`
+      dispatched before the REPL flag parser (bare `python -m cli` unchanged).
+      Config writers `load_global_raw`/`save_global_config` (raw-edit so `${ENV}`
+      placeholders survive; 0600 perms).
+- [x] **REPL consumes `MapacheConfig`.** `MapacheCLI.__init__` resolves
+      model/strategy/ollama_url/max_vram/allow_cloud through `load_config` with a
+      sparse `_cli_overrides` layer, so a wizard-saved `default_model` takes
+      effect on a bare `python -m cli` launch while an explicit flag still wins.
+      Config-backed flags default to `None` (env vars now flow through the config
+      env layer, fixing precedence to CLI > project > global > env). Tests: 4 in
+      `tests/test_core.py`.
+- Touchpoints: `core/config.py` (writers), `cli/setup_wizard.py`,
+  `cli/mapache_cli.py` (subcommand dispatch + config-driven REPL).
 
 ## D. Update manager  ⬜
 Keep an installed Mapache current.

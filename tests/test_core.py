@@ -983,6 +983,118 @@ def test_config_global_path_resolution():
 
 
 # ------------------------------------------------------------------ #
+# Setup wizard (feature C1)
+# ------------------------------------------------------------------ #
+
+from core.config import load_global_raw, save_global_config
+
+
+def test_config_save_and_raw_roundtrip():
+    with tempfile.TemporaryDirectory() as tmp:
+        gpath = _CfgPath(tmp) / "config.json"
+        assert load_global_raw(gpath) == {}  # missing file → empty, fail-soft
+
+        data = {"default_model": "qwen2.5:32b",
+                "providers": {"openrouter": {"api_key": "${OPENROUTER_API_KEY}",
+                                             "models": ["a/b"], "enabled": True}}}
+        out = save_global_config(data, gpath)
+        assert out == gpath and gpath.is_file()
+        # Raw read is verbatim — the ${VAR} placeholder is preserved, not resolved.
+        raw = load_global_raw(gpath)
+        assert raw["providers"]["openrouter"]["api_key"] == "${OPENROUTER_API_KEY}"
+
+        # And load_config layers it normally (interpolates against the env).
+        cfg = load_config(working_dir=tmp, environ={"OPENROUTER_API_KEY": "sk-zzzz"},
+                          global_path=gpath)
+        assert cfg.default_model == "qwen2.5:32b"
+        assert cfg.providers["openrouter"].api_key == "sk-zzzz"
+    print("  PASS  config_save_and_raw_roundtrip")
+
+
+def test_wizard_prefs_edit_raw():
+    # _step_prefs mutates the raw dict from typed input; empty input keeps current.
+    import builtins
+    from cli import setup_wizard
+
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg = load_config(working_dir=tmp, environ={},
+                          global_path=_CfgPath(tmp) / "none.json")
+        raw: dict = {}
+        answers = iter(["qwen2.5:32b", "", "16"])  # model, keep strategy, vram
+        orig_input = builtins.input
+        builtins.input = lambda *a, **k: next(answers)
+        try:
+            model = setup_wizard._step_prefs(cfg, raw)
+        finally:
+            builtins.input = orig_input
+
+        assert model == "qwen2.5:32b"
+        assert raw["default_model"] == "qwen2.5:32b"
+        assert raw["default_strategy"] == cfg.default_strategy  # kept on empty
+        assert raw["max_vram_gb"] == 16.0
+    print("  PASS  wizard_prefs_edit_raw")
+
+
+def test_wizard_secret_prompt_preserves_on_empty():
+    # Empty input → (current, changed=False) so a ${ENV} placeholder is untouched.
+    import builtins
+    from cli import setup_wizard
+
+    orig_input = builtins.input
+    builtins.input = lambda *a, **k: ""        # operator hits Enter
+    try:
+        val, changed = setup_wizard._prompt_secret("key", "${OPENROUTER_API_KEY}")
+    finally:
+        builtins.input = orig_input
+    assert val == "${OPENROUTER_API_KEY}" and changed is False
+
+    builtins.input = lambda *a, **k: "sk-new"  # operator types a new key
+    try:
+        val2, changed2 = setup_wizard._prompt_secret("key", "old")
+    finally:
+        builtins.input = orig_input
+    assert val2 == "sk-new" and changed2 is True
+    print("  PASS  wizard_secret_prompt_preserves_on_empty")
+
+
+def test_cli_overrides_and_config_precedence():
+    # The REPL resolves settings through MapacheConfig: unset flags fall through
+    # to the saved config, an explicit flag still wins (the C1 gap closure).
+    from argparse import Namespace
+    from cli.mapache_cli import MapacheCLI
+
+    # Sparse: nothing passed → no override layer at all.
+    none_args = Namespace(model=None, strategy=None, ollama_url=None,
+                          max_vram=None, allow_cloud=False)
+    assert MapacheCLI._cli_overrides(none_args) == {}
+
+    # Each explicit flag maps to its config path (ollama_url nests under providers).
+    set_args = Namespace(model="m", strategy="auto", ollama_url="http://h:1",
+                         max_vram="20", allow_cloud=True)
+    ov = MapacheCLI._cli_overrides(set_args)
+    assert ov["default_model"] == "m"
+    assert ov["default_strategy"] == "auto"
+    assert ov["providers"]["ollama"]["base_url"] == "http://h:1"
+    assert ov["max_vram_gb"] == 20.0
+    assert ov["allow_cloud"] is True
+
+    with tempfile.TemporaryDirectory() as tmp:
+        gpath = _CfgPath(tmp) / "config.json"
+        _write_json(gpath, {"default_model": "saved-by-wizard",
+                            "default_strategy": "hybrid"})
+        # No --model: the wizard-saved global value is honored.
+        cfg = load_config(MapacheCLI._cli_overrides(none_args), working_dir=tmp,
+                          environ={}, global_path=gpath)
+        assert cfg.default_model == "saved-by-wizard"
+        assert cfg.default_strategy == "hybrid"
+        # Explicit --model overrides the saved value.
+        cfg2 = load_config(MapacheCLI._cli_overrides(set_args), working_dir=tmp,
+                           environ={}, global_path=gpath)
+        assert cfg2.default_model == "m"
+    print("  PASS  cli_overrides_and_config_precedence")
+
+
+# ------------------------------------------------------------------ #
 # Cloud providers (feature G)
 # ------------------------------------------------------------------ #
 
@@ -1092,6 +1204,12 @@ async def run_all():
     test_config_env_layer_and_interpolation()
     test_config_provider_for_model_and_redaction()
     test_config_global_path_resolution()
+
+    print("\nSetup wizard (feature C1)")
+    test_config_save_and_raw_roundtrip()
+    test_wizard_prefs_edit_raw()
+    test_wizard_secret_prompt_preserves_on_empty()
+    test_cli_overrides_and_config_precedence()
 
     print("\nCloud providers (feature G)")
     await test_openai_provider_normalizes_response()
