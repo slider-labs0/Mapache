@@ -120,6 +120,22 @@ class RoutedModel:
     # Control / introspection
     # ------------------------------------------------------------------ #
 
+    def local_variant(self) -> "RoutedModel":
+        """A sibling that routes everything to local models (feature O).
+
+        Shares this model's provider pool and registry but uses a local-only
+        clone of the routing engine, so a sub-agent handed this variant keeps all
+        of its context on-box. The cloud-warning hook is preserved (it simply
+        won't fire, since no cloud model is reachable through the clone).
+        """
+        return RoutedModel(
+            self.routing.local_clone(),
+            self.pool,
+            primary_model_id=self.primary_model_id,
+            default_role=self.default_role,
+            on_cloud_call=self.on_cloud_call,
+        )
+
     def set_strategy(self, strategy: RoutingStrategy) -> None:
         self.routing.strategy = strategy
 

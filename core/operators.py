@@ -105,6 +105,7 @@ def _add(op: Operator) -> None:
 
 _add(Operator(
     name="recon_operator", title="Recon Operator", phase="recon",
+    prefer_local=False,  # early, low-sensitivity host/service discovery — cloud OK
     description="Active host/service discovery — port and version scanning.",
     tools=_RECON,
     expertise="nmap sweeps (standard → version → vuln scripts) over in-scope hosts; "
@@ -113,6 +114,7 @@ _add(Operator(
 ))
 _add(Operator(
     name="osint_operator", title="OSINT Operator", phase="recon", read_only=True,
+    prefer_local=False,  # works over public open-source intel — cloud OK
     description="Passive open-source intel — domains, emails, employees, breaches, leaks.",
     tools={"web_fetch", "web_search", "tor_fetch", "shell", "memory_save"},
     triggers=set(),
@@ -122,6 +124,7 @@ _add(Operator(
 ))
 _add(Operator(
     name="web_operator", title="Web Operator", phase="enumeration",
+    prefer_local=False,  # web enumeration over the target's public surface — cloud OK
     description="Web application attacks — content discovery, vuln scanning, exploitation.",
     tools=_WEB, triggers={"80", "443", "8080", "8000", "http", "https"},
     expertise="directory/content brute force (gobuster/ffuf), nikto/burp vuln scanning, "
@@ -173,6 +176,7 @@ _add(Operator(
 ))
 _add(Operator(
     name="analyst", title="Analyst", phase="analysis",
+    prefer_local=False,  # reasoning over already-collected findings — cloud OK
     description="Vuln research & reporting — code review, SAST, dependency CVE sweeps.",
     tools=_ANALYSIS,
     expertise="source-code review, static analysis (semgrep/bandit/gitleaks), dependency "
@@ -291,6 +295,8 @@ def roster_summary() -> str:
             tags.append("needs-hardware")
         if op.requires_deconfliction:
             tags.append("deconflict-first")
+        if not op.prefer_local:
+            tags.append("cloud-ok")  # OPSEC: may route to cloud (feature O)
         suffix = f"  [{', '.join(tags)}]" if tags else ""
         lines.append(f"  {op.name:22s} {op.phase:12s} {op.description}{suffix}")
     return "\n".join(lines)

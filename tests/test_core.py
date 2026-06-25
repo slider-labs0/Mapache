@@ -1604,6 +1604,118 @@ def test_skill_synthesis_and_signing():
 
 
 # ------------------------------------------------------------------ #
+# Hybrid OPSEC routing (feature O)
+# ------------------------------------------------------------------ #
+
+
+def test_opsec_policy_decisions():
+    from core.opsec_routing import OpsecPolicy
+    from core.operators import get_operator
+
+    sensitive = get_operator("post_operator")   # prefer_local=True  (loot/creds)
+    cloud_ok = get_operator("web_operator")      # prefer_local=False (public surface)
+    clean = AttackState(target="10.0.0.1")
+    looted = AttackState(target="10.0.0.1", credentials=["admin:pw"])
+
+    # Cloud disabled → already local-only, so nothing is ever pinned.
+    off = OpsecPolicy(allow_cloud=False)
+    assert not off.decide(operator=sensitive, attack_state=looted).pin_local
+
+    on = OpsecPolicy(allow_cloud=True)
+    # A sensitive operator is pinned local even on a clean state…
+    assert on.decide(operator=sensitive, attack_state=clean).pin_local
+    # …a cloud-eligible operator on a clean state may use cloud…
+    assert not on.decide(operator=cloud_ok, attack_state=clean).pin_local
+    # …but once credentials are captured, even it is pinned local.
+    assert on.decide(operator=cloud_ok, attack_state=looted).pin_local
+    # A generalist (no operator) on a clean state is cloud-eligible.
+    assert not on.decide(operator=None, attack_state=clean).pin_local
+
+    # Escape hatch: pinning can be disabled outright.
+    assert not OpsecPolicy(allow_cloud=True, pin_sensitive=False).decide(
+        operator=sensitive, attack_state=looted).pin_local
+    print("  PASS  opsec_policy_decisions")
+
+
+def test_opsec_local_variant_pins_local():
+    from models.model_registry import ModelRegistry, ModelRole
+    from models.routing_engine import RoutingEngine, RoutingStrategy
+    from models.routed_model import RoutedModel
+
+    registry = ModelRegistry()
+    # Cloud primary with a local model also available; cloud allowed.
+    engine = RoutingEngine(registry, strategy=RoutingStrategy.SINGLE,
+                           primary_model_id="gpt-4o", local_only=False)
+    engine.set_available_models(["gpt-4o", "qwen2.5:14b"])
+    routed = RoutedModel(engine, FakePool(), primary_model_id="gpt-4o")
+
+    # The lead routes the loop to the cloud primary…
+    assert routed.model_for(ModelRole.EXECUTOR) == "gpt-4o"
+    # …but its local variant keeps every role on a local model (even SINGLE,
+    # which otherwise just returns the primary).
+    local = routed.local_variant()
+    assert local.model_for(ModelRole.EXECUTOR) == "qwen2.5:14b"
+    assert local.model_for(ModelRole.PLANNER) == "qwen2.5:14b"
+    print("  PASS  opsec_local_variant_pins_local")
+
+
+async def test_opsec_controller_pins_sensitive_operator():
+    from core.opsec_routing import OpsecPolicy
+
+    class Dispatcher:
+        async def dispatch(self, name, args, session_id):
+            return "ok"
+
+    async def delegate_to(operator_name, op_title):
+        # A model that records whether it was asked for a local variant; the lead
+        # delegates once, the child answers, the lead wraps up.
+        class PinModel:
+            supports_tools = False
+
+            def __init__(self, label="lead"):
+                self.label = label
+                self.variant_made = False
+
+            def local_variant(self):
+                self.variant_made = True
+                return PinModel("local")
+
+            async def chat(self, messages, tools=None, json_mode=False, stream=False):
+                joined = " ".join(m.get("content", "") for m in messages)
+                if "subagent result" in joined:                 # lead, after child
+                    return json.dumps({"type": "response", "content": "done"})
+                if op_title in joined:                           # the operator child
+                    return json.dumps({"type": "response", "content": "child done"})
+                return json.dumps({"type": "tool_call", "tool": "delegate",  # lead first
+                    "args": {"task": "go", "operator": operator_name}})
+
+        lead = PinModel()
+        controller = AgentController(
+            model_provider=lead, tool_dispatcher=Dispatcher(),
+            mode=AgentMode.AGENT, use_function_calling=False,
+            opsec_policy=OpsecPolicy(allow_cloud=True))
+        controller.register_tool(ToolSchema(name="shell", description="run",
+            parameters={"type": "object", "properties": {"cmd": {"type": "string"}}}))
+        events: list[dict] = []
+
+        async def cap(e):
+            events.append(e.data)
+        controller.bus.subscribe("agent.delegate.start", cap)
+        await controller.start()
+        await controller.run("do it", session_id="opsec-test")
+        return lead, events[0]
+
+    # A sensitive operator is handed a local-pinned variant of the lead's model.
+    lead, ev = await delegate_to("post_operator", "Post-Exploit Operator")
+    assert lead.variant_made and ev["opsec"] == "local-pinned"
+
+    # A cloud-eligible operator on a clean state reuses the lead's model.
+    lead, ev = await delegate_to("web_operator", "Web Operator")
+    assert not lead.variant_made and ev["opsec"] == "cloud-eligible"
+    print("  PASS  opsec_controller_pins_sensitive_operator")
+
+
+# ------------------------------------------------------------------ #
 # Runner
 # ------------------------------------------------------------------ #
 
@@ -1692,6 +1804,11 @@ async def run_all():
 
     print("\nSkill synthesis (feature N)")
     test_skill_synthesis_and_signing()
+
+    print("\nHybrid OPSEC routing (feature O)")
+    test_opsec_policy_decisions()
+    test_opsec_local_variant_pins_local()
+    await test_opsec_controller_pins_sensitive_operator()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()

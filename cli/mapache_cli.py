@@ -27,6 +27,7 @@ from core.engagement_log import EngagementLog
 from models.routing_engine import RoutingEngine, RoutingStrategy
 from models.model_pool import ModelPool
 from models.routed_model import RoutedModel
+from core.opsec_routing import OpsecPolicy
 from models.providers.ollama_provider import OllamaProvider
 from plugins.sdk.base_tool import Permission
 from security_tools.recon.nmap_tool import NmapTool
@@ -81,6 +82,7 @@ Commands:
   /memory targets        List stored targets
   /chain                 Show current attack state
   /operators             List specialist sub-agents (delegation roster)
+  /opsec                 Show hybrid OPSEC routing (which ops are pinned local)
   /scope                 Show Rules-of-Engagement scope (in-scope targets)
   /log                   Show engagement-log summary
   /log export            Write a Markdown engagement-log timeline
@@ -343,6 +345,11 @@ class MapacheCLI:
                                   on_cloud_call=_opsec_warn)
         self._warn_cloud_roles(registry)  # startup banner if a role is cloud
 
+        # Hybrid OPSEC routing (feature O): when cloud is allowed, sensitive
+        # delegations (loot/cred operators, or any op after creds are captured)
+        # are pinned to a local model so target data never leaves the host.
+        self.opsec = OpsecPolicy(allow_cloud=allow_cloud)
+
         # Opt-in verifier (--verify): route the verification call to the
         # VERIFIER-role model so it can use a higher-quality model than the loop.
         async def verifier_caller(messages: list[dict]):
@@ -362,6 +369,7 @@ class MapacheCLI:
             enable_verifier=self.args.verify,
             verifier_caller=verifier_caller,
             scope=self.scope,
+            opsec_policy=self.opsec,
         )
         self._wire_scope_notifier()
 
@@ -882,6 +890,13 @@ class MapacheCLI:
             from core.operators import roster_summary
             print("\n  Specialist operators (delegate task=… operator=<name>):\n")
             print(roster_summary())
+            print()
+
+        elif command == "/opsec":
+            from core.operators import all_operators
+            print()
+            print(self.opsec.explain(all_operators()) if self.opsec
+                  else "  OPSEC routing unavailable (runtime not initialized).")
             print()
 
         elif command == "/scope":

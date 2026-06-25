@@ -116,6 +116,37 @@ class RoutingEngine:
             len(model_ids), len(self._chat_capable), self._chat_capable,
         )
 
+    def local_clone(self) -> "RoutingEngine":
+        """A local-only sibling of this engine (feature O — OPSEC pinning).
+
+        Shares the registry but forces `local_only=True` AND prunes the candidate
+        lists down to local models, so even strategies that don't honor
+        `local_only` (SINGLE returns the primary; `_best_chat_model` scans the
+        chat list) still resolve to an on-box model. A cloud primary or a cloud
+        role-override is dropped in favor of a local one.
+        """
+        def _is_local(model_id: str) -> bool:
+            profile = self.registry.get(model_id)
+            # Unknown ids are locally-installed Ollama models not in the registry.
+            return profile is None or profile.is_local
+
+        local_chat = [m for m in self._chat_capable if _is_local(m)]
+        primary = self.primary_model_id
+        if primary and not _is_local(primary):
+            primary = local_chat[0] if local_chat else None
+
+        clone = RoutingEngine(
+            self.registry,
+            strategy=self.strategy,
+            primary_model_id=primary,
+            local_only=True,
+            max_vram_gb=self.max_vram_gb,
+        )
+        clone._available = list(self._available)
+        clone._chat_capable = local_chat
+        clone._overrides = {r: m for r, m in self._overrides.items() if _is_local(m)}
+        return clone
+
     def override_role(self, role: ModelRole, model_id: str) -> None:
         self._overrides[role] = model_id
         logger.info("Role override: %s → %s", role.value, model_id)

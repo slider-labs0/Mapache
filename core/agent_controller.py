@@ -22,6 +22,7 @@ from .conversation_chain import AttackState, ConversationChain
 from .engagement_scope import EngagementScope
 from .event_bus import Event, EventBus
 from .operators import get_operator, operator_names
+from .opsec_routing import OpsecPolicy
 from .executor import Executor
 from .logger import get_logger
 from .project_context import build_project_context
@@ -120,10 +121,16 @@ class AgentController:
         shared_state: Optional["AttackState"] = None,
         allow_state_reset: bool = True,
         bus: Optional[EventBus] = None,
+        opsec_policy: Optional["OpsecPolicy"] = None,
     ) -> None:
         self.model = model_provider
         self.tool_dispatcher = tool_dispatcher
         self.mode = mode
+        # Hybrid OPSEC routing (feature O). Decides whether a delegated operator
+        # must be pinned to a local model even when cloud is allowed. The default
+        # is a no-op policy (cloud disabled → nothing to pin); the CLI injects one
+        # built from --allow-cloud. Children inherit the lead's policy.
+        self.opsec = opsec_policy or OpsecPolicy()
         # Rules-of-Engagement guardrails (feature J). An absent/inactive scope
         # allows everything, so this is a no-op until an operator defines limits.
         self.scope = scope or EngagementScope()
@@ -1131,10 +1138,23 @@ class AgentController:
         """Build one specialized (or generalist) child, run the task, return its
         conclusion. Shared by single and parallel delegation."""
         operator = get_operator(operator_name)
+
+        # Hybrid OPSEC routing (feature O): pin a sensitive operator — or any
+        # delegation once credentials are captured — to a local model even when
+        # the lead is allowed to route to cloud, so loot/creds never leave the
+        # host. Falls back gracefully if the model provider can't pin local.
+        opsec = self.opsec.decide(
+            operator=operator, attack_state=self.chain.attack_state)
+        child_model = self.model
+        if opsec.pin_local and hasattr(self.model, "local_variant"):
+            child_model = self.model.local_variant()
+            logger.info("OPSEC: pinning %s to local — %s",
+                        operator.name if operator else "generalist", opsec.reason)
+
         # An operator's toolset is already small and curated, so phase-based
         # subsetting (which keys off the shared phase) is turned off for it.
         child = AgentController(
-            model_provider=self.model,
+            model_provider=child_model,
             tool_dispatcher=self.tool_dispatcher,
             system_prompt=operator.system_prompt if operator else self.context.system_prompt,
             mode=self.mode,
@@ -1157,6 +1177,8 @@ class AgentController:
             # Share the event bus so the child's tool calls, findings, and RoE
             # refusals land in the same engagement log (feature K) as the lead's.
             bus=self.bus,
+            # Children inherit the OPSEC policy so deeper delegations stay pinned.
+            opsec_policy=self.opsec,
         )
         # Give the child its tools: an operator gets only its curated subset
         # (intersected with what's registered); a generalist gets everything.
@@ -1175,7 +1197,10 @@ class AgentController:
         await self.bus.emit(
             "agent.delegate.start",
             {"task": task[:200], "operator": op_label,
-             "depth": child.delegation_depth, "session_id": session_id},
+             "depth": child.delegation_depth, "session_id": session_id,
+             "opsec": "local-pinned" if (opsec.pin_local and child_model is not self.model)
+                      else "cloud-eligible",
+             "opsec_reason": opsec.reason},
             source="controller", session_id=session_id,
         )
 
