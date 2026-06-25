@@ -39,6 +39,8 @@ CORE_TOOLS = {
     # Self-authored tool meta-tools — always available so the agent can author,
     # inspect, and retire its own tools regardless of attack phase.
     "create_tool", "tool_list_generated", "tool_delete",
+    # Skill synthesis (feature N) — save a proven chain as a reusable skill.
+    "synthesize_skill",
 }
 
 PHASE_TOOLS = {

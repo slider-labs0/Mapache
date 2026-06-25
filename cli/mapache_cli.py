@@ -85,6 +85,7 @@ Commands:
   /log                   Show engagement-log summary
   /log export            Write a Markdown engagement-log timeline
   /report [md|html|both] Generate a structured pentest report (findings/severity)
+  /synthesize            Save the proven attack chain as a reusable signed skill
   /history               Show conversation history
   /clear                 Clear history and reset attack state
   /context               Show project context
@@ -539,6 +540,17 @@ class MapacheCLI:
         for tool in build_meta_tools(self.gen_manager):
             self.registry.register(tool)
 
+        # Skill synthesis (feature N): an agent-callable tool that saves the
+        # current proven chain as a reusable, signed skill. Providers are read
+        # lazily so they see the engagement log (started later in run()).
+        from core.skill_synthesis import SynthesizeSkillTool
+        self.registry.register(SynthesizeSkillTool(
+            self.gen_manager,
+            lambda: self.engagement_log.records if self.engagement_log else [],
+            lambda: self.controller.chain.attack_state if self.controller else None,
+            lambda: self.session_id or "",
+        ))
+
         stats = self.gen_manager.load_all()
         if stats["loaded"] or stats["failed"]:
             note = f"  Tools+   : {stats['loaded']} self-authored"
@@ -800,6 +812,23 @@ class MapacheCLI:
             print(f"    {path}")
         print()
 
+    async def _synthesize_skill(self) -> None:
+        """Save the current proven chain as a reusable, signed skill (feature N)."""
+        if self.controller is None or self.gen_manager is None:
+            print("  Generated-tool library not available.")
+            return
+        from core.skill_synthesis import synthesize_from_log, persist_skill
+        records = self.engagement_log.records if self.engagement_log else []
+        skill = synthesize_from_log(records, self.controller.chain.attack_state,
+                                    self.session_id or "")
+        if skill is None:
+            print("  No completed chain to synthesize (no flag/credential captured "
+                  "this engagement yet).\n")
+            return
+        print(f"\n  {persist_skill(self.gen_manager, skill)}")
+        print(f"  Methodology:\n    " + skill.methodology.replace("\n", "\n    "))
+        print()
+
     async def _run_shell_direct(self, cmd: str) -> None:
         if self.controller is None:
             return
@@ -845,6 +874,9 @@ class MapacheCLI:
 
         elif command == "/report":
             await self._generate_report(parts[1].lower() if len(parts) > 1 else "both")
+
+        elif command == "/synthesize":
+            await self._synthesize_skill()
 
         elif command == "/operators":
             from core.operators import roster_summary

@@ -1547,6 +1547,63 @@ def test_report_redaction_and_empty():
 
 
 # ------------------------------------------------------------------ #
+# Skill synthesis from exploit chains (feature N)
+# ------------------------------------------------------------------ #
+
+from core.skill_synthesis import synthesize_from_log, persist_skill
+from core import provenance
+
+
+def test_skill_synthesis_and_signing():
+    from tools.tool_registry import ToolRegistry
+    from tools.generated_tool_manager import GeneratedToolManager
+    from tools.generated_tool import render_tool_source, compile_run
+    from plugins.sdk.base_tool import Permission
+
+    st = AttackState(target="10.10.10.5", services={"445": "microsoft-ds"},
+                     vulnerabilities=["CVE-2017-0144"], flags=["HTB{rooted}"])
+    records = [
+        {"kind": "tool_call", "tool": "nmap_scan",
+         "args": {"target": "10.10.10.5", "scan_type": "version"}, "ok": True},
+        {"kind": "tool_call", "tool": "kali_run",
+         "args": {"tool": "crackmapexec", "args": "smb 10.10.10.5"}, "ok": True},
+        {"kind": "tool_call", "tool": "shell",
+         "args": {"cmd": "cat /root/root.txt 10.10.10.5"}, "ok": True},
+        {"kind": "finding", "finding_type": "flag", "value": "HTB{rooted}"},
+        {"kind": "tool_call", "tool": "shell",
+         "args": {"cmd": "echo after-the-flag"}, "ok": True},  # past the win → excluded
+    ]
+
+    skill = synthesize_from_log(records, st, "sess1")
+    assert skill is not None
+    # Chain is the 3 calls up to the flag; the post-flag step is dropped.
+    assert skill.total_steps == 3 and skill.runnable_steps == 3
+    # The engagement target is parameterized out of the replay commands.
+    assert "10.10.10.5" not in skill.code and "__TARGET__" in skill.code
+    # The synthesized body honors the generated-tool contract (compiles).
+    compile_run(render_tool_source(skill.code), skill.name)
+    # No flag and no credential → nothing to synthesize.
+    assert synthesize_from_log([], AttackState(target="x"), "s") is None
+
+    # Persist through a real manager (no controller needed), then check provenance.
+    with tempfile.TemporaryDirectory() as tmp:
+        reg = ToolRegistry(granted_permissions={Permission.SHELL, Permission.FILESYSTEM})
+        mgr = GeneratedToolManager(registry=reg, controller=None, base_dir=tmp)
+        key = b"\x02" * 32
+        msg = persist_skill(mgr, skill, sign_key=key)
+        assert msg.startswith("Synthesized")
+
+        manifest = mgr.tools[skill.name].manifest
+        assert manifest["signer"] == provenance.signer_id(key)
+        # Signature verifies over the code's sha256, and a tampered sha fails.
+        assert provenance.verify(manifest["sha256"], manifest["signature"], key)
+        assert not provenance.verify("tampered-sha", manifest["signature"], key)
+        assert manifest["synthesized_from"]["origin_target"] == "10.10.10.5"
+        assert manifest["synthesized_from"]["steps"] == 3
+    print("  PASS  skill_synthesis_and_signing")
+
+
+# ------------------------------------------------------------------ #
 # Runner
 # ------------------------------------------------------------------ #
 
@@ -1632,6 +1689,9 @@ async def run_all():
     print("\nAutomated reporting (feature L)")
     test_report_builder()
     test_report_redaction_and_empty()
+
+    print("\nSkill synthesis (feature N)")
+    test_skill_synthesis_and_signing()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()
