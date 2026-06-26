@@ -1874,6 +1874,85 @@ async def test_multihost_parallel_delegation():
 
 
 # ------------------------------------------------------------------ #
+# Per-operator model routing (feature P)
+# ------------------------------------------------------------------ #
+
+
+async def test_per_operator_model_role():
+    from models.model_registry import ModelRole
+    from models.routing_engine import RoutingStrategy
+    from models.routed_model import RoutedModel
+    from core.operators import get_operator
+
+    # Reasoning-heavy specialists are routed as PLANNER; action ones as EXECUTOR.
+    assert get_operator("analyst").model_role == "planner"
+    assert get_operator("reverser").model_role == "planner"
+    assert get_operator("recon_operator").model_role == "executor"
+    assert get_operator("post_operator").model_role == "executor"
+
+    # RoutedModel.for_role yields a sibling whose loop is scored as that role,
+    # sharing the routing engine + pool. Under PIPELINE, planner→14B, executor→7B.
+    engine = _routing(RoutingStrategy.PIPELINE)
+    pool = FakePool()
+    routed = RoutedModel(engine, pool, primary_model_id="qwen2.5:14b")
+
+    planner = routed.for_role("planner")
+    assert planner.default_role == ModelRole.PLANNER
+    await planner.chat([{"role": "user", "content": "hi"}])
+    assert pool.gets[-1] == "qwen2.5:14b"          # planner default → quality model
+
+    executor = routed.for_role("executor")
+    await executor.chat([{"role": "user", "content": "hi"}])
+    assert pool.gets[-1] == "qwen2.5:7b"           # executor default → fast model
+
+    # An unknown role name falls back to the model's current default role.
+    assert routed.for_role("nonsense").default_role == routed.default_role
+    print("  PASS  per_operator_model_role")
+
+
+async def test_controller_routes_operator_by_role():
+    # The controller runs an operator's child under that operator's model role.
+    class Dispatcher:
+        async def dispatch(self, name, args, session_id):
+            return "ok"
+
+    async def delegate_to(operator_name, op_title):
+        class RoleModel:
+            supports_tools = False
+
+            def __init__(self):
+                self.roles: list = []
+
+            def for_role(self, role):
+                self.roles.append(role)
+                return self            # same instance keeps driving the loop
+
+            async def chat(self, messages, tools=None, json_mode=False, stream=False):
+                joined = " ".join(m.get("content", "") for m in messages)
+                if "subagent result" in joined:
+                    return json.dumps({"type": "response", "content": "done"})
+                if op_title in joined:
+                    return json.dumps({"type": "response", "content": "child done"})
+                return json.dumps({"type": "tool_call", "tool": "delegate",
+                    "args": {"task": "go", "operator": operator_name}})
+
+        model = RoleModel()
+        controller = AgentController(
+            model_provider=model, tool_dispatcher=Dispatcher(),
+            mode=AgentMode.AGENT, use_function_calling=False)
+        controller.register_tool(ToolSchema(name="shell", description="run",
+            parameters={"type": "object", "properties": {"cmd": {"type": "string"}}}))
+        await controller.start()
+        await controller.run("do it", session_id="role-test")
+        return model.roles
+
+    # A reasoning specialist routes as planner; an action specialist as executor.
+    assert await delegate_to("analyst", "Analyst") == ["planner"]
+    assert await delegate_to("recon_operator", "Recon Operator") == ["executor"]
+    print("  PASS  controller_routes_operator_by_role")
+
+
+# ------------------------------------------------------------------ #
 # Runner
 # ------------------------------------------------------------------ #
 
@@ -1976,6 +2055,10 @@ async def run_all():
     print("\nMulti-host delegation (feature P)")
     test_multihost_substate_resolution()
     await test_multihost_parallel_delegation()
+
+    print("\nPer-operator model routing (feature P)")
+    await test_per_operator_model_role()
+    await test_controller_routes_operator_by_role()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()

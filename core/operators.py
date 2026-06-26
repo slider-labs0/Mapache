@@ -54,6 +54,11 @@ class Operator:
     roe_gated: bool = False              # fragile/regulated; scope-gated, lab/canary writes
     requires_deconfliction: bool = False  # must deconflict with blue team before acting
     prefer_local: bool = True            # OPSEC hint for hybrid routing (feature O)
+    # Per-operator model routing (feature P): which model ROLE this operator's
+    # loop is scored as. Reasoning-heavy specialists use "planner" (the quality
+    # model); action/tool-driven ones use "executor" (the fast one). Only takes
+    # effect when several models are installed under a routing strategy.
+    model_role: str = "executor"
 
     @property
     def constraints_block(self) -> str:
@@ -115,6 +120,7 @@ _add(Operator(
 _add(Operator(
     name="osint_operator", title="OSINT Operator", phase="recon", read_only=True,
     prefer_local=False,  # works over public open-source intel — cloud OK
+    model_role="planner",  # research/correlation — reasoning-heavy
     description="Passive open-source intel — domains, emails, employees, breaches, leaks.",
     tools={"web_fetch", "web_search", "tor_fetch", "shell", "memory_save"},
     triggers=set(),
@@ -160,6 +166,7 @@ _add(Operator(
 ))
 _add(Operator(
     name="contract_auditor", title="Contract Auditor", phase="exploitation",
+    model_role="planner",  # deep reasoning over source
     description="Solidity / EVM smart-contract audits.",
     tools={"shell", "file_read", "file_write", "web_fetch", "create_tool"},
     expertise="Solidity/EVM review for reentrancy, oracle manipulation, flash-loan abuse, "
@@ -168,6 +175,7 @@ _add(Operator(
 ))
 _add(Operator(
     name="reverser", title="Reverser", phase="analysis",
+    model_role="planner",  # reasoning over binaries
     description="Binary analysis and reverse engineering.",
     tools={"shell", "kali_run", "file_read", "file_list", "create_tool"},
     expertise="ELF/PE/Mach-O triage, packer detection, ROP gadget inventories, and "
@@ -177,6 +185,7 @@ _add(Operator(
 _add(Operator(
     name="analyst", title="Analyst", phase="analysis",
     prefer_local=False,  # reasoning over already-collected findings — cloud OK
+    model_role="planner",  # vuln research / exploit-chain construction
     description="Vuln research & reporting — code review, SAST, dependency CVE sweeps.",
     tools=_ANALYSIS,
     expertise="source-code review, static analysis (semgrep/bandit/gitleaks), dependency "
@@ -229,6 +238,7 @@ _add(Operator(
 ))
 _add(Operator(
     name="forensicator", title="Forensicator", phase="analysis", read_only=True,
+    model_role="planner",  # timeline/IOC analysis + detection mapping
     description="DFIR / purple-team validation — timelines, IOCs, attack→detection mapping.",
     tools={"shell", "kali_run", "file_read", "file_list", "file_search"},
     expertise="disk/memory/log/network timeline analysis, IOC extraction, and mapping the "
@@ -237,6 +247,7 @@ _add(Operator(
 ))
 _add(Operator(
     name="supply_chain_operator", title="Supply Chain Operator", phase="exploitation",
+    model_role="planner",  # dependency/pipeline analysis
     description="Supply-chain attacks — dependencies, build pipelines, package integrity.",
     tools={"shell", "kali_run", "file_read", "web_search", "create_tool"},
     expertise="dependency confusion / typosquatting, compromised or malicious packages, "
@@ -297,6 +308,8 @@ def roster_summary() -> str:
             tags.append("deconflict-first")
         if not op.prefer_local:
             tags.append("cloud-ok")  # OPSEC: may route to cloud (feature O)
+        if op.model_role != "executor":
+            tags.append(f"{op.model_role}-model")  # per-operator routing (feature P)
         suffix = f"  [{', '.join(tags)}]" if tags else ""
         lines.append(f"  {op.name:22s} {op.phase:12s} {op.description}{suffix}")
     return "\n".join(lines)

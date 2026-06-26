@@ -1206,6 +1206,14 @@ class AgentController:
             logger.info("OPSEC: pinning %s to local — %s",
                         operator.name if operator else "generalist", opsec.reason)
 
+        # Per-operator model routing (feature P): run the operator's loop under
+        # the model role its work calls for — reasoning-heavy specialists as
+        # PLANNER (the quality model), action specialists as EXECUTOR (the fast
+        # one). Applied after the OPSEC pin, so it routes within the local models
+        # when pinned. No-op for a generalist or a provider without role routing.
+        if operator is not None and hasattr(child_model, "for_role"):
+            child_model = child_model.for_role(operator.model_role)
+
         # An operator's toolset is already small and curated, so phase-based
         # subsetting (which keys off the shared phase) is turned off for it.
         child = AgentController(
@@ -1255,6 +1263,7 @@ class AgentController:
             {"task": task[:200], "operator": op_label,
              "depth": child.delegation_depth, "session_id": session_id,
              "target": child_state.target if isolated else None,
+             "model_role": operator.model_role if operator else None,
              "opsec": "local-pinned" if (opsec.pin_local and child_model is not self.model)
                       else "cloud-eligible",
              "opsec_reason": opsec.reason},

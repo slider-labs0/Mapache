@@ -120,6 +120,29 @@ class RoutedModel:
     # Control / introspection
     # ------------------------------------------------------------------ #
 
+    def for_role(self, role: Any) -> "RoutedModel":
+        """A sibling whose loop runs under a different default role (feature P).
+
+        Shares this model's routing engine and provider pool, so per-operator
+        routing just changes which role the executor loop is scored as — a
+        reasoning-heavy specialist can run as PLANNER (the quality model), an
+        action specialist as EXECUTOR (the fast one). Accepts a ModelRole or its
+        string name; an unknown name falls back to the current default role.
+        """
+        if isinstance(role, str):
+            try:
+                role = ModelRole(role)
+            except ValueError:
+                role = self.default_role
+        sib = RoutedModel(
+            self.routing, self.pool,
+            primary_model_id=self.primary_model_id,
+            default_role=role,
+            on_cloud_call=self.on_cloud_call,
+        )
+        sib._warned_cloud = self._warned_cloud  # share the once-per-cloud-model dedupe
+        return sib
+
     def local_variant(self) -> "RoutedModel":
         """A sibling that routes everything to local models (feature O).
 
