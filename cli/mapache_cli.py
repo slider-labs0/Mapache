@@ -82,6 +82,7 @@ Commands:
   /memory targets        List stored targets
   /chain                 Show current attack state
   /operators             List specialist sub-agents (delegation roster)
+  /hosts                 Show per-host attack states (multi-host delegation)
   /opsec                 Show hybrid OPSEC routing (which ops are pinned local)
   /scope                 Show Rules-of-Engagement scope (in-scope targets)
   /log                   Show engagement-log summary
@@ -899,6 +900,18 @@ class MapacheCLI:
             print("\n  Specialist operators (delegate task=… operator=<name>):\n")
             print(roster_summary())
             print()
+
+        elif command == "/hosts":
+            hosts = self.controller.host_states() if self.controller else {}
+            if not hosts:
+                print("\n  No per-host sub-states yet. Delegate with a `target` to "
+                      "run\n  hosts in isolated parallel states.\n")
+            else:
+                print(f"\n  Per-host attack states ({len(hosts)}):\n")
+                for st in hosts.values():
+                    block = st.to_prompt_block()
+                    print("  " + (block or f"{st.target}: (no findings)").replace("\n", "\n  "))
+                    print()
 
         elif command == "/opsec":
             from core.operators import all_operators

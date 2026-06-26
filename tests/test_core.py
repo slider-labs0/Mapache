@@ -1794,6 +1794,86 @@ def test_cve_attack_state_and_report_integration():
 
 
 # ------------------------------------------------------------------ #
+# Multi-host sub-states for parallel delegation (feature P)
+# ------------------------------------------------------------------ #
+
+
+def test_multihost_substate_resolution():
+    c = AgentController(model_provider=MockModel())
+    c.chain.attack_state.target = "10.0.0.1"
+
+    # No target, or the lead's own host → the shared blackboard (not isolated).
+    assert c._host_state_for(None) == (c.chain.attack_state, False)
+    assert c._host_state_for("10.0.0.1") == (c.chain.attack_state, False)
+
+    # A different host → a dedicated, target-seeded state, reused on re-ask.
+    s2, iso2 = c._host_state_for("10.0.0.2")
+    assert iso2 and s2.target == "10.0.0.2" and s2 is not c.chain.attack_state
+    s2_again, _ = c._host_state_for("10.0.0.2")
+    assert s2_again is s2
+
+    # Roll-up lists the isolated host(s), not the lead's own host.
+    render = c._render_host_states()
+    assert "10.0.0.2" in render and "10.0.0.1" not in render
+    print("  PASS  multihost_substate_resolution")
+
+
+async def test_multihost_parallel_delegation():
+    # delegate_parallel with a distinct target per task isolates each host: a
+    # flag looted on one host lands only in that host's sub-state, not the
+    # lead's and not the sibling's.
+    class Dispatcher:
+        async def dispatch(self, name, args, session_id):
+            # Echo a host-specific flag so the child records it into its state.
+            return f"HTB{{flag-{args.get('cmd', '').split()[-1]}}}"
+
+    class DelegModel:
+        supports_tools = False
+
+        async def chat(self, messages, tools=None, json_mode=False, stream=False):
+            joined = " ".join(m.get("content", "") for m in messages)
+            if "delegate_parallel —" in joined or "subagent result" in joined:
+                return json.dumps({"type": "response", "content": "all done"})  # lead, after
+            if "HTB{" in joined:                                # a child, post-loot
+                return json.dumps({"type": "response", "content": "looted"})
+            if "hostA" in joined:                               # child A, first turn
+                return json.dumps({"type": "tool_call", "tool": "shell",
+                                   "args": {"cmd": "loot hostA"}})
+            if "hostB" in joined:                               # child B, first turn
+                return json.dumps({"type": "tool_call", "tool": "shell",
+                                   "args": {"cmd": "loot hostB"}})
+            return json.dumps({"type": "tool_call", "tool": "delegate_parallel", "args": {
+                "tasks": [{"task": "loot hostA", "target": "hostA"},
+                          {"task": "loot hostB", "target": "hostB"}]}})
+
+    controller = AgentController(model_provider=DelegModel(), tool_dispatcher=Dispatcher(),
+                                 mode=AgentMode.AGENT, use_function_calling=False)
+    controller.register_tool(ToolSchema(name="shell", description="run",
+        parameters={"type": "object", "properties": {"cmd": {"type": "string"}}}))
+
+    targets: list = []
+
+    async def cap(e):
+        targets.append(e.data.get("target"))
+    controller.bus.subscribe("agent.delegate.start", cap)
+    await controller.start()
+
+    await controller.run("loot the whole subnet", session_id="mh-test")
+
+    hosts = controller.host_states()
+    # Two isolated per-host states, each with only its own flag.
+    assert set(hosts) == {"hostA", "hostB"}
+    assert hosts["hostA"].flags == ["HTB{flag-hostA}"]
+    assert hosts["hostB"].flags == ["HTB{flag-hostB}"]
+    assert hosts["hostA"] is not hosts["hostB"]
+    # The lead's own blackboard stays clean — findings didn't bleed across.
+    assert controller.chain.attack_state.flags == []
+    # Both delegations were tagged with their host for the engagement log (K).
+    assert set(targets) == {"hostA", "hostB"}
+    print("  PASS  multihost_parallel_delegation")
+
+
+# ------------------------------------------------------------------ #
 # Runner
 # ------------------------------------------------------------------ #
 
@@ -1892,6 +1972,10 @@ async def run_all():
     test_cve_cvss_and_lookup()
     test_cve_ground_services_prioritizes()
     test_cve_attack_state_and_report_integration()
+
+    print("\nMulti-host delegation (feature P)")
+    test_multihost_substate_resolution()
+    await test_multihost_parallel_delegation()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()

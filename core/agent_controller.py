@@ -205,6 +205,13 @@ class AgentController:
                             "description": "Optional specialist to run the subtask as. "
                                            "Omit for a generalist sub-agent.",
                         },
+                        "target": {
+                            "type": "string",
+                            "description": "Optional host/IP this subtask is against. If "
+                                           "it differs from the current target, the "
+                                           "sub-agent gets an isolated per-host attack "
+                                           "state. Omit to use the shared blackboard.",
+                        },
                     },
                     "required": ["task"],
                 },
@@ -212,11 +219,11 @@ class AgentController:
             self.context.register_tool(ToolSchema(
                 name=DELEGATE_PARALLEL_TOOL,
                 description=(
-                    "Run SEVERAL operator subtasks at once over the shared attack "
-                    "state — e.g. enumerate the web app and search for exploits on "
-                    "the same host concurrently. Each entry is {task, operator?}. "
-                    "Use only for independent angles on the CURRENT target; "
-                    "dispatch different hosts as separate delegate calls."
+                    "Run SEVERAL operator subtasks at once — multiple angles on one "
+                    "host, OR several hosts in parallel. Each entry is "
+                    "{task, operator?, target?}. Give each host its own `target` to "
+                    "run them against isolated per-host attack states; omit `target` "
+                    "to share the current blackboard for multi-angle work."
                 ),
                 parameters={
                     "type": "object",
@@ -229,6 +236,9 @@ class AgentController:
                                 "properties": {
                                     "task": {"type": "string"},
                                     "operator": {"type": "string", "enum": operator_names()},
+                                    "target": {"type": "string",
+                                               "description": "Optional host/IP for a "
+                                               "per-host isolated state."},
                                 },
                                 "required": ["task"],
                             },
@@ -239,6 +249,11 @@ class AgentController:
             ))
 
         self._sessions: dict[str, dict[str, Any]] = {}
+        # Per-host sub-states (feature P): when a delegated task targets a host
+        # other than the lead's, it gets its own isolated AttackState here —
+        # created once, reused — so concurrent multi-host delegations don't
+        # collide on one blackboard and findings attribute to the right host.
+        self._host_states: dict[str, AttackState] = {}
         # Only the bus owner registers the shared error handler, so a shared bus
         # doesn't accumulate a duplicate per delegated sub-agent.
         if self._owns_bus:
@@ -1088,33 +1103,33 @@ class AgentController:
         task = (args.get("task") or args.get("goal") or "").strip()
         if not task:
             return "[delegate] No task provided."
-        return await self._spawn_and_run(task, args.get("operator"), session_id, "sub")
+        target = args.get("target") or args.get("host")
+        return await self._spawn_and_run(task, args.get("operator"), session_id,
+                                         "sub", target=target)
 
     async def _run_parallel_subagents(self, args: dict[str, Any], session_id: str) -> str:
         """
-        Run several operator subtasks concurrently over the shared blackboard
-        (feature P). Each child references the lead's AttackState, so findings
-        from all of them accumulate live in one place.
+        Run several operator subtasks concurrently (feature P). Tasks without a
+        `target` share the lead's AttackState (several angles on the current
+        host); tasks with a distinct `target` each get an isolated per-host
+        sub-state, so a true multi-host sweep can run in parallel without the
+        children colliding on one blackboard.
 
         On a single GPU the model calls serialize at the provider, so this is a
         correctness/orchestration win that turns into a wall-clock win once cloud
         routing (G) serves the calls concurrently. Fan-out is capped, and these
         children are at delegation depth 1 so none can fan out further.
-
-        NOTE: the children share ONE AttackState, so this is intended for several
-        angles on the *current* target/host. Cross-host isolation (a per-host
-        sub-state) is the remaining P item; until then, dispatch different hosts
-        in separate sequential `delegate` calls.
         """
         raw_tasks = args.get("tasks") or []
-        tasks: list[tuple[str, Optional[str]]] = []
+        tasks: list[tuple[str, Optional[str], Optional[str]]] = []
         for item in raw_tasks:
             if isinstance(item, dict):
                 t = (item.get("task") or item.get("goal") or "").strip()
                 if t:
-                    tasks.append((t, item.get("operator")))
+                    tasks.append((t, item.get("operator"),
+                                  item.get("target") or item.get("host")))
             elif isinstance(item, str) and item.strip():
-                tasks.append((item.strip(), None))
+                tasks.append((item.strip(), None, None))
         if not tasks:
             return "[delegate_parallel] No tasks provided."
         if len(tasks) > self.MAX_FANOUT:
@@ -1123,28 +1138,68 @@ class AgentController:
             tasks = tasks[: self.MAX_FANOUT]
 
         results = await asyncio.gather(*(
-            self._spawn_and_run(t, op, session_id, f"par{i}")
-            for i, (t, op) in enumerate(tasks)
+            self._spawn_and_run(t, op, session_id, f"par{i}", target=tgt)
+            for i, (t, op, tgt) in enumerate(tasks)
         ))
         joined = "\n\n".join(
-            f"[{op or 'generalist'}] {t}\n{res}"
-            for (t, op), res in zip(tasks, results)
+            f"[{op or 'generalist'}{f' @ {tgt}' if tgt else ''}] {t}\n{res}"
+            for (t, op, tgt), res in zip(tasks, results)
         )
-        return f"[delegate_parallel — {len(tasks)} operators]\n\n{joined}"
+        out = f"[delegate_parallel — {len(tasks)} operators]\n\n{joined}"
+        host_summary = self._render_host_states()
+        return f"{out}\n\n{host_summary}" if host_summary else out
+
+    def _host_state_for(self, target: Optional[str]) -> tuple["AttackState", bool]:
+        """Resolve which AttackState a delegated child should use.
+
+        No target, or the lead's own host → the shared blackboard (multi-angle
+        work). A different host → a dedicated per-host sub-state (created once,
+        reused), isolating concurrent multi-host delegations. Returns
+        (state, is_isolated).
+        """
+        lead = self.chain.attack_state
+        host = (target or "").strip()
+        if not host or host == (lead.target or ""):
+            return lead, False
+        state = self._host_states.get(host)
+        if state is None:
+            state = AttackState(target=host)
+            self._host_states[host] = state
+        return state, True
+
+    def _render_host_states(self) -> str:
+        """Compact roll-up of the per-host sub-states, for the lead to act on."""
+        if not self._host_states:
+            return ""
+        lines = ["[per-host attack states]"]
+        for host, st in self._host_states.items():
+            lines.append(
+                f"  {host}: ports={len(st.open_ports)} services={len(st.services)} "
+                f"vulns={len(st.vulnerabilities)} creds={len(st.credentials)} "
+                f"flags={len(st.flags)}")
+        return "\n".join(lines)
+
+    def host_states(self) -> dict[str, "AttackState"]:
+        """The isolated per-host sub-states recorded by multi-host delegation."""
+        return dict(self._host_states)
 
     async def _spawn_and_run(
         self, task: str, operator_name: Optional[str], session_id: str, suffix: str,
+        target: Optional[str] = None,
     ) -> str:
         """Build one specialized (or generalist) child, run the task, return its
         conclusion. Shared by single and parallel delegation."""
         operator = get_operator(operator_name)
 
+        # Per-host sub-state (feature P): a child targeting a different host gets
+        # its own isolated AttackState; otherwise it shares the lead's blackboard.
+        child_state, isolated = self._host_state_for(target)
+
         # Hybrid OPSEC routing (feature O): pin a sensitive operator — or any
         # delegation once credentials are captured — to a local model even when
         # the lead is allowed to route to cloud, so loot/creds never leave the
         # host. Falls back gracefully if the model provider can't pin local.
-        opsec = self.opsec.decide(
-            operator=operator, attack_state=self.chain.attack_state)
+        opsec = self.opsec.decide(operator=operator, attack_state=child_state)
         child_model = self.model
         if opsec.pin_local and hasattr(self.model, "local_variant"):
             child_model = self.model.local_variant()
@@ -1169,10 +1224,11 @@ class AgentController:
             enable_delegation=True,           # actually gated by depth
             delegation_depth=self.delegation_depth + 1,
             scope=self.scope,                 # sub-agents stay in scope too
-            # Blackboard: the child shares the lead's AttackState by reference,
-            # so its findings are live in the lead's state — no merge-back. It
-            # may not reset/reassign the shared target from its task wording.
-            shared_state=self.chain.attack_state,
+            # Blackboard: the child shares the resolved AttackState by reference
+            # (the lead's, or an isolated per-host one), so its findings are live
+            # there — no merge-back. It may not reset/reassign the target from its
+            # task wording (the host is fixed by the delegation).
+            shared_state=child_state,
             allow_state_reset=False,
             # Share the event bus so the child's tool calls, findings, and RoE
             # refusals land in the same engagement log (feature K) as the lead's.
@@ -1198,6 +1254,7 @@ class AgentController:
             "agent.delegate.start",
             {"task": task[:200], "operator": op_label,
              "depth": child.delegation_depth, "session_id": session_id,
+             "target": child_state.target if isolated else None,
              "opsec": "local-pinned" if (opsec.pin_local and child_model is not self.model)
                       else "cloud-eligible",
              "opsec_reason": opsec.reason},
@@ -1218,7 +1275,9 @@ class AgentController:
         content = (result.content or "").strip()
         if result.error and not content:
             content = f"[subagent error: {result.error}]"
-        return f"[subagent result]\n{content[:4000]}"
+        header = (f"[subagent result — host {child_state.target}]" if isolated
+                  else "[subagent result]")
+        return f"{header}\n{content[:4000]}"
 
     async def _dispatch_tool(
         self,
