@@ -87,6 +87,7 @@ Commands:
   /log                   Show engagement-log summary
   /log export            Write a Markdown engagement-log timeline
   /report [md|html|both] Generate a structured pentest report (findings/severity)
+  /cve [CVE-id]          Ground discovered services to CVEs (CVSS + exploits)
   /synthesize            Save the proven attack chain as a reusable signed skill
   /history               Show conversation history
   /clear                 Clear history and reset attack state
@@ -559,6 +560,13 @@ class MapacheCLI:
             lambda: self.session_id or "",
         ))
 
+        # CVE grounding (feature M): correlate discovered services/versions to
+        # known CVEs with CVSS + exploit availability (offline catalog).
+        from core.cve_grounding import CVELookupTool
+        self.registry.register(CVELookupTool(
+            lambda: self.controller.chain.attack_state if self.controller else None,
+        ))
+
         stats = self.gen_manager.load_all()
         if stats["loaded"] or stats["failed"]:
             note = f"  Tools+   : {stats['loaded']} self-authored"
@@ -897,6 +905,23 @@ class MapacheCLI:
             print()
             print(self.opsec.explain(all_operators()) if self.opsec
                   else "  OPSEC routing unavailable (runtime not initialized).")
+            print()
+
+        elif command == "/cve":
+            from core.cve_grounding import ground_services, lookup, attack_plan
+            print()
+            if len(parts) > 1 and parts[1].upper().startswith(("CVE-", "MS")):
+                entry = lookup(parts[1])
+                print(f"  {entry.id} [{entry.severity}/CVSS {entry.cvss}]: {entry.title}\n"
+                      f"  Exploit: {entry.exploit or 'none catalogued'}\n"
+                      f"  Remediation: {entry.remediation}" if entry
+                      else f"  {parts[1]} is not in the offline catalog.")
+            elif self.controller is not None:
+                st = self.controller.chain.attack_state
+                print("  " + attack_plan(
+                    ground_services(st.services, st.versions)).replace("\n", "\n  "))
+            else:
+                print("  No attack state yet — run a scan first.")
             print()
 
         elif command == "/scope":

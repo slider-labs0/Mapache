@@ -1716,6 +1716,84 @@ async def test_opsec_controller_pins_sensitive_operator():
 
 
 # ------------------------------------------------------------------ #
+# CVE grounding (feature M)
+# ------------------------------------------------------------------ #
+
+
+def test_cve_cvss_and_lookup():
+    from core.cve_grounding import cvss_to_severity, lookup, severity_for_cve
+
+    # CVSS v3 qualitative bands.
+    assert cvss_to_severity(10.0) == "Critical"
+    assert cvss_to_severity(8.1) == "High"
+    assert cvss_to_severity(5.0) == "Medium"
+    assert cvss_to_severity(2.0) == "Low"
+    assert cvss_to_severity(0.0) == "Info"
+
+    # Lookup by id and by vendor-bulletin alias resolves the same entry.
+    assert lookup("CVE-2017-0144").id == "CVE-2017-0144"
+    assert lookup("ms17-010").id == "CVE-2017-0144"
+    assert lookup("nope") is None
+
+    # severity_for_cve uses the catalog CVSS; unknown CVEs default to High.
+    assert severity_for_cve("CVE-2019-0708") == "Critical"   # BlueKeep 9.8
+    assert severity_for_cve("CVE-2017-0144") == "High"       # EternalBlue 8.1
+    assert severity_for_cve("CVE-2099-0001") == "High"       # unknown → safe default
+    print("  PASS  cve_cvss_and_lookup")
+
+
+def test_cve_ground_services_prioritizes():
+    from core.cve_grounding import ground_services
+
+    services = {"21": "ftp", "445": "microsoft-ds", "80": "http"}
+    versions = {"21": "vsftpd 2.3.4"}   # version banner confirms the backdoor CVE
+
+    matches = ground_services(services, versions)
+    by_id = {m.entry.id: m for m in matches}
+
+    # The vsftpd 2.3.4 backdoor is matched AND version-confirmed.
+    assert "CVE-2011-2523" in by_id and by_id["CVE-2011-2523"].version_confirmed
+    # SMB matches EternalBlue heuristically (no version banner present).
+    assert "CVE-2017-0144" in by_id and not by_id["CVE-2017-0144"].version_confirmed
+    # Prioritization: a version-confirmed hit ranks ahead of a service-heuristic
+    # one even when the heuristic CVE has its own (lower) score.
+    assert matches[0].entry.id == "CVE-2011-2523"
+    # An ad-hoc service with no catalog match grounds nothing.
+    assert ground_services({"9999": "totally-unknown-svc"}) == []
+    print("  PASS  cve_ground_services_prioritizes")
+
+
+def test_cve_attack_state_and_report_integration():
+    from reporting import build_report
+
+    # nmap -sV style output with a version banner the catalog confirms.
+    chain = ConversationChain()
+    chain.on_turn_start("scan 10.10.10.5")
+    chain.on_tool_result(
+        "nmap_scan",
+        "Nmap scan report for 10.10.10.5\n"
+        "21/tcp open  ftp     vsftpd 2.3.4\n"
+        "445/tcp open microsoft-ds Samba smbd 3.X\n")
+    st = chain.attack_state
+
+    # Version banner captured separately from the bare service name.
+    assert st.versions.get("21") == "vsftpd 2.3.4" and st.services.get("21") == "ftp"
+    # The version-confirmed CVE was fed into the attack-state vulnerabilities…
+    assert "CVE-2011-2523" in st.vulnerabilities
+    # …while the heuristic-only SMB match was NOT auto-recorded.
+    assert "CVE-2017-0144" not in st.vulnerabilities
+    # The grounded plan surfaces in the next-step guidance.
+    assert "CVE-2011-2523" in st.suggest_next_step()
+
+    # The report (L) scores that CVE by its real CVSS and enriches the finding.
+    report = build_report(st, [], {})
+    vuln = next(f for f in report.findings if f.finding_type == "vulnerability")
+    assert vuln.severity == "Critical" and "CVSS 9.8" in vuln.evidence
+    assert "exploit/unix/ftp/vsftpd_234_backdoor" in vuln.evidence
+    print("  PASS  cve_attack_state_and_report_integration")
+
+
+# ------------------------------------------------------------------ #
 # Runner
 # ------------------------------------------------------------------ #
 
@@ -1809,6 +1887,11 @@ async def run_all():
     test_opsec_policy_decisions()
     test_opsec_local_variant_pins_local()
     await test_opsec_controller_pins_sensitive_operator()
+
+    print("\nCVE grounding (feature M)")
+    test_cve_cvss_and_lookup()
+    test_cve_ground_services_prioritizes()
+    test_cve_attack_state_and_report_integration()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()

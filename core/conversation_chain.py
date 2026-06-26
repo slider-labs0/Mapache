@@ -41,6 +41,8 @@ CORE_TOOLS = {
     "create_tool", "tool_list_generated", "tool_delete",
     # Skill synthesis (feature N) — save a proven chain as a reusable skill.
     "synthesize_skill",
+    # CVE grounding (feature M) — correlate services to CVEs any phase.
+    "cve_lookup",
 }
 
 PHASE_TOOLS = {
@@ -108,6 +110,10 @@ class AttackState:
     target: Optional[str] = None
     open_ports: list[str] = field(default_factory=list)
     services: dict[str, str] = field(default_factory=dict)
+    # port → full version banner (service + version), captured for CVE grounding
+    # (feature M). Kept separate from `services` so trigger/operator matching on
+    # the bare service name is unaffected.
+    versions: dict[str, str] = field(default_factory=dict)
     vulnerabilities: list[str] = field(default_factory=list)
     credentials: list[str] = field(default_factory=list)
     flags: list[str] = field(default_factory=list)
@@ -115,13 +121,18 @@ class AttackState:
     notes: list[str] = field(default_factory=list)
 
     def update_from_nmap(self, nmap_output: str) -> None:
-        port_pattern = re.compile(r"(\d+)/(tcp|udp)\s+open\s+(\S+)")
+        port_pattern = re.compile(r"(\d+)/(tcp|udp)\s+open\s+(\S+)(?:\s+(.*))?")
         for match in port_pattern.finditer(nmap_output):
-            port, proto, service = match.groups()
+            port, proto, service, banner = match.groups()
             port_str = f"{port}/{proto}"
             if port_str not in self.open_ports:
                 self.open_ports.append(port_str)
             self.services[port] = service
+            # Capture the version banner (nmap -sV) so CVE grounding (feature M)
+            # can match on version, not just service name.
+            banner = (banner or "").strip()
+            if banner:
+                self.versions[port] = banner
 
         if not self.target:
             target_match = re.search(r"Nmap scan report for (.+)", nmap_output)
@@ -174,6 +185,17 @@ class AttackState:
                 suggestions.append("MySQL found — try default credentials")
             if "6379" in ports:
                 suggestions.append("Redis found — often unauthenticated")
+            # CVE grounding (feature M): correlate discovered versions to known
+            # CVEs and lead with the highest-priority one when present.
+            from .cve_grounding import ground_services
+            grounded = ground_services(self.services, self.versions)
+            cve_note = ""
+            if grounded:
+                top = grounded[:3]
+                cve_note = (". Grounded CVEs (prioritized): " + "; ".join(
+                    f"{m.entry.id} [{m.entry.severity}/{m.confidence}] on {m.service}"
+                    for m in top)
+                    + " — run cve_lookup for the full plan")
             if suggestions:
                 base = "Based on open ports: " + "; ".join(suggestions)
                 from .operators import suggest_operators
@@ -181,8 +203,8 @@ class AttackState:
                 if ops:
                     base += (f". Specialists available — delegate with operator=: "
                              f"{', '.join(ops)}")
-                return base
-            return f"Enumerate discovered services on {self.target}"
+                return base + cve_note
+            return f"Enumerate discovered services on {self.target}" + cve_note
 
         if self.current_phase == "exploitation":
             if self.vulnerabilities:
@@ -330,6 +352,7 @@ class ConversationChain:
                 self.attack_state.target = target
                 self.attack_state.open_ports = []
                 self.attack_state.services = {}
+                self.attack_state.versions = {}
                 self.attack_state.vulnerabilities = []
                 self.attack_state.current_phase = "recon"
                 # New engagement — the old plan no longer applies.
@@ -345,6 +368,7 @@ class ConversationChain:
         if self._allow_state_reset and any(kw in user_input.lower() for kw in rescan_keywords):
             self.attack_state.open_ports = []
             self.attack_state.services = {}
+            self.attack_state.versions = {}
 
     def on_turn_start(self, user_input: str) -> None:
         self._turn_number += 1
@@ -375,6 +399,15 @@ class ConversationChain:
                     f"Found {len(self.attack_state.open_ports)} open ports: "
                     f"{', '.join(self.attack_state.open_ports[:5])}"
                 )
+            # CVE grounding (feature M): record version-confirmed CVEs as
+            # vulnerabilities so the exploitation phase + report (L) act on them.
+            from .cve_grounding import ground_services
+            for m in ground_services(self.attack_state.services,
+                                     self.attack_state.versions):
+                if m.version_confirmed:
+                    self.attack_state.add_vulnerability(m.entry.id)
+                    self._current_turn.key_findings.append(
+                        f"CVE grounded: {m.entry.id} ({m.entry.severity}) on {m.service}")
 
         elif tool_name in ("msf_run", "kali_run", "shell"):
             self.attack_state.update_from_exploit(output)

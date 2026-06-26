@@ -224,9 +224,36 @@ def _service_rule(service: str) -> Optional[tuple[str, str]]:
 
 
 def _vuln_severity(value: str) -> str:
-    # Without CVSS (feature M) we can't score precisely; CVEs default to High,
-    # which is the safe assumption for a discovered, named vulnerability.
-    return "High"
+    # CVE grounding (feature M) scores known CVEs by their CVSS; an unrecognized
+    # named vulnerability still defaults to High (the safe assumption).
+    from core.cve_grounding import severity_for_cve
+    return severity_for_cve(value)
+
+
+def _vuln_finding(value: str, records: list[dict]) -> "Finding":
+    """Build a vulnerability finding, enriched with CVSS/exploit/remediation from
+    the CVE catalog (feature M) when the value is a known CVE."""
+    from core.cve_grounding import lookup
+    entry = lookup(value)
+    if entry is not None:
+        exploit = f" Public exploit: {entry.exploit}." if entry.exploit else ""
+        refs = (" Refs: " + ", ".join(entry.references)) if entry.references else ""
+        return Finding(
+            title=f"{entry.id} — {entry.title}",
+            severity=entry.severity,
+            finding_type="vulnerability",
+            evidence=f"{entry.id} (CVSS {entry.cvss}).{exploit}{refs}",
+            remediation=entry.remediation or _REMEDIATION["vulnerability"],
+            discovered=_first_seen(records, "vulnerability", value),
+        )
+    return Finding(
+        title=f"Vulnerability: {value}",
+        severity=_vuln_severity(value),
+        finding_type="vulnerability",
+        evidence=str(value),
+        remediation=_REMEDIATION["vulnerability"],
+        discovered=_first_seen(records, "vulnerability", value),
+    )
 
 
 def _first_seen(records: list[dict], finding_type: str, value: str) -> str:
@@ -257,14 +284,7 @@ def build_report(
     findings: list[Finding] = []
 
     for vuln in getattr(attack_state, "vulnerabilities", []) or []:
-        findings.append(Finding(
-            title=f"Vulnerability: {vuln}",
-            severity=_vuln_severity(vuln),
-            finding_type="vulnerability",
-            evidence=str(vuln),
-            remediation=_REMEDIATION["vulnerability"],
-            discovered=_first_seen(records, "vulnerability", vuln),
-        ))
+        findings.append(_vuln_finding(vuln, records))
 
     for cred in getattr(attack_state, "credentials", []) or []:
         shown = _mask_secret(cred) if redact_secrets else cred
