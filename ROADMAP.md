@@ -284,6 +284,10 @@ A–I: self-improving skills, layered memory, multi-platform, model-agnostic. We
 structurally won't follow: **offensive security + local-first OPSEC + auditable,
 signed artifacts.** J–P are the features that widen that gap.
 
+> **Status: J–P all ✅ shipped (2026-06-19 → 2026-06-26)** on branch
+> `feature/agent-loop-upgrades`. Suite 72/72. The A–I foundation still has open
+> items — see each section (unstarted: B, D, E, F, H, I; G core done).
+
 ## J. Rules-of-Engagement guardrails  ✅  ← shipped 2026-06-19
 Authorized-pentest scoping the agent enforces itself.
 
@@ -352,38 +356,61 @@ Turn the `reporting` phase into an actual pentest report.
 - Touchpoints: `reporting/` (new), `cli/mapache_cli.py`; consumes K records +
   `AttackState`.
 
-## M. Exploit / CVE grounding  ⬜
+## M. Exploit / CVE grounding  ✅  ← shipped 2026-06-25
 Recon → prioritized attack plan, not just raw scan output.
 
-- [ ] Correlate discovered service versions → known CVEs/exploits via a live feed
-      (NVD/ExploitDB) + RAG over the existing vector store; deeper than the current
-      `searchsploit` tool call.
-- [ ] Feed correlations into attack-state vulns + the suggested-next-step logic.
-- Touchpoints: `memory/vector_store.py`, `security_tools/kali/` (searchsploit),
-  `core/conversation_chain.py`.
+- [x] Correlate discovered service versions → known CVEs/exploits. Shipped as an
+      **offline, deterministic** core (`core/cve_grounding.py`): a curated
+      in-process `CVE_CATALOG` (CVSS + exploit availability + bulletin aliases),
+      `ground_services()` prioritizing version-confirmed > CVSS > exploit-available,
+      `lookup()`/`severity_for_cve()`, `attack_plan()`, and a `cve_lookup` meta-tool
+      — deeper than a one-off `searchsploit` call.
+- [x] Feed correlations into attack-state vulns + the suggested-next-step logic.
+      `AttackState.versions` captures nmap -sV banners; version-confirmed CVEs are
+      auto-added to `vulnerabilities` and surfaced in `suggest_next_step`. Report
+      (L) now scores CVE findings by real CVSS. CLI `/cve`. Tests: 3.
+- [ ] Deferred (layered enhancements behind `ground_services()`/`lookup()`): a live
+      NVD/ExploitDB feed + RAG over the vector store. Kept default-offline so scan
+      output never leaves the box just to be scored (OPSEC, ties O).
+- Touchpoints: `core/cve_grounding.py` (new), `core/conversation_chain.py`,
+  `reporting/report_builder.py`, `cli/mapache_cli.py`.
 
-## N. Skill synthesis from exploit chains  ⬜  (extends A + I)
+## N. Skill synthesis from exploit chains  ✅  ← shipped 2026-06-24  (extends A + I)
 Close the self-improvement loop, the offensive way.
 
-- [ ] After a successful chain (recon→vuln→exploit→root), the agent auto-authors a
-      reusable tool via `create_tool` that replays it — Hermes' "learn from
-      experience", specialized to attack techniques.
-- [ ] Synthesized skills are shareable via the hub (I) as signed packages — the
-      niche network effect. Hub **signing/provenance** lives here too (extends I's
-      checksum-only safety to signatures).
-- Touchpoints: `tools/generated_tool_manager.py` (A), `hub/` (I),
-  `core/engagement_log.py` (K).
+- [x] After a successful chain (recon→vuln→exploit→root), the agent auto-authors a
+      reusable tool via `create_tool` that replays it. `core/skill_synthesis.py`
+      (`synthesize_from_log` / `persist_skill` + `synthesize_skill` meta-tool):
+      the logged chain (K) up to the first flag becomes a parameterized replay
+      tool with the target swapped for `__TARGET__`; non-runnable steps survive in
+      the methodology. CLI `/synthesize`.
+- [x] Hub **signing/provenance** lives here (extends I's checksum-only safety to
+      signatures): `core/provenance.py` — dependency-free HMAC-SHA256 over the
+      code sha256, per-machine key (`~/.mapache/skill_key`, 0600), `sign()/verify()`
+      surface ready for an ed25519 swap when the hub (I) lands. Synthesized skills
+      are signed at birth. Tests: 1.
+- Touchpoints: `core/skill_synthesis.py` (new), `core/provenance.py` (new),
+  `tools/generated_tool*.py` (A), `core/engagement_log.py` (K).
 
-## O. Hybrid OPSEC routing  ⬜  (extends G)
+## O. Hybrid OPSEC routing  ✅  ← shipped 2026-06-24  (extends G)
 Make "target data never leaves the box" a guarantee, not a warning.
 
-- [ ] Cloud model allowed for abstract reasoning/planning, but any call whose
-      payload touches target data (scan output, creds, exploit detail) is **pinned
-      to a local executor** — enforced in the router, not left to a warning.
-- [ ] Builds on G's provider awareness + the existing `local_only`/HYBRID routing.
-- Touchpoints: `models/routing_engine.py`, `models/routed_model.py`, `core/config.py`.
+- [x] Sensitive work is **pinned to a local model** even when cloud is allowed —
+      enforced at the delegation boundary (P), not left to a warning.
+      `core/opsec_routing.py` (`OpsecPolicy.decide()`, pure logic): pins when the
+      operator is OPSEC-sensitive (`Operator.prefer_local`) OR credentials are in
+      the shared attack state; no-op when cloud is disabled. Only recon/osint/web/
+      analyst are cloud-eligible.
+- [x] Builds on G's provider awareness: `RoutingEngine.local_clone()` (local-only
+      sibling) + `RoutedModel.local_variant()` (shares the pool). Controller pins
+      the child model at `_spawn_and_run`, inherits the policy to children, tags
+      `delegate.start` (K records it). CLI `/opsec`. Tests: 3.
+- Note: the lead's own cloud use is unchanged (its `--allow-cloud` choice + the G
+  warn hook); O governs delegations — by design.
+- Touchpoints: `core/opsec_routing.py` (new), `models/routing_engine.py`,
+  `models/routed_model.py`, `core/agent_controller.py`, `cli/mapache_cli.py`.
 
-## P. Multi-agent engagement orchestration  🟡  ← core shipped 2026-06-19 (Decepticon-inspired)
+## P. Multi-agent engagement orchestration  ✅  ← fully shipped 2026-06-26 (Decepticon-inspired)
 Specialist sub-agents coordinated by a lead over a shared blackboard.
 
 - [x] **Shared attack-state blackboard** (1/3). Sub-agents reference the lead's
@@ -407,10 +434,15 @@ Specialist sub-agents coordinated by a lead over a shared blackboard.
       `MAX_FANOUT`. A correctness win now (single-GPU serializes at the provider),
       a wall-clock win once cloud routing (G) serves calls concurrently. Same-host
       / multi-angle by design — children share one AttackState.
-- [ ] **Remaining:** per-host sub-states for true multi-host engagements (today
-      `delegate_parallel` is same-host; dispatch different hosts as separate
-      `delegate` calls); per-operator model routing (cheap-local recon vs stronger
-      exploit, ties to O).
+- [x] **Per-host sub-states** for true multi-host engagements (shipped 2026-06-26).
+      `delegate`/`delegate_parallel` tasks accept a `target`; a task whose host
+      differs from the lead's gets an isolated `AttackState` (created once, reused)
+      so parallel multi-host sweeps don't collide on one blackboard. `host_states()`
+      + `_render_host_states()` roll-up; CLI `/hosts`. Tests: 2.
+- [x] **Per-operator model routing** (shipped 2026-06-26). Each operator runs its
+      loop under the model ROLE its work needs — reasoning-heavy specialists as
+      PLANNER (quality model), action ones as EXECUTOR (fast). `Operator.model_role`
+      + `RoutedModel.for_role()`, applied after the O OPSEC pin. Tests: 2.
 - Touchpoints: `core/agent_controller.py`, `core/conversation_chain.py`,
   `core/operators.py` (new), `core/engagement_log.py`, `cli/mapache_cli.py`.
 
@@ -426,10 +458,11 @@ Specialist sub-agents coordinated by a lead over a shared blackboard.
 6. **I (community hub)** — depends on A's tool-install path + MCP config.
 7. **D (update manager)** — last; benefits from a settled file layout.
 
-**Differentiators (J–P)** layer on top of the foundation, ranked by leverage-vs-effort:
+**Differentiators (J–P)** — ✅ ALL SHIPPED (J→K→L→N→O→M→P, 2026-06-19 → 06-26).
+Original leverage-vs-effort ranking, for the record:
 1. **J (RoE guardrails)** — cheap, high-trust, unlocks safe autonomy; builds on attack-state.
 2. **K (engagement log)** — cheap (subscribe to the bus); compounds into L + N.
 3. **L (automated reporting)** — high client value, medium effort; needs K.
 4. **N (skill synthesis) + I signing** — the network-effect play; extends A + I.
 5. **O (hybrid OPSEC routing)** — the defining guarantee; extends G.
-6. **M (CVE grounding)** and **P (multi-agent orchestration)** — higher effort, do later.
+6. **M (CVE grounding)** and **P (multi-agent orchestration)** — higher effort, done last.
