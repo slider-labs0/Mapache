@@ -2450,6 +2450,36 @@ async def test_hub_tools_no_registry():
     print("  PASS  hub_tools_no_registry")
 
 
+def test_hub_url_registry():
+    import json as _json
+    from hub import make_generated_tool_manifest, UrlRegistry, LocalRegistry, make_registry
+
+    m = make_generated_tool_manifest("net_skill", "1.0.0", "remote skill",
+                                     {"type": "object", "properties": {}}, 'return "ok"\n')
+    index = _json.dumps([m.to_dict()])
+
+    # Injected fetcher keeps it offline; same surface as LocalRegistry.
+    calls = []
+    def fake_fetch(url):
+        calls.append(url)
+        return index
+    reg = UrlRegistry("https://example.com/index.json", fetch=fake_fetch)
+    assert [s.name for s in reg.list_skills()] == ["net_skill"]
+    assert reg.get("net_skill").version == "1.0.0"
+    assert reg.search("remote")[0].name == "net_skill"
+    assert calls and calls[0].startswith("https://")
+
+    # A failing fetch degrades to an empty index, never raises.
+    def boom(url):
+        raise OSError("down")
+    assert UrlRegistry("https://x/i.json", fetch=boom).list_skills() == []
+
+    # make_registry routes by scheme.
+    assert isinstance(make_registry("https://x/i.json", fetch=fake_fetch), UrlRegistry)
+    assert isinstance(make_registry("/some/local/dir"), LocalRegistry)
+    print("  PASS  hub_url_registry")
+
+
 # ------------------------------------------------------------------ #
 # Voice I/O (Phase 9)
 # ------------------------------------------------------------------ #
@@ -2640,6 +2670,7 @@ async def run_all():
     test_hub_manifest_and_verification()
     test_hub_install_generated_and_mcp()
     await test_hub_tools_no_registry()
+    test_hub_url_registry()
 
     print("\nVoice I/O (Phase 9)")
     test_voice_factories_and_manager()

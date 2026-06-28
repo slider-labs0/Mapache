@@ -623,9 +623,9 @@ class MapacheCLI:
         # is the integrity gate; foreign signatures are noted, not trusted.
         registry_path = str((getattr(self.config, "hub", None) or {}).get("registry", "")).strip()
         if registry_path:
-            from hub import LocalRegistry, HubClient
+            from hub import make_registry, HubClient
             self.hub_client = HubClient(
-                LocalRegistry(registry_path),
+                make_registry(registry_path),  # path → Local, http(s):// → Url
                 generated_dir=self.gen_manager.generated_dir,
                 mcp_path=self.args.mcp_config)
         from hub.tools import SkillSearchTool, SkillListTool, SkillInstallTool
