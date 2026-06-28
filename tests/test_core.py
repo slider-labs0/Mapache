@@ -1793,6 +1793,31 @@ def test_cve_attack_state_and_report_integration():
     print("  PASS  cve_attack_state_and_report_integration")
 
 
+def test_cve_live_nvd_enrichment():
+    import json as _json
+    from core.cve_grounding import enrich_from_nvd, cvss_to_severity
+
+    # An NVD 2.0-shaped response, served through an injected fetcher (offline).
+    payload = {"vulnerabilities": [
+        {"cve": {"id": "CVE-2023-1111",
+                 "descriptions": [{"lang": "en", "value": "Example RCE in foobar"}],
+                 "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 9.8}}]}}},
+        {"cve": {"id": "CVE-2023-2222",
+                 "descriptions": [{"lang": "en", "value": "Lesser issue"}],
+                 "metrics": {"cvssMetricV2": [{"cvssData": {"baseScore": 4.0}}]}}},
+    ]}
+
+    got = enrich_from_nvd("foobar", fetch=lambda kw: _json.dumps(payload))
+    # Parsed, scored, and sorted by CVSS desc.
+    assert [e.id for e in got] == ["CVE-2023-1111", "CVE-2023-2222"]
+    assert got[0].cvss == 9.8 and got[0].severity == cvss_to_severity(9.8) == "Critical"
+    assert "foobar" in got[0].products and got[0].references
+
+    # A failed fetch degrades to [] (offline catalog stays the default).
+    assert enrich_from_nvd("x", fetch=lambda kw: (_ for _ in ()).throw(OSError())) == []
+    print("  PASS  cve_live_nvd_enrichment")
+
+
 # ------------------------------------------------------------------ #
 # Multi-host sub-states for parallel delegation (feature P)
 # ------------------------------------------------------------------ #
@@ -2632,6 +2657,7 @@ async def run_all():
     test_cve_cvss_and_lookup()
     test_cve_ground_services_prioritizes()
     test_cve_attack_state_and_report_integration()
+    test_cve_live_nvd_enrichment()
 
     print("\nMulti-host delegation (feature P)")
     test_multihost_substate_resolution()

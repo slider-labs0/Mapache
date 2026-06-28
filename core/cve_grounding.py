@@ -19,6 +19,7 @@ the box just to be scored (the same guarantee feature O makes for routing).
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
@@ -223,6 +224,68 @@ def attack_plan(matches: list[CVEMatch]) -> str:
             f"  [{e.severity} / CVSS {e.cvss}] {e.id} on {m.port} ({m.service}) "
             f"[{m.confidence}]: {e.title}{exp}")
     return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- #
+# Live enrichment (optional layer over the offline catalog) — deferred M item
+# --------------------------------------------------------------------------- #
+
+NVD_API = "https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch="
+
+
+def _cvss_from_metrics(metrics: dict) -> float:
+    for key in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
+        arr = metrics.get(key) or []
+        if arr:
+            try:
+                return float(arr[0].get("cvssData", {}).get("baseScore", 0.0))
+            except (TypeError, ValueError):
+                return 0.0
+    return 0.0
+
+
+def parse_nvd(payload: dict, keyword: str) -> list[CVEEntry]:
+    """Parse an NVD 2.0 API response into catalog-shaped CVEEntry objects."""
+    out: list[CVEEntry] = []
+    for item in (payload or {}).get("vulnerabilities", []) or []:
+        cve = item.get("cve", {}) or {}
+        cid = cve.get("id", "")
+        if not cid:
+            continue
+        title = next((d.get("value", "") for d in cve.get("descriptions", [])
+                      if d.get("lang") == "en"), "")
+        out.append(CVEEntry(
+            id=cid, cvss=_cvss_from_metrics(cve.get("metrics", {}) or {}),
+            title=title.strip()[:140], products=(keyword.lower(),),
+            references=(f"https://nvd.nist.gov/vuln/detail/{cid}",)))
+    return out
+
+
+def _nvd_fetch(keyword: str) -> str:
+    from urllib.request import urlopen
+    with urlopen(NVD_API + keyword, timeout=20) as resp:  # noqa: S310
+        return resp.read().decode("utf-8", errors="replace")
+
+
+def enrich_from_nvd(
+    keyword: str,
+    *,
+    fetch: Optional[Callable[[str], str]] = None,
+    limit: int = 5,
+) -> list[CVEEntry]:
+    """Live NVD lookup for a service keyword (the layered enhancement promised in
+    M). OPTIONAL + opt-in: the fetch is injectable (offline-testable) and any
+    failure returns [] so the offline catalog remains the reliable default. Only
+    a low-sensitivity keyword leaves the box, never scan output."""
+    fetch = fetch or _nvd_fetch
+    try:
+        raw = fetch(keyword)
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        return []
+    entries = parse_nvd(payload, keyword)
+    entries.sort(key=lambda e: e.cvss, reverse=True)
+    return entries[:limit]
 
 
 # --------------------------------------------------------------------------- #
