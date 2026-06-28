@@ -59,6 +59,24 @@ def _phase_summary(state: Any) -> Optional[tuple[str, str, str]]:
     return label, colour, "  ".join(bits)
 
 
+# Todo status → (checkbox, colour) for the task-list rendering.
+_TODO_STYLE = {
+    "completed":   ("[x]", "green"),
+    "in_progress": ("[~]", "yellow"),
+    "pending":     ("[ ]", "white"),
+}
+
+
+def _todo_rows(todos: list) -> list[tuple[str, str, str]]:
+    """(checkbox, colour, task) per todo, or [] if there are none."""
+    rows = []
+    for t in todos or []:
+        status = getattr(t, "status", "pending")
+        box, colour = _TODO_STYLE.get(status, ("[ ]", "white"))
+        rows.append((box, colour, getattr(t, "task", str(t))))
+    return rows
+
+
 def rich_available() -> bool:
     try:
         import rich  # noqa: F401
@@ -141,6 +159,15 @@ class PlainRenderer(Renderer):
     def info(self, msg: str) -> None:
         print(msg)
 
+    def task_list(self, todos: list) -> None:
+        rows = _todo_rows(todos)
+        if not rows:
+            return
+        done = sum(1 for t in todos if getattr(t, "status", "") == "completed")
+        print(f"  Tasks ({done}/{len(rows)}):")
+        for box, _colour, task in rows:
+            print(f"    {box} {task}")
+
 
 # --------------------------------------------------------------------------- #
 # Rich — only constructed when `rich` is importable
@@ -197,3 +224,13 @@ class RichRenderer(Renderer):
 
     def info(self, msg: str) -> None:
         self.console.print(msg)
+
+    def task_list(self, todos: list) -> None:
+        rows = _todo_rows(todos)
+        if not rows:
+            return
+        from rich.panel import Panel
+        done = sum(1 for t in todos if getattr(t, "status", "") == "completed")
+        body = "\n".join(f"[{colour}]{box}[/] {task}" for box, colour, task in rows)
+        self.console.print(Panel(body, title=f"Task list ({done}/{len(rows)})",
+                                 border_style="blue", expand=False))

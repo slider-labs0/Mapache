@@ -2282,6 +2282,22 @@ def test_render_plain_output_matches_legacy():
                                                current_phase="post"))
     line = buf3.getvalue()
     assert "[POST]" in line and "target=t" in line and "\x1b[" not in line
+
+    # Task list renders checkboxes by status (feature B panel, plain form).
+    from types import SimpleNamespace
+    todos = [SimpleNamespace(task="recon", status="completed"),
+             SimpleNamespace(task="exploit", status="in_progress"),
+             SimpleNamespace(task="loot", status="pending")]
+    buf4 = io.StringIO()
+    with redirect_stdout(buf4):
+        PlainRenderer().task_list(todos)
+    tl = buf4.getvalue()
+    assert "Tasks (1/3)" in tl and "[x] recon" in tl and "[~] exploit" in tl and "[ ] loot" in tl
+    # No todos → nothing printed.
+    buf5 = io.StringIO()
+    with redirect_stdout(buf5):
+        PlainRenderer().task_list([])
+    assert buf5.getvalue() == ""
     print("  PASS  render_plain_output_matches_legacy")
 
 
