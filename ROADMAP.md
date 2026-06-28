@@ -120,16 +120,23 @@ tool run.
   `tools/tool_dispatcher.py`, `tools/tool_schema.py`, `core/agent_controller.py`,
   `core/conversation_chain.py` (phase sets / always_tools), `core/executor.py`.
 
-## B. Nicer CLI  ⬜
+## B. Nicer CLI  ✅  ← shipped 2026-06-27
 Upgrade `cli/mapache_cli.py` from line-printing to a real TUI surface.
 
-- [ ] Adopt `rich` (panels, tables, syntax highlight, spinners) — render the
-      `=== TASK LIST ===` block as a live panel, tool calls as cards.
-- [ ] Streamed tokens rendered in a live region (hook the existing `on_token`).
-- [ ] Color-coded phase banner (recon/enum/exploit/post/report) + target/ports
-      status line pulled from `ConversationChain`.
-- [ ] Keep a `--plain` fallback for piping / dumb terminals.
-- Touchpoints: `cli/mapache_cli.py`, `core/logger.py`.
+- [x] Adopt `rich` (panels, colour, styled streaming) behind a `Renderer`
+      abstraction (`cli/render.py`): `RichRenderer` draws the agent response as a
+      panel and the meta line dimmed; `PlainRenderer` preserves the exact historical
+      output. `rich` is an OPTIONAL dependency — absent, the plain path is chosen
+      automatically. (Full live TASK-LIST panel / tool cards left as polish — the
+      concurrent-stdin steering loop makes a persistent `Live` region fragile.)
+- [x] Streamed tokens routed through the renderer (`on_token` → `render.stream`):
+      styled "agent" prefix + verbatim tokens in rich, identical inline print in plain.
+- [x] Colour-coded phase banner (RECON/ENUM/EXPLOIT/POST/REPORT) + target/ports/
+      vulns status line pulled from `AttackState`, shown at the top of each turn.
+- [x] `--plain` fallback; also auto-selected for pipes/dumb terminals (`isatty`)
+      and when `rich` isn't installed. Tests: 3 (pure selection + phase-style +
+      plain-output parity).
+- Touchpoints: `cli/render.py` (new), `cli/mapache_cli.py`.
 
 ## C. Setup wizard + config layer  ✅  ← shipped (C0 2026-06-10, C1 2026-06-15)
 The config layer is the shared foundation C and G both stand on. Today there is

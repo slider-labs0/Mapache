@@ -2184,6 +2184,83 @@ def test_updater_backup_config():
 
 
 # ------------------------------------------------------------------ #
+# CLI presentation layer (feature B)
+# ------------------------------------------------------------------ #
+
+
+def test_render_phase_style_and_summary():
+    from cli.render import phase_style, _phase_summary
+    from core.conversation_chain import AttackState
+
+    assert phase_style("exploitation") == ("EXPLOIT", "red")
+    assert phase_style("recon")[0] == "RECON"
+    assert phase_style("nonsense") == ("PHASE", "white")   # unknown → default
+
+    # Nothing discovered yet → no phase line.
+    assert _phase_summary(AttackState()) is None
+    # Target + ports + vulns roll into the detail string.
+    st = AttackState(target="10.10.10.5", open_ports=["22/tcp", "80/tcp"],
+                     vulnerabilities=["CVE-2017-0144"], current_phase="enumeration")
+    label, colour, detail = _phase_summary(st)
+    assert label == "ENUM" and colour == "blue"
+    assert "target=10.10.10.5" in detail and "22/tcp" in detail and "vulns=1" in detail
+    print("  PASS  render_phase_style_and_summary")
+
+
+def test_render_selection_without_rich():
+    import cli.render as render
+    from cli.render import make_renderer, PlainRenderer, rich_available
+
+    # --plain always yields the plain renderer.
+    assert isinstance(make_renderer(plain=True), PlainRenderer)
+    if not rich_available():
+        # No rich installed → plain even when forced / on a notional TTY.
+        assert isinstance(make_renderer(plain=False), PlainRenderer)
+        assert isinstance(make_renderer(force_rich=True), PlainRenderer)
+    else:
+        # rich present → force_rich gives the rich renderer.
+        assert make_renderer(force_rich=True).is_rich
+        assert isinstance(make_renderer(plain=True), PlainRenderer)
+    print("  PASS  render_selection_without_rich")
+
+
+def test_render_plain_output_matches_legacy():
+    import io
+    from contextlib import redirect_stdout
+    from cli.render import PlainRenderer
+    from core.conversation_chain import AttackState
+
+    # Streamed turn: "agent > " prefix once, then tokens, then meta line.
+    r = PlainRenderer()
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        r.start_turn()
+        r.stream("hel")
+        r.stream("lo")
+        r.agent_result("hello", ["nmap_scan"], 2, None)
+    out = buf.getvalue()
+    assert "agent > hello" in out
+    assert "(used: nmap_scan, 2 steps)" in out
+
+    # Non-streamed turn prints the full content with the agent prefix.
+    r2 = PlainRenderer()
+    buf2 = io.StringIO()
+    with redirect_stdout(buf2):
+        r2.start_turn()
+        r2.agent_result("done", [], 1, None)
+    assert "agent > done" in buf2.getvalue()
+
+    # Phase line is plain (no escape codes) and carries the label + detail.
+    buf3 = io.StringIO()
+    with redirect_stdout(buf3):
+        PlainRenderer().phase_line(AttackState(target="t", open_ports=["80/tcp"],
+                                               current_phase="post"))
+    line = buf3.getvalue()
+    assert "[POST]" in line and "target=t" in line and "\x1b[" not in line
+    print("  PASS  render_plain_output_matches_legacy")
+
+
+# ------------------------------------------------------------------ #
 # Runner
 # ------------------------------------------------------------------ #
 
@@ -2305,6 +2382,11 @@ async def run_all():
     test_updater_version_compare_and_local()
     test_updater_check_cache_and_notice()
     test_updater_backup_config()
+
+    print("\nCLI presentation layer (feature B)")
+    test_render_phase_style_and_summary()
+    test_render_selection_without_rich()
+    test_render_plain_output_matches_legacy()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()

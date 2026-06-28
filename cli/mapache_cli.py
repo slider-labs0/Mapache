@@ -30,6 +30,7 @@ from models.routed_model import RoutedModel
 from core.opsec_routing import OpsecPolicy
 from core.soul import load_soul, soul_file, init_soul
 from memory.user_profile import UserProfile, UserRememberTool
+from cli.render import make_renderer
 from models.providers.ollama_provider import OllamaProvider
 from plugins.sdk.base_tool import Permission
 from security_tools.recon.nmap_tool import NmapTool
@@ -206,6 +207,10 @@ class MapacheCLI:
         self.memory = MemoryManager()
         self.confirm = args.confirm
         self.working_dir = os.path.abspath(args.dir)
+
+        # Presentation layer (feature B): rich UI on a TTY when `rich` is
+        # installed and --plain wasn't passed; otherwise the plain line printer.
+        self.render = make_renderer(getattr(args, "plain", False))
 
         # Config layer (C0/C1). Resolve the effective settings across the full
         # precedence chain — CLI flag > project > global > env > default — by
@@ -713,42 +718,28 @@ class MapacheCLI:
     async def _agent_turn(self, user_input: str) -> None:
         if self.controller is None:
             return
-        print()
+        self.render.start_turn()
+        # Colour-coded phase banner + target/ports pulled from the attack state.
+        self.render.phase_line(self.controller.chain.attack_state)
         turn_id = self.memory.session.start_turn(user_input) if self.memory.session else None
         try:
             # Stream tokens live when the model supports it (native tool-calling
-            # models). The controller no-ops the callback in JSON mode, so
-            # `streamed` stays False there and we print the content normally.
-            streamed = False
-
-            def on_token(text: str) -> None:
-                nonlocal streamed
-                if not streamed:
-                    print("agent > ", end="", flush=True)
-                    streamed = True
-                print(text, end="", flush=True)
-
+            # models). The controller no-ops the callback in JSON mode, so the
+            # renderer's streamed state stays False and it prints the content.
             turn_task = asyncio.create_task(self.controller.run(
-                user_input, session_id=self.session_id, on_token=on_token
+                user_input, session_id=self.session_id, on_token=self.render.stream
             ))
             response = await self._drive_turn(turn_task)
             self.session_id = response.session_id
-            if streamed:
-                print()  # finish the streamed line
-            else:
-                print(f"agent > {response.content}")
-            if response.tool_calls_made:
-                print(f"        (used: {', '.join(response.tool_calls_made)}, {response.iterations} steps)")
-            if response.error and response.error != "max_iterations":
-                print(f"        ✗ {response.error}")
+            self.render.agent_result(response.content, response.tool_calls_made,
+                                     response.iterations, response.error)
             if turn_id and self.memory.session:
                 self.memory.session.end_turn(turn_id, response.content)
         except Exception as exc:
-            print(f"agent > ✗ {exc}")
+            self.render.error(str(exc))
             if self.args.debug:
                 import traceback
                 traceback.print_exc()
-        print()
 
     async def _drive_turn(self, turn_task: asyncio.Task):
         """
@@ -774,7 +765,7 @@ class MapacheCLI:
                     self._pending_confirm.set_result(line)
                 elif line and self.controller is not None:
                     self.controller.steer(line)
-                    print(f"\n  ↪ steering: {line}\n", flush=True)
+                    self.render.steering(line)
             else:
                 # Turn finished first; don't strand the queued get — its item
                 # (if any) remains buffered for the REPL.
@@ -1184,6 +1175,10 @@ def parse_args() -> argparse.Namespace:
                         help="Disable phase-based tool subsetting and expose all "
                              "tools every turn (may overflow local-model payloads)")
     parser.add_argument("--no-context", action="store_true")
+    parser.add_argument("--plain", action="store_true",
+                        help="Disable the rich TUI (panels/colour) and use plain "
+                             "line output. Auto-selected for pipes/dumb terminals "
+                             "or when the `rich` package isn't installed.")
     parser.add_argument("--mcp-config", default="mcp.json",
                         help="Path to an mcp.json (Claude-Desktop-style) listing "
                              "MCP servers to connect to. Ignored if absent.")
