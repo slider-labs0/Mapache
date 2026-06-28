@@ -67,6 +67,10 @@ def _default_config() -> dict[str, Any]:
             },
         },
         "messaging": {"telegram_token": "", "discord_token": ""},
+        # Execution backend (feature H): where `shell` commands run.
+        # backend: local | ssh | docker. ssh needs host (+user/port/key);
+        # docker needs container OR image (+optional workdir).
+        "execution": {"backend": "local"},
     }
 
 
@@ -193,6 +197,8 @@ class MapacheConfig:
     max_vram_gb: float = 12.0
     providers: dict[str, ProviderConfig] = field(default_factory=dict)
     messaging: MessagingConfig = field(default_factory=MessagingConfig)
+    # Execution backend (feature H): raw dict ({"backend": "local|ssh|docker", …}).
+    execution: dict[str, Any] = field(default_factory=lambda: {"backend": "local"})
     # Paths the config was assembled from, for diagnostics.
     sources: list[str] = field(default_factory=list)
 
@@ -222,6 +228,7 @@ class MapacheConfig:
                 telegram_token=msg.get("telegram_token", ""),
                 discord_token=msg.get("discord_token", ""),
             ),
+            execution=dict(data.get("execution") or {"backend": "local"}),
             sources=list(data.get("_sources") or []),
         )
 
@@ -280,6 +287,7 @@ class MapacheConfig:
                 "discord_token": _secret(self.messaging.discord_token) if redact
                 else self.messaging.discord_token,
             },
+            "execution": dict(self.execution),
         }
 
     def redacted(self) -> dict[str, Any]:

@@ -279,17 +279,26 @@ the config layer (C0).
   `models/routed_model.py`, `models/model_registry.py`, `cli/mapache_cli.py`,
   `core/config.py`.
 
-## H. Remote execution — SSH + Docker  ⬜
+## H. Remote execution — SSH + Docker  ✅  ← shipped 2026-06-27
 Run tools/commands somewhere other than the local shell.
 
-- [ ] Execution-backend abstraction behind `core/executor.py` (local / ssh /
-      docker) so `shell_tool` and other bins dispatch through it.
-- [ ] SSH backend (paramiko or `ssh` subprocess): host/key config, run the
-      offensive toolchain from a remote box.
-- [ ] Docker backend: run a command inside a named/ephemeral container (e.g. a
-      Kali image), stream output back.
-- [ ] Surface the active backend in the CLI status line; per-target backend.
-- Touchpoints: `core/executor.py`, `security_tools/shell_tool.py`, config.
+- [x] Execution-backend abstraction (`core/exec_backend.py`): `ExecBackend` +
+      `LocalBackend`/`SSHBackend`/`DockerBackend`, `build_backend(spec)` factory,
+      `backend_from_config` (warn-don't-block fallback). `shell` dispatches through
+      the active backend (local fast-path unchanged).
+- [x] SSH backend via the system `ssh` binary (dependency-free, key/agent auth):
+      `ssh [-p] [-i key] -o BatchMode=yes user@host "<cmd>"`, working-dir wrapped
+      as `cd … && <cmd>`.
+- [x] Docker backend: `docker exec <container> sh -c` (long-lived) or
+      `docker run --rm <image> sh -c` (ephemeral, e.g. a Kali image), `-w` workdir.
+- [x] Config `execution` block (backend + host/user/port/key / container/image/
+      workdir); `--exec-backend` override; active non-local backend shown in the
+      status line + `/backend` command. Tests: 3 (argv build, real local run +
+      ShellTool routing, config parse).
+- [ ] Deferred: per-target backend (one active backend for now); adopting the
+      backend in `kali_run` and the other bin tools (shell covers the common path).
+- Touchpoints: `core/exec_backend.py` (new), `security_tools/shell_tool.py`,
+  `core/config.py`, `cli/mapache_cli.py`.
 
 ## I. Community hub — downloadable skills  ⬜
 Browse + install community "skills" (tools / prompt packs / MCP configs).

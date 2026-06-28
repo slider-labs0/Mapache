@@ -50,9 +50,23 @@ class ShellTool(BaseTool):
 
     MAX_OUTPUT_BYTES = 50_000
 
+    def __init__(self, backend: Any = None, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        # Execution backend (feature H). None / local → the local fast-path below
+        # (unchanged). A remote backend (ssh/docker) routes the command off-host.
+        self.backend = backend
+
     async def execute(self, cmd: str, timeout: int = 30, working_dir: str = "", **kwargs: Any) -> ToolResult:
         if not cmd or not cmd.strip():
             return ToolResult.fail("Empty command")
+
+        # Remote backend (feature H): dispatch off-host and map the result.
+        if self.backend is not None and getattr(self.backend, "name", "local") != "local":
+            res = await self.backend.run(cmd, timeout=timeout, working_dir=working_dir)
+            meta = {"exit_code": res.exit_code, "cmd": cmd, "backend": self.backend.name}
+            if res.error and not (res.output or "").strip():
+                return ToolResult.fail(res.error, output=res.output)
+            return ToolResult.ok(res.output, metadata=meta)
 
         cwd = working_dir if working_dir else None
 

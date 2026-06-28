@@ -2261,6 +2261,93 @@ def test_render_plain_output_matches_legacy():
 
 
 # ------------------------------------------------------------------ #
+# Remote execution backends (feature H)
+# ------------------------------------------------------------------ #
+
+
+def test_exec_backend_build_and_argv():
+    from core.exec_backend import (build_backend, backend_from_config,
+                                   LocalBackend, SSHBackend, DockerBackend)
+
+    # Factory selection.
+    assert isinstance(build_backend({"backend": "local"}), LocalBackend)
+    assert isinstance(build_backend(None), LocalBackend)
+    assert isinstance(build_backend({"backend": "ssh", "host": "h"}), SSHBackend)
+    assert isinstance(build_backend({"backend": "docker", "image": "i"}), DockerBackend)
+
+    # Under-specified remote backends raise.
+    for bad in ({"backend": "ssh"}, {"backend": "docker"}, {"backend": "weird"}):
+        try:
+            build_backend(bad)
+            assert False, f"expected ValueError for {bad}"
+        except ValueError:
+            pass
+
+    # ...but backend_from_config never raises — it falls back to local + warns.
+    fb, warn = backend_from_config({"backend": "ssh"})
+    assert isinstance(fb, LocalBackend) and warn and "local" in warn
+
+    # SSH argv: target, non-default port, key, batch mode, and working-dir wrap.
+    ssh = SSHBackend(host="10.0.0.5", user="root", port=2222, key="/k/id")
+    argv = ssh.build_argv("id", working_dir="/tmp")
+    assert argv[0] == "ssh" and "root@10.0.0.5" in argv
+    assert "-p" in argv and "2222" in argv and "-i" in argv and "/k/id" in argv
+    assert "BatchMode=yes" in argv and argv[-1] == "cd /tmp && id"
+    assert ssh.name == "ssh" and "10.0.0.5" in ssh.describe()
+    # Default port omits -p.
+    assert "-p" not in SSHBackend(host="h").build_argv("ls")
+
+    # Docker: exec into a named container vs ephemeral run --rm from an image.
+    dc = DockerBackend(container="kali")
+    assert dc.build_argv("nmap t") == ["docker", "exec", "kali", "sh", "-c", "nmap t"]
+    di = DockerBackend(image="kalilinux/kali", workdir="/root")
+    assert di.build_argv("id") == ["docker", "run", "--rm", "-w", "/root",
+                                   "kalilinux/kali", "sh", "-c", "id"]
+    print("  PASS  exec_backend_build_and_argv")
+
+
+async def test_exec_backend_local_run_and_shell_tool():
+    from core.exec_backend import LocalBackend, ExecResult
+    from security_tools.shell_tool import ShellTool
+
+    # LocalBackend really runs a subprocess.
+    res = await LocalBackend().run("echo backend_ok")
+    assert res.success and "backend_ok" in res.output
+
+    # ShellTool with no backend uses the local fast-path (also a real subprocess).
+    local = await ShellTool().execute(cmd="echo shell_ok")
+    assert local.success and "shell_ok" in local.output
+
+    # A non-local backend is dispatched through instead of the local path.
+    class FakeRemote:
+        name = "ssh"
+        def __init__(self):
+            self.calls: list[str] = []
+        async def run(self, cmd, *, timeout=30, working_dir=""):
+            self.calls.append(cmd)
+            return ExecResult("remote-output", exit_code=0)
+
+    fake = FakeRemote()
+    out = await ShellTool(backend=fake).execute(cmd="whoami")
+    assert fake.calls == ["whoami"]
+    assert out.success and out.output == "remote-output"
+    assert out.metadata.get("backend") == "ssh"
+    print("  PASS  exec_backend_local_run_and_shell_tool")
+
+
+def test_config_execution_section():
+    from core.config import MapacheConfig
+
+    # Default config carries a local execution backend.
+    assert MapacheConfig.from_dict({}).execution.get("backend") == "local"
+    cfg = MapacheConfig.from_dict(
+        {"execution": {"backend": "docker", "container": "kali"}})
+    assert cfg.execution["backend"] == "docker" and cfg.execution["container"] == "kali"
+    assert cfg.to_dict()["execution"]["backend"] == "docker"
+    print("  PASS  config_execution_section")
+
+
+# ------------------------------------------------------------------ #
 # Runner
 # ------------------------------------------------------------------ #
 
@@ -2387,6 +2474,11 @@ async def run_all():
     test_render_phase_style_and_summary()
     test_render_selection_without_rich()
     test_render_plain_output_matches_legacy()
+
+    print("\nRemote execution backends (feature H)")
+    test_exec_backend_build_and_argv()
+    await test_exec_backend_local_run_and_shell_tool()
+    test_config_execution_section()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()

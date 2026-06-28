@@ -31,6 +31,7 @@ from core.opsec_routing import OpsecPolicy
 from core.soul import load_soul, soul_file, init_soul
 from memory.user_profile import UserProfile, UserRememberTool
 from cli.render import make_renderer
+from core.exec_backend import backend_from_config
 from models.providers.ollama_provider import OllamaProvider
 from plugins.sdk.base_tool import Permission
 from security_tools.recon.nmap_tool import NmapTool
@@ -86,6 +87,7 @@ Commands:
   /chain                 Show current attack state
   /operators             List specialist sub-agents (delegation roster)
   /hosts                 Show per-host attack states (multi-host delegation)
+  /backend               Show the execution backend (local / ssh / docker)
   /opsec                 Show hybrid OPSEC routing (which ops are pinned local)
   /scope                 Show Rules-of-Engagement scope (in-scope targets)
   /log                   Show engagement-log summary
@@ -211,6 +213,7 @@ class MapacheCLI:
         # Presentation layer (feature B): rich UI on a TTY when `rich` is
         # installed and --plain wasn't passed; otherwise the plain line printer.
         self.render = make_renderer(getattr(args, "plain", False))
+        self.exec_backend = None  # feature H — built in setup() from config
 
         # Config layer (C0/C1). Resolve the effective settings across the full
         # precedence chain — CLI flag > project > global > env > default — by
@@ -365,6 +368,15 @@ class MapacheCLI:
         # operator, injected as a compact summary each turn.
         self.user_profile = UserProfile()
 
+        # Execution backend (feature H): where `shell` runs — local / ssh /
+        # docker. From config.execution; --exec-backend overrides the kind.
+        exec_spec = dict(getattr(self.config, "execution", None) or {"backend": "local"})
+        if getattr(self.args, "exec_backend", None):
+            exec_spec["backend"] = self.args.exec_backend
+        self.exec_backend, exec_warn = backend_from_config(exec_spec)
+        if exec_warn:
+            print(f"  ⚠ {exec_warn}")
+
         # Opt-in verifier (--verify): route the verification call to the
         # VERIFIER-role model so it can use a higher-quality model than the loop.
         async def verifier_caller(messages: list[dict]):
@@ -403,8 +415,9 @@ class MapacheCLI:
                 Permission.UNRESTRICTED,
             })
 
-            # Core
-            self.registry.register(ShellTool())
+            # Core — `shell` dispatches through the execution backend (feature H:
+            # local / ssh / docker), built from config (--exec-backend overrides).
+            self.registry.register(ShellTool(backend=self.exec_backend))
 
             # Filesystem
             self.registry.register(FileReadTool())
@@ -646,6 +659,9 @@ class MapacheCLI:
 
         if self.registry:
             print(f"\n  Tools    : {len(self.registry.list_names())} registered")
+
+        if self.exec_backend is not None and self.exec_backend.name != "local":
+            print(f"  Exec     : {self.exec_backend.describe()} (shell runs remote)")
 
         if get_mapache_instructions(self.working_dir):
             print("  MAPACHE.md loaded")
@@ -941,6 +957,16 @@ class MapacheCLI:
                 print("  " + persona.replace("\n", "\n  "))
                 print()
 
+        elif command == "/backend":
+            if self.exec_backend is None:
+                print("\n  Execution backend: local shell\n")
+            else:
+                note = " (shell commands run off this host)" \
+                    if self.exec_backend.name != "local" else ""
+                print(f"\n  Execution backend: {self.exec_backend.describe()}{note}")
+                print("  Configure in config.execution (backend: local|ssh|docker) "
+                      "or --exec-backend.\n")
+
         elif command == "/hosts":
             hosts = self.controller.host_states() if self.controller else {}
             if not hosts:
@@ -1179,6 +1205,11 @@ def parse_args() -> argparse.Namespace:
                         help="Disable the rich TUI (panels/colour) and use plain "
                              "line output. Auto-selected for pipes/dumb terminals "
                              "or when the `rich` package isn't installed.")
+    parser.add_argument("--exec-backend", default=None,
+                        choices=["local", "ssh", "docker"],
+                        help="Where `shell` commands run (feature H). ssh/docker "
+                             "need host/container details in config.execution "
+                             "(mapache.json / ~/.mapache/config.json). Default: local.")
     parser.add_argument("--mcp-config", default="mcp.json",
                         help="Path to an mcp.json (Claude-Desktop-style) listing "
                              "MCP servers to connect to. Ignored if absent.")
