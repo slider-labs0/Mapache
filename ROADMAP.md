@@ -127,8 +127,9 @@ Upgrade `cli/mapache_cli.py` from line-printing to a real TUI surface.
       abstraction (`cli/render.py`): `RichRenderer` draws the agent response as a
       panel and the meta line dimmed; `PlainRenderer` preserves the exact historical
       output. `rich` is an OPTIONAL dependency — absent, the plain path is chosen
-      automatically. (Full live TASK-LIST panel / tool cards left as polish — the
-      concurrent-stdin steering loop makes a persistent `Live` region fragile.)
+      automatically. The TASK-LIST renders as a status-coloured panel after each
+      turn (2026-06-28); a persistent `Live` region stays out by design (it fights
+      the concurrent-stdin steering loop).
 - [x] Streamed tokens routed through the renderer (`on_token` → `render.stream`):
       styled "agent" prefix + verbatim tokens in rich, identical inline print in plain.
 - [x] Colour-coded phase banner (RECON/ENUM/EXPLOIT/POST/REPORT) + target/ports/
@@ -295,8 +296,9 @@ Run tools/commands somewhere other than the local shell.
       workdir); `--exec-backend` override; active non-local backend shown in the
       status line + `/backend` command. Tests: 3 (argv build, real local run +
       ShellTool routing, config parse).
-- [ ] Deferred: per-target backend (one active backend for now); adopting the
-      backend in `kali_run` and the other bin tools (shell covers the common path).
+- [x] `kali_run` adopts the backend (2026-06-28): a remote backend runs the bare
+      tool name (no local `shutil.which`) so the remote/container PATH resolves it.
+- [ ] Still deferred: per-target backend (one active backend for now).
 - Touchpoints: `core/exec_backend.py` (new), `security_tools/shell_tool.py`,
   `core/config.py`, `cli/mapache_cli.py`.
 
@@ -308,8 +310,9 @@ Browse + install community "skills" (tools / MCP configs).
       signature/signer; `make_*_manifest` publisher helpers.
 - [x] Hub client (`hub/client.py`) + registry (`hub/registry.py`, `LocalRegistry`
       reading `index.json`): `skill_search` / `skill_list` / `skill_install` agent
-      tools (in CORE_TOOLS) + CLI `/hub`. A URL/GitHub-index registry drops in
-      behind the same surface later (kept offline by default).
+      tools (in CORE_TOOLS) + CLI `/hub`. `UrlRegistry` (HTTP/raw-GitHub index)
+      added 2026-06-28 behind the same surface (injectable fetch; `make_registry`
+      routes by scheme).
 - [x] Install into the right home: generated tool → `write_generated_tool` (A,
       origin="hub" so the loader re-verifies sha256); MCP server → an `mcpServers`
       entry in `mcp.json`. (prompt/persona pack: documented future type, no
@@ -335,7 +338,9 @@ signed artifacts.** J–P are the features that widen that gap.
 > **Status: J–P all ✅ shipped (2026-06-19 → 2026-06-26)** on branch
 > `feature/agent-loop-upgrades`. The A–I foundation is now also complete
 > (A,B,C,D,E,F,G,H,I shipped 2026-06-08 → 06-28; G live-key e2e verification is
-> the only loose end). Suite 90/90.
+> the only loose end). Phase 9 voice shipped + deferred sub-items cleared
+> (hub URL registry, live NVD, kali_run backend, task-list panel, ed25519).
+> Suite 96/96.
 
 ## J. Rules-of-Engagement guardrails  ✅  ← shipped 2026-06-19
 Authorized-pentest scoping the agent enforces itself.
@@ -418,9 +423,10 @@ Recon → prioritized attack plan, not just raw scan output.
       `AttackState.versions` captures nmap -sV banners; version-confirmed CVEs are
       auto-added to `vulnerabilities` and surfaced in `suggest_next_step`. Report
       (L) now scores CVE findings by real CVSS. CLI `/cve`. Tests: 3.
-- [ ] Deferred (layered enhancements behind `ground_services()`/`lookup()`): a live
-      NVD/ExploitDB feed + RAG over the vector store. Kept default-offline so scan
-      output never leaves the box just to be scored (OPSEC, ties O).
+- [x] Live NVD enrichment (2026-06-28): `enrich_from_nvd(keyword)` + `parse_nvd`
+      over the NVD 2.0 API — opt-in, injectable fetch, fails to [] so the offline
+      catalog stays default; only a low-sensitivity keyword leaves the box.
+- [ ] Still deferred: RAG over the vector store; ExploitDB feed.
 - Touchpoints: `core/cve_grounding.py` (new), `core/conversation_chain.py`,
   `reporting/report_builder.py`, `cli/mapache_cli.py`.
 
