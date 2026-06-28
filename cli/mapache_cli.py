@@ -458,7 +458,9 @@ class MapacheCLI:
             self.registry.register(JohnCrackTool())
             self.registry.register(JohnFormatTool())
             self.registry.register(KaliToolListTool())
-            self.registry.register(KaliRunTool())
+            # kali_run shares the execution backend (feature H) so the toolchain
+            # can run on a remote Kali box / container too.
+            self.registry.register(KaliRunTool(backend=self.exec_backend))
             self.registry.register(SearchsploitTool())
 
             # Memory

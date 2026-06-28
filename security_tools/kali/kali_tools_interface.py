@@ -260,6 +260,13 @@ class KaliRunTool(BaseTool):
 
     MAX_OUTPUT = 10_000
 
+    def __init__(self, backend: Any = None, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        # Execution backend (feature H). A remote backend (ssh/docker) runs the
+        # tool on that host — e.g. a real Kali box/container — so we must NOT
+        # resolve the path locally; the remote PATH resolves it.
+        self.backend = backend
+
     async def execute(
         self,
         tool: str,
@@ -268,6 +275,19 @@ class KaliRunTool(BaseTool):
         working_dir: str = "",
         **kwargs: Any,
     ) -> ToolResult:
+        # Remote backend (feature H): the tool lives on the remote host/container,
+        # so skip local path resolution and let the remote PATH resolve it.
+        if self.backend is not None and getattr(self.backend, "name", "local") != "local":
+            full_cmd = f"{tool} {args}".strip()
+            res = await self.backend.run(full_cmd, timeout=timeout, working_dir=working_dir)
+            header = (f"{tool} {args[:60]}\n"
+                      f"[backend: {self.backend.name}] exit: {res.exit_code}\n\n")
+            if res.error and not (res.output or "").strip():
+                return ToolResult.fail(f"{header}{res.error}")
+            return ToolResult.ok(header + (res.output or ""),
+                                 metadata={"tool": tool, "exit_code": res.exit_code,
+                                           "backend": self.backend.name})
+
         # Find the tool
         tool_path = shutil.which(tool)
         if not tool_path:

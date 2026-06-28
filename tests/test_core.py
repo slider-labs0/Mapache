@@ -2360,6 +2360,28 @@ async def test_exec_backend_local_run_and_shell_tool():
     print("  PASS  exec_backend_local_run_and_shell_tool")
 
 
+async def test_exec_backend_kali_run_remote():
+    from core.exec_backend import ExecResult
+    from security_tools.kali.kali_tools_interface import KaliRunTool
+
+    # A remote backend runs the bare tool name (no local shutil.which) so the
+    # remote/container PATH resolves it.
+    class FakeRemote:
+        name = "docker"
+        def __init__(self):
+            self.cmds = []
+        async def run(self, cmd, *, timeout=60, working_dir=""):
+            self.cmds.append(cmd)
+            return ExecResult("nikto output", exit_code=0)
+
+    fake = FakeRemote()
+    out = await KaliRunTool(backend=fake).execute(tool="nikto", args="-h http://t")
+    assert fake.cmds == ["nikto -h http://t"]
+    assert out.success and "nikto output" in out.output
+    assert out.metadata.get("backend") == "docker"
+    print("  PASS  exec_backend_kali_run_remote")
+
+
 def test_config_execution_section():
     from core.config import MapacheConfig
 
@@ -2690,6 +2712,7 @@ async def run_all():
     print("\nRemote execution backends (feature H)")
     test_exec_backend_build_and_argv()
     await test_exec_backend_local_run_and_shell_tool()
+    await test_exec_backend_kali_run_remote()
     test_config_execution_section()
 
     print("\nCommunity skill hub (feature I)")
