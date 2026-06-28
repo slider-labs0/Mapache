@@ -182,15 +182,21 @@ The config layer is the shared foundation C and G both stand on. Today there is
 - Touchpoints: `core/config.py` (writers), `cli/setup_wizard.py`,
   `cli/mapache_cli.py` (subcommand dispatch + config-driven REPL).
 
-## D. Update manager  ⬜
+## D. Update manager  ✅  ← shipped 2026-06-27
 Keep an installed Mapache current.
 
-- [ ] `mapache update` — check current vs latest (git tag / VERSION file),
-      show changelog, `git pull` or download + apply.
-- [ ] Version stamp (`VERSION`) + `mapache --version`; startup "update available"
-      notice (non-blocking).
-- [ ] Back up config before updating; dependency-drift check (`pip install -r`).
-- Touchpoints: new `core/updater.py`, `VERSION`, CLI entry.
+- [x] `mapache update [--check]` — `core/updater.py`: compares local `VERSION` to
+      the highest semver tag on the git remote (`git ls-remote --tags`), numeric
+      segment compare (`v1.2.10 > v1.2.9`); `--check` reports status, bare `update`
+      applies (see below).
+- [x] Version stamp (`VERSION` = 0.7.0) + `mapache version` / `mapache --version`;
+      **non-blocking** startup "update available" notice — reads an offline cache
+      (`~/.mapache/.update_check.json`, written by the last check) so startup never
+      hits the network.
+- [x] Backs up the config before updating; the apply is conservative — ff-only
+      `git pull` (says so if it can't, never forces), and a `pip install -r`
+      reinstall is **flagged** for the user, not run silently. Tests: 3.
+- Touchpoints: `core/updater.py` (new), `VERSION` (new), `cli/mapache_cli.py`.
 
 ## E. `soul.md` — user-editable persona  ✅  ← shipped 2026-06-26
 A human-owned file that shapes the agent's personality/values/voice.

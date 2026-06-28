@@ -645,6 +645,15 @@ class MapacheCLI:
         if get_mapache_instructions(self.working_dir):
             print("  MAPACHE.md loaded")
 
+        # Version + non-blocking update notice (feature D). The notice reads a
+        # cache written by the last `mapache update [--check]`, so it never hits
+        # the network at startup.
+        from core.updater import local_version, update_notice
+        print(f"\n  Version  : mapache {local_version()}")
+        notice = update_notice()
+        if notice:
+            print(f"  ⬆ {notice}")
+
         print(f"\n  Type /help for commands")
         print(f"  (you can type while the agent works to steer it mid-task)\n")
 
@@ -1142,7 +1151,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Mapache — Offensive security AI agent",
         epilog="Subcommands: `mapache setup` (interactive config), "
-               "`mapache config show|path` (inspect config). "
+               "`mapache config show|path` (inspect config), "
+               "`mapache update [--check]` (update manager), "
+               "`mapache version` (print version). "
                "With no subcommand, launches the agent REPL.")
     # Config-backed flags default to None so MapacheCLI._cli_overrides can tell
     # "explicitly passed" from "unset". When unset they fall through to the
@@ -1194,6 +1205,14 @@ async def main() -> None:
     # REPL's flag parser so the bare `python -m cli [--flags]` invocation keeps
     # launching the agent exactly as before.
     argv = sys.argv[1:]
+    if argv and argv[0] in ("--version", "-V", "version"):
+        from core.updater import local_version
+        print(f"mapache {local_version()}")
+        sys.exit(0)
+    if argv and argv[0] == "update":
+        from core.updater import run_update_cmd
+        setup_logging(level="WARNING")
+        sys.exit(run_update_cmd(argv[1:]))
     if argv and argv[0] == "setup":
         from cli.setup_wizard import run_setup
         setup_logging(level="WARNING")  # keep the wizard's prompts uncluttered

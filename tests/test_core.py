@@ -2118,6 +2118,72 @@ async def test_user_profile_tool_and_injection():
 
 
 # ------------------------------------------------------------------ #
+# Update manager (feature D)
+# ------------------------------------------------------------------ #
+
+
+def test_updater_version_compare_and_local():
+    from core import updater
+    from pathlib import Path
+
+    assert updater.parse_version("v1.2.10") == (1, 2, 10)
+    assert updater.compare_versions("1.2.10", "1.2.9") == 1     # numeric, not lexical
+    assert updater.compare_versions("1.2", "1.2.0") == 0        # zero-padded
+    assert updater.is_newer("0.8.0", "0.7.0")
+    assert not updater.is_newer("0.7.0", "0.7.0")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        vf = Path(tmp) / "VERSION"
+        vf.write_text("1.5.2\n", encoding="utf-8")
+        assert updater.local_version(vf) == "1.5.2"
+        assert updater.local_version(Path(tmp) / "missing") == "0.0.0"
+    print("  PASS  updater_version_compare_and_local")
+
+
+def test_updater_check_cache_and_notice():
+    from core import updater
+
+    with tempfile.TemporaryDirectory() as home:
+        env = {"USERPROFILE": home, "HOME": home}
+
+        # A newer remote → update available, and the latest is cached.
+        st = updater.check_for_update(current="0.7.0", latest_fn=lambda: "v0.9.0",
+                                      environ=env)
+        assert st.update_available and st.latest == "v0.9.0"
+        assert updater.read_cached_latest(environ=env) == "v0.9.0"
+
+        # The startup notice is offline (cache-only) and version-aware.
+        assert "0.9.0" in (updater.update_notice(environ=env, current="0.7.0") or "")
+        assert updater.update_notice(environ=env, current="0.9.0") is None  # not newer
+
+        # No remote/tags → unknown, no crash, not flagged as available.
+        st2 = updater.check_for_update(current="0.7.0", latest_fn=lambda: None,
+                                       environ=env)
+        assert not st2.update_available and st2.latest is None
+
+        # Same version → up to date.
+        st3 = updater.check_for_update(current="1.0.0", latest_fn=lambda: "1.0.0",
+                                       environ=env)
+        assert not st3.update_available
+    print("  PASS  updater_check_cache_and_notice")
+
+
+def test_updater_backup_config():
+    from core import updater
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg = Path(tmp) / "config.json"
+        cfg.write_text('{"x": 1}', encoding="utf-8")
+        bak = updater.backup_config(config_path=cfg)
+        assert bak is not None and bak.is_file() and bak != cfg
+        assert bak.read_text(encoding="utf-8") == '{"x": 1}'
+        # Nothing to back up → None (not an error).
+        assert updater.backup_config(config_path=Path(tmp) / "none.json") is None
+    print("  PASS  updater_backup_config")
+
+
+# ------------------------------------------------------------------ #
 # Runner
 # ------------------------------------------------------------------ #
 
@@ -2234,6 +2300,11 @@ async def run_all():
     test_user_profile_dedup_caps_and_persistence()
     test_user_profile_summary_and_total_cap()
     await test_user_profile_tool_and_injection()
+
+    print("\nUpdate manager (feature D)")
+    test_updater_version_compare_and_local()
+    test_updater_check_cache_and_notice()
+    test_updater_backup_config()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()
