@@ -1603,6 +1603,33 @@ def test_skill_synthesis_and_signing():
     print("  PASS  skill_synthesis_and_signing")
 
 
+def test_provenance_ed25519_and_dispatch():
+    from core import provenance as prov
+
+    msg = "deadbeef-sha256"
+    key = b"\x09" * 32
+
+    # Algorithm-aware dispatch: HMAC path is always available.
+    sig = prov.sign(msg, key)
+    assert prov.verify_signed(msg, sig, algo=prov.SIGN_ALGO, key=key)
+    assert not prov.verify_signed("other", sig, algo=prov.SIGN_ALGO, key=key)
+    # Unknown algo → False (never raises).
+    assert prov.verify_signed(msg, sig, algo="bogus", key=key) is False
+
+    # ed25519 degrades safely when `cryptography` is absent; round-trips when present.
+    if prov.ed25519_available():
+        priv, pub = prov.generate_keypair()
+        esig = prov.sign_ed25519(msg, priv)
+        assert prov.verify_signed(msg, esig, algo=prov.SIGN_ALGO_ED25519, public_pem=pub)
+        assert not prov.verify_ed25519("tampered", esig, pub)
+    else:
+        assert prov.generate_keypair() is None
+        assert prov.verify_ed25519(msg, "00", "not-a-key") is False
+        assert prov.verify_signed(msg, "00", algo=prov.SIGN_ALGO_ED25519,
+                                  public_pem="x") is False
+    print("  PASS  provenance_ed25519_and_dispatch")
+
+
 # ------------------------------------------------------------------ #
 # Hybrid OPSEC routing (feature O)
 # ------------------------------------------------------------------ #
@@ -2685,6 +2712,7 @@ async def run_all():
 
     print("\nSkill synthesis (feature N)")
     test_skill_synthesis_and_signing()
+    test_provenance_ed25519_and_dispatch()
 
     print("\nHybrid OPSEC routing (feature O)")
     test_opsec_policy_decisions()
