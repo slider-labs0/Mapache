@@ -32,6 +32,7 @@ from core.soul import load_soul, soul_file, init_soul
 from memory.user_profile import UserProfile, UserRememberTool
 from cli.render import make_renderer
 from core.exec_backend import backend_from_config
+from voice import voice_from_config
 from models.providers.ollama_provider import OllamaProvider
 from plugins.sdk.base_tool import Permission
 from security_tools.recon.nmap_tool import NmapTool
@@ -89,6 +90,7 @@ Commands:
   /hosts                 Show per-host attack states (multi-host delegation)
   /backend               Show the execution backend (local / ssh / docker)
   /hub [search|install]  Browse/install community skills (feature I)
+  /voice [on|off]        Voice I/O status / toggle (Phase 9); /say <text> speaks
   /opsec                 Show hybrid OPSEC routing (which ops are pinned local)
   /scope                 Show Rules-of-Engagement scope (in-scope targets)
   /log                   Show engagement-log summary
@@ -216,6 +218,7 @@ class MapacheCLI:
         self.render = make_renderer(getattr(args, "plain", False))
         self.exec_backend = None  # feature H — built in setup() from config
         self.hub_client = None    # feature I — built in setup() if a registry is set
+        self.voice = None         # Phase 9 — built in setup() from config
 
         # Config layer (C0/C1). Resolve the effective settings across the full
         # precedence chain — CLI flag > project > global > env > default — by
@@ -378,6 +381,16 @@ class MapacheCLI:
         self.exec_backend, exec_warn = backend_from_config(exec_spec)
         if exec_warn:
             print(f"  ⚠ {exec_warn}")
+
+        # Voice I/O (Phase 9): optional TTS/STT. From config.voice; --voice forces
+        # it on. Null providers by default, so this is a no-op until a backend is
+        # installed + selected.
+        voice_spec = dict(getattr(self.config, "voice", None) or {})
+        if getattr(self.args, "voice", False):
+            voice_spec["enabled"] = True
+        self.voice, voice_warns = voice_from_config(voice_spec)
+        for w in voice_warns:
+            print(f"  ⚠ {w}")
 
         # Opt-in verifier (--verify): route the verification call to the
         # VERIFIER-role model so it can use a higher-quality model than the loop.
@@ -682,6 +695,9 @@ class MapacheCLI:
         if self.exec_backend is not None and self.exec_backend.name != "local":
             print(f"  Exec     : {self.exec_backend.describe()} (shell runs remote)")
 
+        if self.voice is not None and self.voice.enabled:
+            print(f"  Voice    : {self.voice.describe()}")
+
         if get_mapache_instructions(self.working_dir):
             print("  MAPACHE.md loaded")
 
@@ -768,6 +784,10 @@ class MapacheCLI:
             self.session_id = response.session_id
             self.render.agent_result(response.content, response.tool_calls_made,
                                      response.iterations, response.error)
+            # Voice (Phase 9): speak the response when voice is enabled (no-op
+            # under the null backend). Never let TTS break the turn.
+            if self.voice is not None and self.voice.enabled and response.content:
+                self.voice.speak(response.content)
             if turn_id and self.memory.session:
                 self.memory.session.end_turn(turn_id, response.content)
         except Exception as exc:
@@ -975,6 +995,25 @@ class MapacheCLI:
                 print(f"\n  Active persona — {origin}:\n")
                 print("  " + persona.replace("\n", "\n  "))
                 print()
+
+        elif command == "/voice":
+            if self.voice is None:
+                print("\n  Voice not initialized.\n")
+            elif len(parts) > 1 and parts[1].lower() in ("on", "off"):
+                self.voice.enabled = parts[1].lower() == "on"
+                print(f"\n  {self.voice.describe()}\n")
+            else:
+                print(f"\n  {self.voice.describe()}")
+                print("  Configure config.voice (tts: null|pyttsx3, stt: null|whisper) "
+                      "or --voice; /voice on|off toggles.\n")
+
+        elif command == "/say":
+            text = cmd.split(maxsplit=1)[1] if len(parts) > 1 else ""
+            if self.voice is not None and text:
+                spoken = self.voice.tts.speak(text)
+                print(f"\n  🔊 {spoken if spoken else text}\n")
+            else:
+                print("\n  Usage: /say <text>\n")
 
         elif command == "/hub":
             if self.hub_client is None:
@@ -1246,6 +1285,9 @@ def parse_args() -> argparse.Namespace:
                         help="Where `shell` commands run (feature H). ssh/docker "
                              "need host/container details in config.execution "
                              "(mapache.json / ~/.mapache/config.json). Default: local.")
+    parser.add_argument("--voice", action="store_true",
+                        help="Speak agent responses (Phase 9). Needs a TTS backend "
+                             "in config.voice (e.g. tts=pyttsx3); no-op otherwise.")
     parser.add_argument("--mcp-config", default="mcp.json",
                         help="Path to an mcp.json (Claude-Desktop-style) listing "
                              "MCP servers to connect to. Ignored if absent.")

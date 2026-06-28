@@ -399,10 +399,14 @@ Note: `--strategy` is live (per-role routing). `--no-verifier` is still inert
 ## What's left
 
 ```
-Phase 9 ⬜  Voice + Hardware + Mobile
-              voice/speech_to_text.py     (Whisper)
-              voice/text_to_speech.py     (Coqui/ElevenLabs)
-              hardware/arduino_controller.py
-              hardware/wifi_camera_controller.py
-              mobile/ios_api_bridge.py
+Phase 9 🟡  Voice + Hardware + Mobile
+   [x] Voice I/O — voice/voice_io.py (2026-06-28): TTSProvider/STTProvider
+       behind a null default; optional pyttsx3 TTS + faster-whisper/whisper STT
+       (constructed only when importable); make_tts/make_stt/voice_from_config;
+       VoiceManager wired into the CLI (--voice, /voice on|off, /say, speaks
+       responses) + config.voice block. Tests: 2 (offline, null path).
+   [ ] Hardware — arduino_controller / wifi_camera_controller. DEFERRED: needs
+       a physical board/camera to build+verify meaningfully (no device in-env).
+   [ ] Mobile — ios_api_bridge. DEFERRED: Telegram/Discord already cover remote
+       operation; an iOS bridge needs the app/endpoint to verify.
 ```

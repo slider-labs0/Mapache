@@ -2451,6 +2451,59 @@ async def test_hub_tools_no_registry():
 
 
 # ------------------------------------------------------------------ #
+# Voice I/O (Phase 9)
+# ------------------------------------------------------------------ #
+
+
+def test_voice_factories_and_manager():
+    from voice import (make_tts, make_stt, NullTTS, NullSTT, VoiceManager,
+                       voice_from_config)
+
+    # Null + unknown/unavailable backends resolve to the null providers.
+    assert isinstance(make_tts("null")[0], NullTTS)
+    assert isinstance(make_tts("bogus")[0], NullTTS) and make_tts("bogus")[1]
+    assert isinstance(make_stt("")[0], NullSTT)
+    # pyttsx3/whisper likely absent here → null + a warning (graceful).
+    tts, warn = make_tts("pyttsx3")
+    assert isinstance(tts, NullTTS) == (warn is not None)  # null iff it warned
+
+    # NullTTS.speak echoes the text (no audio); NullSTT yields "".
+    assert NullTTS().speak("hello") == "hello"
+    assert NullSTT().transcribe("x.wav") == ""
+
+    # Manager only speaks when enabled.
+    class FakeTTS(NullTTS):
+        name = "fake"
+        def __init__(self):
+            self.said = []
+        def speak(self, text):
+            self.said.append(text)
+            return text
+    ft = FakeTTS()
+    vm = VoiceManager(ft, NullSTT(), enabled=False)
+    assert vm.speak("nope") is None and ft.said == []
+    vm.enabled = True
+    vm.speak("go")
+    assert ft.said == ["go"]
+    assert "tts=fake" in vm.describe() and "voice on" in vm.describe()
+
+    # voice_from_config wiring + default-disabled.
+    vm2, warns = voice_from_config({"enabled": True, "tts": "null", "stt": "null"})
+    assert vm2.enabled and isinstance(vm2.tts, NullTTS) and warns == []
+    assert voice_from_config({})[0].enabled is False
+    print("  PASS  voice_factories_and_manager")
+
+
+def test_config_voice_section():
+    from core.config import MapacheConfig
+    assert MapacheConfig.from_dict({}).voice == {}
+    cfg = MapacheConfig.from_dict({"voice": {"enabled": True, "tts": "pyttsx3"}})
+    assert cfg.voice["enabled"] is True and cfg.voice["tts"] == "pyttsx3"
+    assert cfg.to_dict()["voice"]["tts"] == "pyttsx3"
+    print("  PASS  config_voice_section")
+
+
+# ------------------------------------------------------------------ #
 # Runner
 # ------------------------------------------------------------------ #
 
@@ -2587,6 +2640,10 @@ async def run_all():
     test_hub_manifest_and_verification()
     test_hub_install_generated_and_mcp()
     await test_hub_tools_no_registry()
+
+    print("\nVoice I/O (Phase 9)")
+    test_voice_factories_and_manager()
+    test_config_voice_section()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()

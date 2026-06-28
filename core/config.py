@@ -74,6 +74,8 @@ def _default_config() -> dict[str, Any]:
         # Community skill hub (feature I): registry = path to a local index.json
         # dir (empty disables the hub).
         "hub": {"registry": ""},
+        # Voice I/O (Phase 9): enabled + tts/stt backend names (null disables).
+        "voice": {"enabled": False, "tts": "null", "stt": "null"},
     }
 
 
@@ -204,6 +206,8 @@ class MapacheConfig:
     execution: dict[str, Any] = field(default_factory=lambda: {"backend": "local"})
     # Community skill hub (feature I): raw dict ({"registry": "<path>"}).
     hub: dict[str, Any] = field(default_factory=dict)
+    # Voice I/O (Phase 9): raw dict ({"enabled": bool, "tts": …, "stt": …}).
+    voice: dict[str, Any] = field(default_factory=dict)
     # Paths the config was assembled from, for diagnostics.
     sources: list[str] = field(default_factory=list)
 
@@ -235,6 +239,7 @@ class MapacheConfig:
             ),
             execution=dict(data.get("execution") or {"backend": "local"}),
             hub=dict(data.get("hub") or {}),
+            voice=dict(data.get("voice") or {}),
             sources=list(data.get("_sources") or []),
         )
 
@@ -295,6 +300,7 @@ class MapacheConfig:
             },
             "execution": dict(self.execution),
             "hub": dict(self.hub),
+            "voice": dict(self.voice),
         }
 
     def redacted(self) -> dict[str, Any]:
