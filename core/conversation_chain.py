@@ -43,6 +43,8 @@ CORE_TOOLS = {
     "synthesize_skill",
     # CVE grounding (feature M) — correlate services to CVEs any phase.
     "cve_lookup",
+    # Agent-maintained user profile (feature F) — record durable user facts.
+    "user_remember",
 }
 
 PHASE_TOOLS = {

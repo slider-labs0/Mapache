@@ -210,15 +210,22 @@ A human-owned file that shapes the agent's personality/values/voice.
 - Touchpoints: `core/soul.py` (new), `core/context_builder.py`,
   `core/agent_controller.py`, `cli/mapache_cli.py`.
 
-## F. `user.md` — agent-maintained user profile  ⬜
+## F. `user.md` — agent-maintained user profile  ✅  ← shipped 2026-06-27
 Agent records what the user has done / prefers over time.
 
-- [ ] Agent-callable tool to append/update durable user facts (engagements run,
-      targets, habits, preferences) to `user.md`.
-- [ ] Inject a compact summary into the prompt for continuity (distinct from
-      attack-state `ConversationChain` and from `soul.md`).
-- [ ] Dedup / size-cap so it doesn't grow unbounded (reuse compaction ideas).
-- Touchpoints: `memory/` (new store), `core/context_builder.py`.
+- [x] Agent-callable tool to append durable user facts. `memory/user_profile.py`
+      (`UserProfile` + `user_remember` tool): facts are `- ` bullets under
+      `## Category` headings (Identity/Preferences/Engagements/Habits/Notes) in the
+      global `~/.mapache/user.md` — the markdown file IS the store (user-editable).
+- [x] Inject a compact summary into the prompt for continuity — distinct from the
+      attack state (`profile_provider` on the controller, injected each turn as a
+      "USER PROFILE" memory block alongside the chain context, separate from
+      `soul.md`'s persona). Not propagated to sub-agents.
+- [x] Dedup / size-cap so it doesn't grow unbounded: exact (case-insensitive)
+      dedup + per-category and total caps evict the oldest (the compaction idea).
+      CLI `/user [forget <fact>]`. Tests: 3.
+- Touchpoints: `memory/user_profile.py` (new), `core/agent_controller.py`,
+  `core/conversation_chain.py` (CORE_TOOLS), `cli/mapache_cli.py`.
 
 ## G. More LLM providers — OpenRouter + Nous Portal  🟡  ← core shipped 2026-06-11
 Only `providers/ollama_provider.py` exists, and `ModelPool.get()` hardcodes it.

@@ -29,6 +29,7 @@ from models.model_pool import ModelPool
 from models.routed_model import RoutedModel
 from core.opsec_routing import OpsecPolicy
 from core.soul import load_soul, soul_file, init_soul
+from memory.user_profile import UserProfile, UserRememberTool
 from models.providers.ollama_provider import OllamaProvider
 from plugins.sdk.base_tool import Permission
 from security_tools.recon.nmap_tool import NmapTool
@@ -95,6 +96,7 @@ Commands:
   /clear                 Clear history and reset attack state
   /context               Show project context
   /soul [init]           Show the editable persona (soul.md); init writes a default
+  /user [forget <fact>]  Show the agent-maintained user profile (user.md)
   /cwd <path>            Change working directory
   /confirm on|off        Toggle confirmation for dangerous ops
   /debug on|off          Toggle debug logging
@@ -354,6 +356,10 @@ class MapacheCLI:
         # are pinned to a local model so target data never leaves the host.
         self.opsec = OpsecPolicy(allow_cloud=allow_cloud)
 
+        # Agent-maintained user profile (feature F): durable facts about the
+        # operator, injected as a compact summary each turn.
+        self.user_profile = UserProfile()
+
         # Opt-in verifier (--verify): route the verification call to the
         # VERIFIER-role model so it can use a higher-quality model than the loop.
         async def verifier_caller(messages: list[dict]):
@@ -376,6 +382,8 @@ class MapacheCLI:
             opsec_policy=self.opsec,
             # Persona (feature E): re-read soul.md each turn so edits hot-reload.
             persona_provider=lambda: load_soul(self.working_dir),
+            # User profile (feature F): inject durable user facts each turn.
+            profile_provider=lambda: self.user_profile.summary(),
         )
         self._wire_scope_notifier()
 
@@ -571,6 +579,9 @@ class MapacheCLI:
         self.registry.register(CVELookupTool(
             lambda: self.controller.chain.attack_state if self.controller else None,
         ))
+
+        # User profile (feature F): tool to record durable facts about the operator.
+        self.registry.register(UserRememberTool(self.user_profile))
 
         stats = self.gen_manager.load_all()
         if stats["loaded"] or stats["failed"]:
@@ -904,6 +915,18 @@ class MapacheCLI:
             print("\n  Specialist operators (delegate task=… operator=<name>):\n")
             print(roster_summary())
             print()
+
+        elif command == "/user":
+            if len(parts) > 2 and parts[1].lower() == "forget":
+                fact = cmd.split(maxsplit=2)[2].strip()
+                ok = self.user_profile.remove(fact)
+                print(f"\n  {'Removed' if ok else 'Not found'}: {fact}\n")
+            elif self.user_profile.facts():
+                print(f"\n  User profile — {self.user_profile.path}:\n")
+                print("  " + self.user_profile.render_markdown().replace("\n", "\n  "))
+            else:
+                print("\n  User profile is empty. The agent records durable facts via "
+                      "user_remember\n  (preferences, habits, recurring targets).\n")
 
         elif command == "/soul":
             if len(parts) > 1 and parts[1].lower() == "init":

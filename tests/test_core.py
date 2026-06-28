@@ -2027,6 +2027,97 @@ async def test_soul_hot_reload_each_turn():
 
 
 # ------------------------------------------------------------------ #
+# Agent-maintained user profile — user.md (feature F)
+# ------------------------------------------------------------------ #
+
+
+def test_user_profile_dedup_caps_and_persistence():
+    from memory.user_profile import UserProfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "user.md"
+        prof = UserProfile(path=path, max_per_category=3, max_total=10)
+
+        assert prof.add("prefers sqlmap", "Preferences") is True
+        assert prof.add("PREFERS SQLMAP", "Preferences") is False   # case-insensitive dup
+        assert prof.add("uses zsh", "Habits") is True
+
+        # Per-category cap evicts the oldest of that category only.
+        for i in range(5):
+            prof.add(f"pref {i}", "Preferences")
+        prefs = [f for c, f in prof.facts() if c == "Preferences"]
+        assert len(prefs) == 3 and "prefers sqlmap" not in prefs and "pref 4" in prefs
+        assert ("Habits", "uses zsh") in prof.facts()               # other category untouched
+
+        # The markdown file is the store — a fresh instance reloads it.
+        prof.add("ran HTB box Blue", "Engagements")
+        assert path.is_file()
+        reloaded = UserProfile(path=path, max_per_category=3, max_total=10)
+        assert ("Engagements", "ran HTB box Blue") in reloaded.facts()
+
+        # remove drops the fact and re-saves.
+        assert reloaded.remove("ran HTB box Blue") is True
+        assert ("Engagements", "ran HTB box Blue") not in reloaded.facts()
+    print("  PASS  user_profile_dedup_caps_and_persistence")
+
+
+def test_user_profile_summary_and_total_cap():
+    from memory.user_profile import UserProfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        prof = UserProfile(path=Path(tmp) / "user.md",
+                           max_per_category=100, max_total=5)
+        for i in range(8):
+            prof.add(f"fact {i}", "Notes")
+        # Total cap keeps the newest 5 across the board.
+        facts = [f for _, f in prof.facts()]
+        assert facts == [f"fact {i}" for i in range(3, 8)]
+
+        # Summary is a single labeled block; empty profile yields "".
+        s = prof.summary()
+        assert s.startswith("USER PROFILE") and "[Notes]" in s and "fact 7" in s
+        assert UserProfile(path=Path(tmp) / "none.md").summary() == ""
+    print("  PASS  user_profile_summary_and_total_cap")
+
+
+async def test_user_profile_tool_and_injection():
+    from memory.user_profile import UserProfile, UserRememberTool
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        prof = UserProfile(path=Path(tmp) / "user.md")
+
+        # The agent tool records a fact; a re-record is reported as a dup.
+        tool = UserRememberTool(prof)
+        r = await tool.execute(fact="prefers Burp over ZAP", category="Preferences")
+        assert "Remembered" in r.output and ("Preferences", "prefers Burp over ZAP") in prof.facts()
+        assert "Already" in (await tool.execute(fact="prefers Burp over ZAP")).output \
+            or ("Preferences", "prefers Burp over ZAP") in prof.facts()
+
+        # The controller injects the profile summary into the system prompt.
+        class CaptureModel:
+            supports_tools = False
+
+            def __init__(self):
+                self.systems: list[str] = []
+
+            async def chat(self, messages, tools=None, json_mode=False, stream=False):
+                self.systems.append(messages[0]["content"])
+                return json.dumps({"type": "response", "content": "ok"})
+
+        model = CaptureModel()
+        controller = AgentController(model_provider=model, use_function_calling=False,
+                                    profile_provider=lambda: prof.summary())
+        await controller.start(inject_project_context=False)
+        await controller.run("hello", session_id="prof-test")
+        assert "USER PROFILE" in model.systems[-1]
+        assert "prefers Burp over ZAP" in model.systems[-1]
+    print("  PASS  user_profile_tool_and_injection")
+
+
+# ------------------------------------------------------------------ #
 # Runner
 # ------------------------------------------------------------------ #
 
@@ -2138,6 +2229,11 @@ async def run_all():
     test_soul_resolution_and_default()
     test_soul_persona_in_system_prompt()
     await test_soul_hot_reload_each_turn()
+
+    print("\nUser profile — user.md (feature F)")
+    test_user_profile_dedup_caps_and_persistence()
+    test_user_profile_summary_and_total_cap()
+    await test_user_profile_tool_and_injection()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()

@@ -123,6 +123,7 @@ class AgentController:
         bus: Optional[EventBus] = None,
         opsec_policy: Optional["OpsecPolicy"] = None,
         persona_provider: Optional[Callable[[], str]] = None,
+        profile_provider: Optional[Callable[[], str]] = None,
     ) -> None:
         self.model = model_provider
         self.tool_dispatcher = tool_dispatcher
@@ -136,6 +137,10 @@ class AgentController:
         # so edits hot-reload. None → no persona (backwards-compatible). Not
         # propagated to sub-agents — operators carry their own focused prompts.
         self.persona_provider = persona_provider
+        # Agent-maintained user profile (feature F). Called each turn for a
+        # compact summary of durable user facts, injected alongside the attack
+        # state. None → no profile. Not propagated to sub-agents.
+        self.profile_provider = profile_provider
         # Rules-of-Engagement guardrails (feature J). An absent/inactive scope
         # allows everything, so this is a no-op until an operator defines limits.
         self.scope = scope or EngagementScope()
@@ -315,10 +320,22 @@ class AgentController:
             except Exception:
                 pass
 
-        # Inject current attack state into context
+        # Inject the durable user profile (feature F) + current attack state.
+        # Both are memory snippets; the profile carries cross-engagement facts,
+        # the chain context the live per-engagement state.
+        snippets: list[str] = []
+        if self.profile_provider is not None:
+            try:
+                profile = self.profile_provider()
+                if profile:
+                    snippets.append(profile)
+            except Exception:
+                pass
         chain_context = self.chain.get_context_injection()
         if chain_context:
-            self.context.inject_memory([chain_context])
+            snippets.append(chain_context)
+        if snippets:
+            self.context.inject_memory(snippets)
 
         self.context.add_user_message(user_input)
         response = await self._agent_loop(user_input, session_id, on_token=on_token)
