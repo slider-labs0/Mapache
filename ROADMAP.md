@@ -300,17 +300,27 @@ Run tools/commands somewhere other than the local shell.
 - Touchpoints: `core/exec_backend.py` (new), `security_tools/shell_tool.py`,
   `core/config.py`, `cli/mapache_cli.py`.
 
-## I. Community hub — downloadable skills  ⬜
-Browse + install community "skills" (tools / prompt packs / MCP configs).
+## I. Community hub — downloadable skills  ✅  ← shipped 2026-06-28
+Browse + install community "skills" (tools / MCP configs).
 
-- [ ] Define a skill manifest format (name, version, type, deps, checksum).
-- [ ] Hub client: `skill_search` / `skill_install` / `skill_list` against a
-      registry (URL or GitHub repo index to start).
-- [ ] Install into the right home: generated tool (A), MCP server entry
-      (`mcp.json`), or prompt/persona pack.
-- [ ] **Safety** — checksum + signature verify, sandbox review before enabling,
-      explicit confirm (installs run third-party code).
-- Touchpoints: new `hub/`, ties into A (tools), MCP config, `soul.md`.
+- [x] Skill manifest format (`hub/manifest.py`, `SkillManifest`): name, version,
+      type (generated_tool | mcp_server), description, deps, checksum, optional
+      signature/signer; `make_*_manifest` publisher helpers.
+- [x] Hub client (`hub/client.py`) + registry (`hub/registry.py`, `LocalRegistry`
+      reading `index.json`): `skill_search` / `skill_list` / `skill_install` agent
+      tools (in CORE_TOOLS) + CLI `/hub`. A URL/GitHub-index registry drops in
+      behind the same surface later (kept offline by default).
+- [x] Install into the right home: generated tool → `write_generated_tool` (A,
+      origin="hub" so the loader re-verifies sha256); MCP server → an `mcpServers`
+      entry in `mcp.json`. (prompt/persona pack: documented future type, no
+      consumer wired.)
+- [x] **Safety** — checksum verify is the mandatory integrity gate (recomputed
+      before any write; a tampered package is refused); signature verified when a
+      trusted key is set (reuses N's `core.provenance`); installs don't hot-load
+      (take effect next start = review gate); the install tool flags third-party
+      code. Tests: 3.
+- Touchpoints: `hub/` (new: manifest/registry/client/tools), A (generated tools),
+  `mcp.json`, `core/config.py` (hub.registry), `cli/mapache_cli.py`.
 
 ---
 
@@ -323,8 +333,9 @@ structurally won't follow: **offensive security + local-first OPSEC + auditable,
 signed artifacts.** J–P are the features that widen that gap.
 
 > **Status: J–P all ✅ shipped (2026-06-19 → 2026-06-26)** on branch
-> `feature/agent-loop-upgrades`. Suite 72/72. The A–I foundation still has open
-> items — see each section (unstarted: B, D, E, F, H, I; G core done).
+> `feature/agent-loop-upgrades`. The A–I foundation is now also complete
+> (A,B,C,D,E,F,G,H,I shipped 2026-06-08 → 06-28; G live-key e2e verification is
+> the only loose end). Suite 90/90.
 
 ## J. Rules-of-Engagement guardrails  ✅  ← shipped 2026-06-19
 Authorized-pentest scoping the agent enforces itself.

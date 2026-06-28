@@ -2348,6 +2348,109 @@ def test_config_execution_section():
 
 
 # ------------------------------------------------------------------ #
+# Community skill hub (feature I)
+# ------------------------------------------------------------------ #
+
+
+def test_hub_manifest_and_verification():
+    from hub import (make_generated_tool_manifest, make_mcp_server_manifest,
+                     verify_manifest)
+    from core import provenance
+
+    key = b"\x05" * 32
+    m = make_generated_tool_manifest(
+        "replay_x", "1.0.0", "demo", {"type": "object", "properties": {}},
+        'return "hi from hub"\n', sign_key=key)
+
+    # A correctly-published manifest verifies (checksum + signature with the key).
+    ok, reason = verify_manifest(m, key=key)
+    assert ok and "signature" in reason
+    # Without the key the checksum still gates; signature is noted as unverified.
+    ok2, reason2 = verify_manifest(m, key=None)
+    assert ok2 and "unverified" in reason2
+    # A wrong key fails signature verification.
+    assert verify_manifest(m, key=b"\x06" * 32)[0] is False
+    # Tampered payload → checksum mismatch (the integrity gate).
+    m.code = 'return "tampered"\n'
+    assert verify_manifest(m, key=key)[0] is False
+
+    # MCP manifest verifies on its canonical command+args digest.
+    mc = make_mcp_server_manifest("fs", "1.0.0", "files", "npx",
+                                  ["-y", "server-filesystem", "/data"])
+    assert verify_manifest(mc)[0] is True
+    mc.args = ["-y", "evil"]
+    assert verify_manifest(mc)[0] is False
+    print("  PASS  hub_manifest_and_verification")
+
+
+def test_hub_install_generated_and_mcp():
+    import json as _json
+    from pathlib import Path
+    from hub import make_generated_tool_manifest, make_mcp_server_manifest
+    from hub.registry import LocalRegistry
+    from hub.client import HubClient
+    from tools.generated_tool import load_generated_tool
+
+    with tempfile.TemporaryDirectory() as reg, tempfile.TemporaryDirectory() as home:
+        gen_dir = Path(home) / "plugins" / "generated"
+        mcp_path = Path(home) / "mcp.json"
+
+        good_tool = make_generated_tool_manifest(
+            "hub_echo", "1.2.0", "echo skill",
+            {"type": "object", "properties": {}}, 'return "hi from hub"\n')
+        mcp = make_mcp_server_manifest(
+            "fs", "0.1.0", "filesystem", "npx", ["-y", "server-fs", "/data"])
+        tampered = make_generated_tool_manifest(
+            "bad_tool", "1.0.0", "bad", {"type": "object", "properties": {}},
+            'return "x"\n')
+        tampered.checksum = "0" * 64  # break the integrity gate
+
+        (Path(reg) / "index.json").write_text(
+            _json.dumps([good_tool.to_dict(), mcp.to_dict(), tampered.to_dict()]),
+            encoding="utf-8")
+
+        client = HubClient(LocalRegistry(reg), generated_dir=gen_dir, mcp_path=mcp_path)
+
+        # Browse.
+        assert {m.name for m in client.list_skills()} == {"hub_echo", "fs", "bad_tool"}
+        assert [m.name for m in client.search("filesystem")] == ["fs"]
+
+        # Install the generated tool → A package on disk that loads + compiles
+        # (the loader re-verifies the sha256 because origin == "hub").
+        msg = client.install("hub_echo")
+        assert "Installed generated tool 'hub_echo'" in msg
+        tool_dir = gen_dir / "hub_echo"
+        assert (tool_dir / "tool.py").is_file() and (tool_dir / "manifest.json").is_file()
+        loaded = load_generated_tool(tool_dir)
+        assert loaded.name == "hub_echo"
+
+        # Install the MCP server → entry in mcp.json.
+        client.install("fs")
+        data = _json.loads(mcp_path.read_text(encoding="utf-8"))
+        assert data["mcpServers"]["fs"]["command"] == "npx"
+        assert data["mcpServers"]["fs"]["args"] == ["-y", "server-fs", "/data"]
+
+        # A tampered package is refused before anything is written.
+        refused = client.install("bad_tool")
+        assert "Refused" in refused and "checksum" in refused
+        assert not (gen_dir / "bad_tool").exists()
+
+        # Unknown skill.
+        assert "not found" in client.install("nope")
+    print("  PASS  hub_install_generated_and_mcp")
+
+
+async def test_hub_tools_no_registry():
+    from hub.tools import SkillListTool, SkillInstallTool
+
+    # With no configured client the tools degrade gracefully (no crash).
+    assert "No skill hub" in (await SkillListTool(lambda: None).execute()).output
+    out = await SkillInstallTool(lambda: None).execute(name="whatever")
+    assert "No skill hub" in out.output
+    print("  PASS  hub_tools_no_registry")
+
+
+# ------------------------------------------------------------------ #
 # Runner
 # ------------------------------------------------------------------ #
 
@@ -2479,6 +2582,11 @@ async def run_all():
     test_exec_backend_build_and_argv()
     await test_exec_backend_local_run_and_shell_tool()
     test_config_execution_section()
+
+    print("\nCommunity skill hub (feature I)")
+    test_hub_manifest_and_verification()
+    test_hub_install_generated_and_mcp()
+    await test_hub_tools_no_registry()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()

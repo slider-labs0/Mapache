@@ -45,6 +45,8 @@ CORE_TOOLS = {
     "cve_lookup",
     # Agent-maintained user profile (feature F) — record durable user facts.
     "user_remember",
+    # Community skill hub (feature I) — browse + install downloadable skills.
+    "skill_search", "skill_list", "skill_install",
 }
 
 PHASE_TOOLS = {

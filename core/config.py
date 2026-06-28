@@ -71,6 +71,9 @@ def _default_config() -> dict[str, Any]:
         # backend: local | ssh | docker. ssh needs host (+user/port/key);
         # docker needs container OR image (+optional workdir).
         "execution": {"backend": "local"},
+        # Community skill hub (feature I): registry = path to a local index.json
+        # dir (empty disables the hub).
+        "hub": {"registry": ""},
     }
 
 
@@ -199,6 +202,8 @@ class MapacheConfig:
     messaging: MessagingConfig = field(default_factory=MessagingConfig)
     # Execution backend (feature H): raw dict ({"backend": "local|ssh|docker", …}).
     execution: dict[str, Any] = field(default_factory=lambda: {"backend": "local"})
+    # Community skill hub (feature I): raw dict ({"registry": "<path>"}).
+    hub: dict[str, Any] = field(default_factory=dict)
     # Paths the config was assembled from, for diagnostics.
     sources: list[str] = field(default_factory=list)
 
@@ -229,6 +234,7 @@ class MapacheConfig:
                 discord_token=msg.get("discord_token", ""),
             ),
             execution=dict(data.get("execution") or {"backend": "local"}),
+            hub=dict(data.get("hub") or {}),
             sources=list(data.get("_sources") or []),
         )
 
@@ -288,6 +294,7 @@ class MapacheConfig:
                 else self.messaging.discord_token,
             },
             "execution": dict(self.execution),
+            "hub": dict(self.hub),
         }
 
     def redacted(self) -> dict[str, Any]:

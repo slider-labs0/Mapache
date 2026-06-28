@@ -88,6 +88,7 @@ Commands:
   /operators             List specialist sub-agents (delegation roster)
   /hosts                 Show per-host attack states (multi-host delegation)
   /backend               Show the execution backend (local / ssh / docker)
+  /hub [search|install]  Browse/install community skills (feature I)
   /opsec                 Show hybrid OPSEC routing (which ops are pinned local)
   /scope                 Show Rules-of-Engagement scope (in-scope targets)
   /log                   Show engagement-log summary
@@ -214,6 +215,7 @@ class MapacheCLI:
         # installed and --plain wasn't passed; otherwise the plain line printer.
         self.render = make_renderer(getattr(args, "plain", False))
         self.exec_backend = None  # feature H — built in setup() from config
+        self.hub_client = None    # feature I — built in setup() if a registry is set
 
         # Config layer (C0/C1). Resolve the effective settings across the full
         # precedence chain — CLI flag > project > global > env > default — by
@@ -601,6 +603,23 @@ class MapacheCLI:
         # User profile (feature F): tool to record durable facts about the operator.
         self.registry.register(UserRememberTool(self.user_profile))
 
+        # Community skill hub (feature I): build a client when a registry is
+        # configured; install generated tools into the same dir the manager loads
+        # from, and MCP servers into mcp.json. Tools register regardless and report
+        # cleanly when no hub is configured. trusted_key stays None — the checksum
+        # is the integrity gate; foreign signatures are noted, not trusted.
+        registry_path = str((getattr(self.config, "hub", None) or {}).get("registry", "")).strip()
+        if registry_path:
+            from hub import LocalRegistry, HubClient
+            self.hub_client = HubClient(
+                LocalRegistry(registry_path),
+                generated_dir=self.gen_manager.generated_dir,
+                mcp_path=self.args.mcp_config)
+        from hub.tools import SkillSearchTool, SkillListTool, SkillInstallTool
+        self.registry.register(SkillSearchTool(lambda: self.hub_client))
+        self.registry.register(SkillListTool(lambda: self.hub_client))
+        self.registry.register(SkillInstallTool(lambda: self.hub_client))
+
         stats = self.gen_manager.load_all()
         if stats["loaded"] or stats["failed"]:
             note = f"  Tools+   : {stats['loaded']} self-authored"
@@ -956,6 +975,23 @@ class MapacheCLI:
                 print(f"\n  Active persona — {origin}:\n")
                 print("  " + persona.replace("\n", "\n  "))
                 print()
+
+        elif command == "/hub":
+            if self.hub_client is None:
+                print("\n  No skill hub configured. Set hub.registry (a dir with "
+                      "index.json)\n  in config to browse/install community skills.\n")
+            else:
+                arg = parts[1] if len(parts) > 1 else "list"
+                if arg == "install" and len(parts) > 2:
+                    print(f"\n  {self.hub_client.install(parts[2])}\n")
+                else:
+                    skills = (self.hub_client.search(" ".join(parts[2:]))
+                              if arg == "search" else self.hub_client.list_skills())
+                    print(f"\n  Hub skills ({len(skills)}):")
+                    for m in skills:
+                        sig = " ✓signed" if m.signature else ""
+                        print(f"    {m.name} v{m.version} [{m.skill_type}]{sig} — {m.description}")
+                    print()
 
         elif command == "/backend":
             if self.exec_backend is None:
