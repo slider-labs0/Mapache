@@ -192,14 +192,23 @@ Keep an installed Mapache current.
 - [ ] Back up config before updating; dependency-drift check (`pip install -r`).
 - Touchpoints: new `core/updater.py`, `VERSION`, CLI entry.
 
-## E. `soul.md` — user-editable persona  ⬜
+## E. `soul.md` — user-editable persona  ✅  ← shipped 2026-06-26
 A human-owned file that shapes the agent's personality/values/voice.
 
-- [ ] Load `soul.md` and inject it into the system prompt (same mechanism as
-      `MAPACHE.md` via `project_context.py`).
-- [ ] Hot-reload each turn so edits take effect without restart.
-- [ ] Ship a documented default; `/soul` command to print/open it.
-- Touchpoints: `core/project_context.py`, `core/context_builder.py`.
+- [x] Load `soul.md` and inject it into the system prompt. `core/soul.py`
+      (`load_soul`/`soul_file`/`init_soul`); `ContextBuilder.set_persona` prepends
+      it at the very top of the system prompt (above memory/summary/base), in both
+      function-calling and JSON modes. Resolution mirrors config: project
+      `./soul.md` over global `~/.mapache/soul.md`.
+- [x] Hot-reload each turn — the controller calls a `persona_provider` every turn
+      (`persona_provider=lambda: load_soul(working_dir)`), so edits take effect on
+      the next message with no restart. Not propagated to sub-agents (operators
+      carry their own focused prompts).
+- [x] Ship a documented default (`DEFAULT_SOUL`, used when no file exists); `/soul`
+      prints the active persona + source, `/soul init` writes an editable default
+      to the global path. Tests: 3.
+- Touchpoints: `core/soul.py` (new), `core/context_builder.py`,
+  `core/agent_controller.py`, `cli/mapache_cli.py`.
 
 ## F. `user.md` — agent-maintained user profile  ⬜
 Agent records what the user has done / prefers over time.

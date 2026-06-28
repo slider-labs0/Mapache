@@ -122,6 +122,7 @@ class AgentController:
         allow_state_reset: bool = True,
         bus: Optional[EventBus] = None,
         opsec_policy: Optional["OpsecPolicy"] = None,
+        persona_provider: Optional[Callable[[], str]] = None,
     ) -> None:
         self.model = model_provider
         self.tool_dispatcher = tool_dispatcher
@@ -131,6 +132,10 @@ class AgentController:
         # is a no-op policy (cloud disabled → nothing to pin); the CLI injects one
         # built from --allow-cloud. Children inherit the lead's policy.
         self.opsec = opsec_policy or OpsecPolicy()
+        # User-editable persona (feature E). Called each turn to re-read soul.md
+        # so edits hot-reload. None → no persona (backwards-compatible). Not
+        # propagated to sub-agents — operators carry their own focused prompts.
+        self.persona_provider = persona_provider
         # Rules-of-Engagement guardrails (feature J). An absent/inactive scope
         # allows everything, so this is a no-op until an operator defines limits.
         self.scope = scope or EngagementScope()
@@ -302,6 +307,13 @@ class AgentController:
 
         # Notify conversation chain of new turn
         self.chain.on_turn_start(user_input)
+
+        # Persona (feature E): re-read soul.md each turn so edits hot-reload.
+        if self.persona_provider is not None:
+            try:
+                self.context.set_persona(self.persona_provider() or "")
+            except Exception:
+                pass
 
         # Inject current attack state into context
         chain_context = self.chain.get_context_injection()

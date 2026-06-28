@@ -28,6 +28,7 @@ from models.routing_engine import RoutingEngine, RoutingStrategy
 from models.model_pool import ModelPool
 from models.routed_model import RoutedModel
 from core.opsec_routing import OpsecPolicy
+from core.soul import load_soul, soul_file, init_soul
 from models.providers.ollama_provider import OllamaProvider
 from plugins.sdk.base_tool import Permission
 from security_tools.recon.nmap_tool import NmapTool
@@ -93,6 +94,7 @@ Commands:
   /history               Show conversation history
   /clear                 Clear history and reset attack state
   /context               Show project context
+  /soul [init]           Show the editable persona (soul.md); init writes a default
   /cwd <path>            Change working directory
   /confirm on|off        Toggle confirmation for dangerous ops
   /debug on|off          Toggle debug logging
@@ -372,6 +374,8 @@ class MapacheCLI:
             verifier_caller=verifier_caller,
             scope=self.scope,
             opsec_policy=self.opsec,
+            # Persona (feature E): re-read soul.md each turn so edits hot-reload.
+            persona_provider=lambda: load_soul(self.working_dir),
         )
         self._wire_scope_notifier()
 
@@ -900,6 +904,19 @@ class MapacheCLI:
             print("\n  Specialist operators (delegate task=… operator=<name>):\n")
             print(roster_summary())
             print()
+
+        elif command == "/soul":
+            if len(parts) > 1 and parts[1].lower() == "init":
+                path, written = init_soul()
+                print(f"\n  {'Wrote' if written else 'Already exists'}: {path}")
+                print("  Edit it to change Mapache's voice; changes apply next message.\n")
+            else:
+                src = soul_file(self.working_dir)
+                persona = load_soul(self.working_dir)
+                origin = str(src) if src else "built-in default (/soul init to create one)"
+                print(f"\n  Active persona — {origin}:\n")
+                print("  " + persona.replace("\n", "\n  "))
+                print()
 
         elif command == "/hosts":
             hosts = self.controller.host_states() if self.controller else {}

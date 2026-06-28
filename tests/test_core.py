@@ -1953,6 +1953,80 @@ async def test_controller_routes_operator_by_role():
 
 
 # ------------------------------------------------------------------ #
+# Editable persona — soul.md (feature E)
+# ------------------------------------------------------------------ #
+
+
+def test_soul_resolution_and_default():
+    from core import soul
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as proj, tempfile.TemporaryDirectory() as home:
+        env = {"USERPROFILE": home, "HOME": home}
+
+        # No file anywhere → the shipped default persona.
+        assert soul.load_soul(proj, environ=env) == soul.DEFAULT_SOUL.strip()
+        assert soul.soul_file(proj, environ=env) is None
+
+        # init writes the default to the global path; load picks it up.
+        path, written = soul.init_soul(environ=env)
+        assert written and path.is_file()
+        assert soul.init_soul(environ=env)[1] is False        # idempotent
+
+        # A project soul.md overrides the global one.
+        (Path(proj) / "soul.md").write_text("Be terse and tactical.", encoding="utf-8")
+        assert soul.soul_file(proj, environ=env) == Path(proj) / "soul.md"
+        assert soul.load_soul(proj, environ=env) == "Be terse and tactical."
+    print("  PASS  soul_resolution_and_default")
+
+
+def test_soul_persona_in_system_prompt():
+    from core.context_builder import ContextBuilder
+
+    cb = ContextBuilder(system_prompt="BASE OFFENSIVE PROMPT")
+    payload = cb.build()
+    assert "PERSONA" not in payload["messages"][0]["content"]  # none by default
+
+    cb.set_persona("# Persona\nSpeak like a terse operator.")
+    system = cb.build()["messages"][0]["content"]
+    # Persona sits at the very top, above the base prompt.
+    assert system.startswith("# Persona")
+    assert "Speak like a terse operator." in system
+    assert system.index("Persona") < system.index("BASE OFFENSIVE PROMPT")
+    print("  PASS  soul_persona_in_system_prompt")
+
+
+async def test_soul_hot_reload_each_turn():
+    # The controller re-reads the persona provider every turn, so an edit to
+    # soul.md takes effect on the next message without a restart.
+    persona = {"text": "Persona A — be brief."}
+
+    class CaptureModel:
+        supports_tools = False
+
+        def __init__(self):
+            self.systems: list[str] = []
+
+        async def chat(self, messages, tools=None, json_mode=False, stream=False):
+            self.systems.append(messages[0]["content"])
+            return json.dumps({"type": "response", "content": "ok"})
+
+    model = CaptureModel()
+    controller = AgentController(model_provider=model, use_function_calling=False,
+                                persona_provider=lambda: persona["text"])
+    await controller.start()
+
+    await controller.run("turn one", session_id="soul-test")
+    assert "Persona A — be brief." in model.systems[-1]
+
+    persona["text"] = "Persona B — be verbose."     # edit between turns
+    await controller.run("turn two", session_id="soul-test")
+    assert "Persona B — be verbose." in model.systems[-1]
+    assert "Persona A" not in model.systems[-1]      # old persona is gone
+    print("  PASS  soul_hot_reload_each_turn")
+
+
+# ------------------------------------------------------------------ #
 # Runner
 # ------------------------------------------------------------------ #
 
@@ -2059,6 +2133,11 @@ async def run_all():
     print("\nPer-operator model routing (feature P)")
     await test_per_operator_model_role()
     await test_controller_routes_operator_by_role()
+
+    print("\nEditable persona — soul.md (feature E)")
+    test_soul_resolution_and_default()
+    test_soul_persona_in_system_prompt()
+    await test_soul_hot_reload_each_turn()
 
     print("\nModelRouting")
     await test_routing_pipeline_picks_fast_executor()

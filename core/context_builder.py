@@ -129,6 +129,9 @@ You have full system access. Act on every request immediately using your tools."
         self._history: list[Message] = []
         self._tools: dict[str, ToolSchema] = {}
         self._memory_snippets: list[str] = []
+        # User-editable persona (feature E, soul.md). Prepended to the system
+        # prompt; refreshed by the controller each turn so edits hot-reload.
+        self.persona: str = ""
         # Running summary of older turns folded away by compaction. Prepended
         # to the system prompt so continuity survives even after the raw
         # messages are dropped from the window.
@@ -300,6 +303,10 @@ You have full system access. Act on every request immediately using your tools."
     # Memory
     # ------------------------------------------------------------------ #
 
+    def set_persona(self, persona: str) -> None:
+        """Set the soul.md persona prepended to the system prompt (feature E)."""
+        self.persona = (persona or "").strip()
+
     def inject_memory(self, snippets: list[str]) -> None:
         """Inject memory snippets to be prepended to the system prompt."""
         self._memory_snippets = snippets
@@ -404,6 +411,9 @@ TASK LIST rules:
         if self._memory_snippets:
             memory_block = "\n".join(f"- {s}" for s in self._memory_snippets)
             base = f"RELEVANT MEMORY:\n{memory_block}\n\n---\n{base}"
+        # Persona (soul.md) frames who the agent is — sits at the very top.
+        if self.persona:
+            base = f"{self.persona}\n\n---\n{base}"
         return base
 
     def _trim_history(self) -> list[Message]:
