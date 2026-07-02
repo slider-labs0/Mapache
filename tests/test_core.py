@@ -345,6 +345,40 @@ async def test_unknown_tool_returns_available_list():
     print("  PASS  unknown_tool_returns_available_list")
 
 
+def test_skills_playbook_web_matching():
+    from core.skills_playbook import relevant_skills
+    from core.conversation_chain import AttackState
+
+    # web-shaped request → skill fires
+    assert relevant_skills(AttackState(), "log in to the shop at http://x/login")
+    # open web port → fires even with a plain request
+    st = AttackState(); st.open_ports = ["80"]
+    assert relevant_skills(st, "enumerate the box")
+    # URL target → fires
+    st2 = AttackState(); st2.target = "http://127.0.0.1:3000"
+    assert relevant_skills(st2, "")
+    # non-web target + non-web request → silent
+    st3 = AttackState(); st3.open_ports = ["22"]; st3.target = "10.0.0.1"
+    assert relevant_skills(st3, "crack the ssh key") == []
+    print("  PASS  skills_playbook_web_matching")
+
+
+async def test_web_skill_injected_into_context():
+    # The web playbook must actually reach the model's system prompt on a
+    # web-shaped turn (just-in-time grounding).
+    model = MockModel()
+    model.queue({"message": {"content": "Done."}})
+    controller = AgentController(model_provider=model, mode=AgentMode.AGENT)
+    await controller.start()
+    await controller.run("test the login form at http://127.0.0.1:3000",
+                         session_id="web-skill")
+    sys_texts = " ".join(
+        m.get("content", "") for call in model.calls for m in call["messages"]
+        if m.get("role") == "system")
+    assert "http_request" in sys_texts and "OR 1=1" in sys_texts
+    print("  PASS  web_skill_injected_into_context")
+
+
 async def test_agent_verifier_retry():
     model = MockModel()
     # 1) loop produces a thin first answer
@@ -2754,6 +2788,8 @@ async def run_all():
     await test_prose_tool_call_recovered()
     await test_prose_non_call_stays_answer()
     await test_unknown_tool_returns_available_list()
+    test_skills_playbook_web_matching()
+    await test_web_skill_injected_into_context()
     await test_agent_verifier_retry()
     await test_agent_verifier_off_by_default()
     await test_agent_max_iterations()

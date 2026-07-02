@@ -25,6 +25,7 @@ from .engagement_scope import EngagementScope
 from .event_bus import Event, EventBus
 from .operators import get_operator, operator_names
 from .opsec_routing import OpsecPolicy
+from .skills_playbook import relevant_skills
 from .executor import Executor
 from .logger import get_logger
 from .project_context import build_project_context
@@ -457,10 +458,18 @@ class AgentController:
             # Re-inject the live attack state + task list every iteration so
             # the model sees mid-turn progress (ports found, todos completed),
             # not just the snapshot taken at turn start. inject_memory replaces
-            # the snippet list, so this is idempotent.
+            # the snippet list, so this is idempotent. Just-in-time skills
+            # (Decepticon-style) ride alongside: a compact playbook is added only
+            # while it's relevant (e.g. the web-attack skill once a web port is
+            # seen or the request is web-shaped), grounding weak local models on
+            # the right technique without bloating every call.
+            snippets: list[str] = []
             refreshed = self.chain.get_context_injection()
             if refreshed:
-                self.context.inject_memory([refreshed])
+                snippets.append(refreshed)
+            snippets.extend(relevant_skills(self.chain.attack_state, user_input))
+            if snippets:
+                self.context.inject_memory(snippets)
 
             if self.context.use_function_calling:
                 # Native tool-calling: schemas go in the `tools` field.
