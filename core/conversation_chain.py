@@ -416,15 +416,36 @@ class ConversationChain:
 
         elif tool_name in ("msf_run", "kali_run", "shell"):
             self.attack_state.update_from_exploit(output)
-            flag_pattern = re.compile(r"[0-9a-f]{32}|HTB\{[^}]+\}", re.IGNORECASE)
-            for flag in flag_pattern.findall(output):
-                self.attack_state.add_flag(flag)
-                self._current_turn.key_findings.append(f"FLAG FOUND: {flag}")
+            # Exec output may carry a raw 32-hex flag file (user.txt/root.txt).
+            self._scan_for_flags(output, hex32=True)
+
+        elif tool_name in ("web_fetch", "http_request", "curl"):
+            # Web-recon flags surface in page bodies too (CTF chains end at a flag
+            # endpoint). Match only explicit flag formats — a bare 32-hex string in
+            # HTML is usually an asset/session hash, not a flag.
+            self._scan_for_flags(output, hex32=False)
 
         elif tool_name == "msf_search":
             cves = re.findall(r"CVE-\d{4}-\d+", output)
             for cve in cves[:3]:
                 self.attack_state.add_vulnerability(cve)
+
+    # Flag formats common to CTF/HTB labs; the wrapped-brace forms are safe to
+    # match in arbitrary web content, the bare 32-hex form is not.
+    _FLAG_BRACE_RE = re.compile(r"(?:HTB|FLAG|CTF|flag)\{[^}]+\}", re.IGNORECASE)
+    _FLAG_HEX32_RE = re.compile(r"\b[0-9a-f]{32}\b", re.IGNORECASE)
+
+    def _scan_for_flags(self, output: str, *, hex32: bool) -> None:
+        if not output:
+            return
+        matches = list(self._FLAG_BRACE_RE.findall(output))
+        if hex32:
+            matches += self._FLAG_HEX32_RE.findall(output)
+        for flag in matches:
+            if flag not in self.attack_state.flags:
+                self.attack_state.add_flag(flag)
+                if self._current_turn:
+                    self._current_turn.key_findings.append(f"FLAG FOUND: {flag}")
 
     def on_turn_end(self, response: str) -> None:
         if not self._current_turn:

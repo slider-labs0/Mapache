@@ -1385,6 +1385,33 @@ def test_lead_state_reset_still_works():
     print("  PASS  lead_state_reset_still_works")
 
 
+def test_flag_capture_from_web_and_exec():
+    # Regression: flag auto-capture must fire for web-recon output, not only
+    # exec tools — a CTF chain can end at a web flag endpoint (verified live
+    # 2026-06-29 against tests/targets/vuln_ctf.py).
+    chain = ConversationChain()
+    chain.on_turn_start("test the web app and capture the flag")
+
+    # web_fetch output carrying an explicit-format flag is captured...
+    chain.on_tool_result("web_fetch", "Access granted.\nHTB{web_recon_chain_complete}\n")
+    assert "HTB{web_recon_chain_complete}" in chain.attack_state.flags
+
+    # ...but a bare 32-hex string in a web body (asset/session hash) is NOT a
+    # flag — matching it from HTML would be a false positive.
+    chain.on_tool_result("web_fetch",
+                         '<script src="/a/0123456789abcdef0123456789abcdef.js">')
+    assert "0123456789abcdef0123456789abcdef" not in chain.attack_state.flags
+
+    # Exec tools keep the 32-hex match for raw user.txt/root.txt flag files.
+    chain.on_tool_result("shell", "cat root.txt -> d41d8cd98f00b204e9800998ecf8427e")
+    assert "d41d8cd98f00b204e9800998ecf8427e" in chain.attack_state.flags
+
+    # Captured flags are deduped and surfaced as turn findings.
+    chain.on_tool_result("web_fetch", "HTB{web_recon_chain_complete} (again)")
+    assert chain.attack_state.flags.count("HTB{web_recon_chain_complete}") == 1
+    print("  PASS  flag_capture_from_web_and_exec")
+
+
 def test_operator_roster():
     from core.operators import get_operator, operator_names, GENERALIST_ALIASES
     names = operator_names()
@@ -2702,6 +2729,7 @@ async def run_all():
     print("\nMulti-agent blackboard + operators (feature P)")
     test_shared_blackboard_semantics()
     test_lead_state_reset_still_works()
+    test_flag_capture_from_web_and_exec()
     test_operator_roster()
     await test_delegate_operator_dispatch()
     await test_delegate_parallel_fans_out()
