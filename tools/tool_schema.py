@@ -42,7 +42,11 @@ def validate_args(
     validated: dict[str, Any] = {}
 
     for key, prop_schema in properties.items():
-        if key not in args:
+        # A null for an optional field means "not provided" — local models
+        # routinely dump every optional param with a null value. Treat it like
+        # an omitted key (apply the default if any) rather than trying to coerce
+        # None to the declared type, which would spuriously reject the call.
+        if key not in args or (args[key] is None and key not in required):
             if "default" in prop_schema:
                 validated[key] = prop_schema["default"]
             continue
