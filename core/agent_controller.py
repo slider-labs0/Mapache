@@ -539,6 +539,31 @@ class AgentController:
             if not content and isinstance(raw_response, str):
                 content = raw_response
 
+            # Empty final answer: the model ended the turn without acting and
+            # without saying anything (observed with some local models on the
+            # very first step). Treat it like a malformed reply — nudge the model
+            # to either act or answer — rather than silently terminating the
+            # engagement with a blank result. Bounded by the same reask budget.
+            if not (content or "").strip():
+                if reasks_left > 0:
+                    reasks_left -= 1
+                    logger.info("Empty response; nudging model; %d left", reasks_left)
+                    self.context.add_user_message(
+                        "Your last message was empty. If you are not finished, take "
+                        "the next concrete step now by calling a tool: reply with "
+                        'ONLY {"type":"tool_call","tool":"<name>","args":{...}}. '
+                        'If you are truly done, reply with {"type":"response",'
+                        '"content":"<your final answer>"} — never an empty message.'
+                    )
+                    await self.bus.emit(
+                        "agent.reask",
+                        {"reason": "empty response", "session_id": session_id},
+                        source="controller",
+                        session_id=session_id,
+                    )
+                    continue
+                # Budget exhausted — fall through and return what we have.
+
             # Opt-in verifier: judge the final answer; on a failed verdict with
             # retries left, resume the loop with the verifier's suggestion.
             if (
