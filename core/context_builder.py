@@ -184,6 +184,10 @@ You have full system access. Act on every request immediately using your tools."
     def available_tools(self) -> list[str]:
         return list(self._tools.keys())
 
+    def active_tool_names(self) -> list[str]:
+        """Names of the tools currently exposed to the model (post-subsetting)."""
+        return [s.name for s in self._active_schemas()]
+
     # ------------------------------------------------------------------ #
     # History management
     # ------------------------------------------------------------------ #

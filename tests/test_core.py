@@ -270,6 +270,81 @@ async def test_agent_json_mode_tool_call():
     print("  PASS  agent_json_mode_tool_call")
 
 
+async def test_prose_tool_call_recovered():
+    # A tool-native model that writes the call as prose (no JSON / structured
+    # tool_call) must still be dispatched — not accepted as a final answer.
+    model = MockModel()
+    model.queue({"message": {"content": 'shell(cmd="whoami")'}})
+    model.queue({"message": {"content": "The user is root."}})
+    controller = AgentController(model_provider=model, mode=AgentMode.AGENT)
+    controller.register_tool(ToolSchema(
+        name="shell", description="Run a shell command",
+        parameters={"type": "object", "properties": {"cmd": {"type": "string"}},
+                    "required": ["cmd"]}))
+    await controller.start()
+    response = await controller.run("who am I?", session_id="prose")
+    assert "shell" in response.tool_calls_made, response.tool_calls_made
+    assert response.iterations == 2
+    print("  PASS  prose_tool_call_recovered")
+
+
+async def test_prose_non_call_stays_answer():
+    # Prose that merely mentions a call must NOT be dispatched (no false fire).
+    model = MockModel()
+    model.queue({"message": {"content": "You should run shell(cmd='id') yourself."}})
+    controller = AgentController(model_provider=model, mode=AgentMode.AGENT)
+    controller.register_tool(ToolSchema(
+        name="shell", description="Run a shell command",
+        parameters={"type": "object", "properties": {"cmd": {"type": "string"}},
+                    "required": ["cmd"]}))
+    await controller.start()
+    response = await controller.run("help", session_id="prose2")
+    assert "shell" not in response.tool_calls_made
+    assert "run shell" in response.content
+    print("  PASS  prose_non_call_stays_answer")
+
+
+async def test_unknown_tool_returns_available_list():
+    # A hallucinated tool name is corrected with the available list, not run.
+    # Requires an authoritative dispatcher so a real name isn't mistaken for one.
+    from tools.tool_registry import ToolRegistry
+    from tools.tool_dispatcher import ToolDispatcher
+    from plugins.sdk.base_tool import BaseTool, ToolResult
+
+    class _Shell(BaseTool):
+        name = "shell"
+        description = "Run a shell command"
+        parameters = {"type": "object", "properties": {"cmd": {"type": "string"}},
+                      "required": ["cmd"]}
+        permissions = set()
+
+        async def execute(self, **kwargs) -> ToolResult:
+            return ToolResult.ok("ok")
+
+    seen: dict = {}
+    model = MockModel()
+    model.queue({"message": {"content": "", "tool_calls": [
+        {"function": {"name": "account_checker", "arguments": {"target": "x"}}}]}})
+    model.queue({"message": {"content": "Understood."}})
+    registry = ToolRegistry()
+    registry.register(_Shell())
+    controller = AgentController(model_provider=model, mode=AgentMode.AGENT,
+                                 tool_dispatcher=ToolDispatcher(registry))
+    controller.register_tool(ToolSchema(
+        name="shell", description="Run a shell command",
+        parameters={"type": "object", "properties": {"cmd": {"type": "string"}},
+                    "required": ["cmd"]}))
+
+    async def on_unknown(event):
+        seen["name"] = event.data.get("tool_name")
+    controller.bus.on("agent.unknown_tool")(on_unknown)
+    await controller.start()
+    response = await controller.run("check accounts", session_id="unknown")
+    assert seen.get("name") == "account_checker"
+    assert "account_checker" not in response.tool_calls_made
+    print("  PASS  unknown_tool_returns_available_list")
+
+
 async def test_agent_verifier_retry():
     model = MockModel()
     # 1) loop produces a thin first answer
@@ -2676,6 +2751,9 @@ async def run_all():
     await test_agent_direct_response()
     await test_agent_tool_call_then_response()
     await test_agent_json_mode_tool_call()
+    await test_prose_tool_call_recovered()
+    await test_prose_non_call_stays_answer()
+    await test_unknown_tool_returns_available_list()
     await test_agent_verifier_retry()
     await test_agent_verifier_off_by_default()
     await test_agent_max_iterations()

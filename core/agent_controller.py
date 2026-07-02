@@ -8,9 +8,11 @@ persistent attack state and context continuity across turns.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
 import logging
+import re
 import threading
 from dataclasses import dataclass, field
 from enum import Enum
@@ -811,10 +813,63 @@ class AgentController:
 
         data = self._extract_json_object(raw)
         if data is None:
-            # No JSON at all — a natural-language final answer.
+            # No JSON — but tool-native models (esp. "thinking" ones) sometimes
+            # emit a bare `tool(args)` call as prose in the content instead of a
+            # structured tool_call. Recover it when the whole message is one call
+            # naming a currently-exposed tool. Otherwise it's a plain answer.
+            prose = self._extract_prose_tool_call(raw)
+            if prose is not None:
+                return {"type": "tool_call", **prose}
             return {"type": "response", "content": raw}
 
         return self._interpret_json_response(data, raw)
+
+    # A message that is nothing but `name(...)`. Kept tight (whole-string match)
+    # so ordinary prose that merely mentions a call is never dispatched.
+    _PROSE_CALL_RE = re.compile(r"^([A-Za-z_]\w*)\s*\((.*)\)\s*$", re.DOTALL)
+
+    def _extract_prose_tool_call(self, text: str) -> Optional[dict[str, Any]]:
+        """
+        Repair a tool call the model wrote as prose (e.g. ``msf_search(query='x')``
+        or ``http_request({"url": "..."})``) into a {tool, args} dict.
+
+        Conservative by construction: fires only when the entire message is a
+        single call whose name is a currently-exposed tool, and whose arguments
+        are Python/JSON literals (no positional args, no non-literal expressions).
+        Returns None otherwise so real final answers are never hijacked.
+        """
+        s = text.strip().strip("`").strip()
+        m = self._PROSE_CALL_RE.match(s)
+        if not m:
+            return None
+        name, inside = m.group(1), m.group(2).strip()
+        if name not in set(self.context.active_tool_names()):
+            return None
+        if not inside:
+            return {"tool": name, "args": {}}
+        # Form A: name({...json...})
+        if inside.startswith("{"):
+            try:
+                obj = json.loads(inside)
+            except json.JSONDecodeError:
+                return None
+            return {"tool": name, "args": obj} if isinstance(obj, dict) else None
+        # Form B: name(key=val, ...) — literals only, via ast (no execution).
+        try:
+            call = ast.parse(s, mode="eval").body
+        except (SyntaxError, ValueError):
+            return None
+        if not isinstance(call, ast.Call) or call.args:
+            return None  # positional args can't be mapped to param names safely
+        args: dict[str, Any] = {}
+        for kw in call.keywords:
+            if kw.arg is None:
+                return None
+            try:
+                args[kw.arg] = ast.literal_eval(kw.value)
+            except Exception:
+                return None
+        return {"tool": name, "args": args} if args else None
 
     # Keys that let us infer the intended type when the model omits "type".
     def _interpret_json_response(self, data: dict, raw: str) -> dict[str, Any]:
@@ -1016,6 +1071,31 @@ class AgentController:
             tool_name = call["tool"]
             tool_args = self._apply_arg_fallbacks(tool_name, call.get("args", {}))
             tool_call_id = str(uuid4())[:8]
+
+            # Hallucinated-tool correction: local models invent plausible tool
+            # names (e.g. account_checker, login_as_admin). Only fire when the
+            # dispatcher exposes an enumerable registry so we can be authoritative
+            # about what exists; otherwise fail open (dispatch handles it). Hand
+            # back the phase-scoped list of tools the model can actually use right
+            # now — shorter and more relevant than the full registry dump — so the
+            # next step self-corrects instead of looping on the bad name.
+            if (getattr(self.tool_dispatcher, "registry", None) is not None
+                    and tool_name not in self._known_tool_names()):
+                offered = ", ".join(self.context.active_tool_names()
+                                    or sorted(self._known_tool_names()))
+                logger.info("Unknown tool '%s' — returning available list", tool_name)
+                self.context.add_tool_result(
+                    tool_call_id, tool_name,
+                    f"There is no tool named '{tool_name}'. It was NOT executed. "
+                    f"The tools available to you right now are: {offered}. "
+                    "Call one of those exact names, or give your final answer.",
+                )
+                await self.bus.emit(
+                    "agent.unknown_tool",
+                    {"tool_name": tool_name, "session_id": session_id},
+                    source="controller", session_id=session_id,
+                )
+                continue
 
             # Rules-of-Engagement gate (feature J): refuse an out-of-scope or
             # forbidden action before it runs. No-op unless a scope is loaded.
@@ -1341,6 +1421,20 @@ class AgentController:
         header = (f"[subagent result — host {child_state.target}]" if isolated
                   else "[subagent result]")
         return f"{header}\n{content[:4000]}"
+
+    def _known_tool_names(self) -> set[str]:
+        """Every tool the controller can actually dispatch: the built-in
+        delegation tools, the exposed context schemas, and the dispatcher's
+        registry. Used to tell a hallucinated name from a real one."""
+        names = {DELEGATE_TOOL, DELEGATE_PARALLEL_TOOL}
+        names.update(self.context.available_tools)
+        reg = getattr(self.tool_dispatcher, "registry", None)
+        if reg is not None:
+            try:
+                names.update(reg.list_names())
+            except Exception:  # a misbehaving registry must not break dispatch
+                pass
+        return names
 
     async def _dispatch_tool(
         self,
