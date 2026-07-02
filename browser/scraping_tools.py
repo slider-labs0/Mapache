@@ -145,6 +145,93 @@ class WebFetchTool(BaseTool):
         )
 
 
+class HttpRequestTool(BaseTool):
+    name = "http_request"
+    description = (
+        "Send an arbitrary HTTP request (GET/POST/PUT/DELETE/PATCH) to a URL and "
+        "return the status, response headers, and raw body. Use this — NOT shell "
+        "curl — for web-API testing: authentication, injection, and access-control "
+        "attacks. The body and headers are sent as structured data, so payloads "
+        "that contain quotes (e.g. a SQL injection like ' OR 1=1--) are transported "
+        "verbatim with no shell-escaping problems. Provide a JSON body via "
+        "json_body (sent as application/json), form fields via data, or a raw "
+        "string via body."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "url": {"type": "string",
+                     "description": "Target URL (must start with http:// or https://)"},
+            "method": {"type": "string",
+                       "description": "HTTP method (GET, POST, PUT, DELETE, PATCH)",
+                       "default": "GET"},
+            "json_body": {"type": "object",
+                          "description": "Request body sent as JSON. Put injection "
+                          "payloads in here as plain string values."},
+            "data": {"type": "object",
+                     "description": "Form-encoded body (application/x-www-form-urlencoded)"},
+            "body": {"type": "string", "description": "Raw request body string"},
+            "params": {"type": "object", "description": "URL query parameters"},
+            "headers": {"type": "object",
+                        "description": "Extra request headers, e.g. an Authorization "
+                        "bearer token captured from a previous response"},
+            "max_length": {"type": "integer",
+                           "description": "Max characters of body to return (default 4000)",
+                           "default": 4000},
+        },
+        "required": ["url"],
+    }
+    permissions = {Permission.NETWORK}
+    timeout = 30
+    tags = ["browser", "web", "http", "api"]
+
+    # Response headers worth surfacing to the model for web attacks.
+    _KEY_HEADERS = ("content-type", "set-cookie", "location", "www-authenticate",
+                    "server", "x-powered-by")
+
+    async def execute(
+        self,
+        url: str,
+        method: str = "GET",
+        json_body: Optional[dict] = None,
+        data: Optional[dict] = None,
+        body: Optional[str] = None,
+        params: Optional[dict] = None,
+        headers: Optional[dict] = None,
+        max_length: int = 4000,
+        **kwargs: Any,
+    ) -> ToolResult:
+        if not url.startswith(("http://", "https://")):
+            return ToolResult.fail("Invalid URL: must start with http:// or https://")
+
+        async with HttpClient(timeout=25.0) as client:
+            response = await client.request(
+                method, url, params=params, data=data, json=json_body,
+                content=body, extra_headers=headers,
+            )
+
+        if response.error and response.status_code == 0:
+            return ToolResult.fail(response.error)
+
+        lines = [f"{method.upper()} {response.url}",
+                 f"Status: {response.status_code} ({response.elapsed_ms:.0f}ms)"]
+        for h in self._KEY_HEADERS:
+            if h in {k.lower() for k in response.headers}:
+                val = next(v for k, v in response.headers.items() if k.lower() == h)
+                lines.append(f"{h}: {val}")
+        text = response.text or ""
+        truncated = text[:max_length]
+        lines.append(f"\n--- Body ({len(text)} bytes) ---\n{truncated}")
+        if len(text) > max_length:
+            lines.append("[... body truncated]")
+
+        return ToolResult.ok(
+            "\n".join(lines),
+            metadata={"url": str(response.url), "status": response.status_code,
+                      "method": method.upper()},
+        )
+
+
 class WebSearchTool(BaseTool):
     name = "web_search"
     description = (

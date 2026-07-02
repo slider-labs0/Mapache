@@ -208,6 +208,49 @@ class HttpClient:
                 error=str(exc),
             )
 
+    async def request(
+        self,
+        method: str,
+        url: str,
+        params: Optional[dict] = None,
+        data: Optional[dict] = None,
+        json: Optional[dict] = None,
+        content: Optional[str] = None,
+        extra_headers: Optional[dict] = None,
+    ) -> HttpResponse:
+        """Generic request for any HTTP method (GET/POST/PUT/DELETE/PATCH/...).
+
+        Bodies are passed as structured values (``json``/``data``) or a raw
+        ``content`` string, so payloads containing quotes are transported as
+        data and never have to survive shell quoting."""
+        start = time.monotonic()
+        try:
+            response = await self._client.request(
+                method.upper(),
+                url,
+                params=params,
+                data=data,
+                json=json,
+                content=content,
+                headers=extra_headers or {},
+            )
+            elapsed = (time.monotonic() - start) * 1000
+            return HttpResponse(
+                url=str(response.url),
+                status_code=response.status_code,
+                headers=dict(response.headers),
+                text=response.text,
+                elapsed_ms=elapsed,
+                via_tor=self.via_tor,
+            )
+        except Exception as exc:
+            return HttpResponse(
+                url=url, status_code=0, headers={}, text="",
+                elapsed_ms=(time.monotonic() - start) * 1000,
+                via_tor=self.via_tor,
+                error=str(exc),
+            )
+
     async def check_tor(self) -> tuple[bool, str]:
         """
         Verify Tor connectivity by checking the Tor Project's check page.

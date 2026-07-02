@@ -50,14 +50,15 @@ CORE_TOOLS = {
 }
 
 PHASE_TOOLS = {
-    "recon": {"nmap_scan", "web_fetch", "web_search"},
+    "recon": {"nmap_scan", "web_fetch", "http_request", "web_search"},
     "enumeration": {
-        "nmap_scan", "web_fetch", "web_search",
+        "nmap_scan", "web_fetch", "http_request", "web_search",
         "kali_list", "kali_run", "searchsploit", "tor_fetch",
     },
     "exploitation": {
         "msf_search", "msf_run", "msf_sessions", "searchsploit",
-        "kali_run", "burp_scan", "burp_proxy", "john_crack", "john_identify",
+        "kali_run", "web_fetch", "http_request",
+        "burp_scan", "burp_proxy", "john_crack", "john_identify",
     },
     "post": {
         "msf_sessions", "kali_run", "john_crack", "john_identify",
@@ -70,10 +71,10 @@ PHASE_TOOLS = {
 
 # Open-port → additional tools that become useful once a service is seen.
 PORT_TOOLS = {
-    "80":   {"kali_run", "web_fetch", "web_search", "burp_scan", "burp_proxy"},
-    "443":  {"kali_run", "web_fetch", "web_search", "burp_scan", "burp_proxy"},
-    "8080": {"kali_run", "web_fetch", "web_search", "burp_scan", "burp_proxy"},
-    "8000": {"kali_run", "web_fetch", "web_search", "burp_scan", "burp_proxy"},
+    "80":   {"kali_run", "web_fetch", "http_request", "web_search", "burp_scan", "burp_proxy"},
+    "443":  {"kali_run", "web_fetch", "http_request", "web_search", "burp_scan", "burp_proxy"},
+    "8080": {"kali_run", "web_fetch", "http_request", "web_search", "burp_scan", "burp_proxy"},
+    "8000": {"kali_run", "web_fetch", "http_request", "web_search", "burp_scan", "burp_proxy"},
     "445":  {"msf_search", "msf_run", "kali_run"},
     "139":  {"msf_search", "msf_run", "kali_run"},
     "3389": {"msf_search", "msf_run", "kali_run"},

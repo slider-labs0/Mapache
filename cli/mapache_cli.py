@@ -45,7 +45,7 @@ from security_tools.cracking.john_tool import JohnCrackTool, JohnFormatTool
 from security_tools.kali.kali_tools_interface import (
     KaliToolListTool, KaliRunTool, SearchsploitTool,
 )
-from browser.scraping_tools import WebFetchTool, WebSearchTool, TorFetchTool
+from browser.scraping_tools import WebFetchTool, HttpRequestTool, WebSearchTool, TorFetchTool
 from tools.filesystem_tool import (
     FileReadTool, FileWriteTool, FileEditTool,
     FileListTool, FileSearchTool,
@@ -446,6 +446,7 @@ class MapacheCLI:
 
             # Browser
             self.registry.register(WebFetchTool())
+            self.registry.register(HttpRequestTool())
             self.registry.register(WebSearchTool())
             self.registry.register(TorFetchTool())
 
