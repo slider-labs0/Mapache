@@ -788,7 +788,7 @@ class MapacheCLI:
             self.render.agent_result(response.content, response.tool_calls_made,
                                      response.iterations, response.error)
             # Task list (feature B): show the current plan/progress as a panel.
-            self.render.task_list(self.controller.chain.todos())
+            self.render.task_list(self.controller.chain.todos)
             # Voice (Phase 9): speak the response when voice is enabled (no-op
             # under the null backend). Never let TTS break the turn.
             if self.voice is not None and self.voice.enabled and response.content:
