@@ -1023,6 +1023,68 @@ def test_config_defaults():
     print("  PASS  config_defaults")
 
 
+async def test_anthropic_provider_translation_and_chat():
+    from models.providers.anthropic_provider import AnthropicProvider
+    p = AnthropicProvider(model="claude-sonnet-4-6", api_key="sk-test")
+
+    # message split: system extracted; tool→user; consecutive user coalesced.
+    system, conv = AnthropicProvider._split_messages([
+        {"role": "system", "content": "You are Mapache."},
+        {"role": "user", "content": "hack it"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "tool", "tool_name": "http_request", "content": "200 OK"},
+        {"role": "user", "content": "continue"},
+    ])
+    assert system == "You are Mapache."
+    assert conv[0] == {"role": "user", "content": "hack it"}
+    assert conv[1]["role"] == "assistant"
+    assert conv[2]["role"] == "user"  # tool-result + next user merged into one turn
+    assert "[tool:http_request]" in conv[2]["content"] and "continue" in conv[2]["content"]
+
+    # tool conversion → Anthropic input_schema
+    t = AnthropicProvider._convert_tool({"type": "function", "function": {
+        "name": "http_request", "description": "d",
+        "parameters": {"type": "object", "properties": {"url": {"type": "string"}}}}})
+    assert t["name"] == "http_request" and "url" in t["input_schema"]["properties"]
+
+    # response normalize: text + tool_use → the {"message": {...}} envelope
+    norm = AnthropicProvider._normalize({"content": [
+        {"type": "text", "text": "trying"},
+        {"type": "tool_use", "name": "http_request", "input": {"url": "http://t"}}]})
+    assert norm["message"]["content"] == "trying"
+    tc = norm["message"]["tool_calls"][0]["function"]
+    assert tc["name"] == "http_request" and tc["arguments"] == {"url": "http://t"}
+
+    # chat() end-to-end over a fake transport
+    async def fake_post(path, payload):
+        assert path == "/v1/messages"
+        assert payload["system"] == "sys" and payload["messages"][0]["role"] == "user"
+        assert payload["tools"][0]["name"] == "http_request"
+        return {"content": [{"type": "tool_use", "name": "http_request",
+                             "input": {"url": "u"}}]}
+    p._post = fake_post
+    out = await p.chat(
+        [{"role": "system", "content": "sys"}, {"role": "user", "content": "go"}],
+        tools=[{"type": "function", "function": {
+            "name": "http_request", "description": "d",
+            "parameters": {"type": "object"}}}])
+    assert out["message"]["tool_calls"][0]["function"]["name"] == "http_request"
+    await p.close()
+    print("  PASS  anthropic_provider_translation_and_chat")
+
+
+def test_model_pool_routes_anthropic():
+    from core.config import MapacheConfig, _default_config
+    from models.model_pool import ModelPool
+    from models.providers.anthropic_provider import AnthropicProvider
+    from models.providers.openai_compatible import OpenAICompatibleProvider
+    cfg = MapacheConfig.from_dict(_default_config())
+    mp = ModelPool(base_url="http://x", config=cfg)
+    assert isinstance(mp.get("claude-opus-4-8"), AnthropicProvider)
+    assert isinstance(mp.get("gpt-4.1"), OpenAICompatibleProvider)
+    print("  PASS  model_pool_routes_anthropic")
+
+
 def test_config_precedence_chain():
     with tempfile.TemporaryDirectory() as tmp:
         gpath = _CfgPath(tmp) / "global.json"
@@ -2812,6 +2874,8 @@ async def run_all():
 
     print("\nConfig layer (feature C0)")
     test_config_defaults()
+    await test_anthropic_provider_translation_and_chat()
+    test_model_pool_routes_anthropic()
     test_config_precedence_chain()
     test_config_env_layer_and_interpolation()
     test_config_provider_for_model_and_redaction()

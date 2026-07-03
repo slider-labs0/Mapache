@@ -41,9 +41,22 @@ DEFAULT_OLLAMA_URL = "http://localhost:11434"
 # documented default the user can override in config (its API is OpenAI-shaped).
 DEFAULT_OPENROUTER_URL = "https://openrouter.ai/api/v1"
 DEFAULT_NOUS_URL = "https://inference-api.nousresearch.com/v1"
+# Frontier providers: Anthropic speaks its own Messages API (KIND_ANTHROPIC);
+# OpenAI is OpenAI-shaped (KIND_OPENAI). Both are pre-listed so a key + a
+# --model of a listed id + --allow-cloud works with no config editing.
+DEFAULT_ANTHROPIC_URL = "https://api.anthropic.com"
+DEFAULT_OPENAI_URL = "https://api.openai.com/v1"
 
 KIND_OLLAMA = "ollama"
 KIND_OPENAI = "openai_compatible"
+KIND_ANTHROPIC = "anthropic"
+
+# Frontier model ids pre-listed on their providers so provider_for_model can
+# route them out of the box. Kept to the current-generation models.
+ANTHROPIC_MODELS = [
+    "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001",
+]
+OPENAI_MODELS = ["gpt-4.1", "gpt-4o", "o4-mini"]
 
 
 def _default_config() -> dict[str, Any]:
@@ -64,6 +77,14 @@ def _default_config() -> dict[str, Any]:
             "nous": {
                 "kind": KIND_OPENAI, "base_url": DEFAULT_NOUS_URL,
                 "api_key": "", "models": [], "enabled": False,
+            },
+            "anthropic": {
+                "kind": KIND_ANTHROPIC, "base_url": DEFAULT_ANTHROPIC_URL,
+                "api_key": "", "models": list(ANTHROPIC_MODELS), "enabled": True,
+            },
+            "openai": {
+                "kind": KIND_OPENAI, "base_url": DEFAULT_OPENAI_URL,
+                "api_key": "", "models": list(OPENAI_MODELS), "enabled": True,
             },
         },
         "messaging": {"telegram_token": "", "discord_token": ""},
@@ -88,6 +109,8 @@ _ENV_MAP: dict[str, tuple[str, ...]] = {
     "OLLAMA_URL": ("providers", "ollama", "base_url"),
     "OPENROUTER_API_KEY": ("providers", "openrouter", "api_key"),
     "NOUS_API_KEY": ("providers", "nous", "api_key"),
+    "ANTHROPIC_API_KEY": ("providers", "anthropic", "api_key"),
+    "OPENAI_API_KEY": ("providers", "openai", "api_key"),
     "TELEGRAM_BOT_TOKEN": ("messaging", "telegram_token"),
     "DISCORD_BOT_TOKEN": ("messaging", "discord_token"),
 }

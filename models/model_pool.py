@@ -14,6 +14,8 @@ from typing import Any, Optional
 
 from models.providers.ollama_provider import OllamaProvider
 from models.providers.openai_compatible import OpenAICompatibleProvider
+from models.providers.anthropic_provider import AnthropicProvider
+from core.config import KIND_ANTHROPIC
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -51,6 +53,13 @@ class ModelPool:
         if self.config is not None:
             prov = self.config.provider_for_model(model_id)
             if prov is not None and prov.is_cloud:
+                if prov.kind == KIND_ANTHROPIC:
+                    return AnthropicProvider(
+                        model=model_id,
+                        base_url=prov.base_url,
+                        api_key=prov.api_key,
+                        timeout=self.timeout,
+                    )
                 return OpenAICompatibleProvider(
                     model=model_id,
                     base_url=prov.base_url,
