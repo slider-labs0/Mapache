@@ -56,18 +56,19 @@ WEB_ATTACK_SKILL = Skill(
     name="web_app_attacks",
     matches=_is_web_target,
     body=(
-        "SKILL — web application attacks (this target exposes a web app):\n"
-        "- Use the `http_request` tool, NOT shell curl, for all web/API testing: "
-        "it sends the body and params as structured data, so injection payloads "
-        "containing quotes (e.g. ' OR 1=1--) are transported verbatim.\n"
-        "- Modern apps (Angular/React SPAs) are backed by a REST API; the real "
-        "attack surface is the API endpoints, not the static HTML. Fetch the app "
-        "root, then probe API routes.\n"
-        "- SQL-injection auth bypass: POST the login endpoint with an email or "
-        "username of `' OR 1=1--` and any password; a successful bypass returns "
-        "an auth token or session for another user (often the administrator).\n"
-        "- Common login endpoints to try: /rest/user/login, /api/login, /login, "
-        "/auth, /session."
+        "ACTIVE PLAYBOOK — the target is a web application. Follow this NOW, in "
+        "order; it overrides your default recon-first workflow:\n"
+        "1. Do NOT call cve_lookup or web_search — a modern web app has no useful "
+        "CVE/search results. Skip straight to interacting with the app.\n"
+        "2. Your next action MUST be an `http_request` (NOT shell curl — it sends "
+        "structured JSON so injection payloads with quotes survive intact). The "
+        "attack surface is the REST API, not the static HTML.\n"
+        "3. To log in as another user without the password, POST the login "
+        "endpoint with a SQL-injection auth bypass — json_body "
+        '{"email": "\' OR 1=1--", "password": "anything"}. Try these endpoints in '
+        "order: /rest/user/login, /api/login, /login.\n"
+        "4. Success = the response contains an authentication token for the admin "
+        "user (admin@juice-sh.op). That token is your proof."
     ),
 )
 
