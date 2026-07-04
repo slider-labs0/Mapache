@@ -1183,7 +1183,7 @@ def test_config_save_and_raw_roundtrip():
 
 
 def test_wizard_prefs_edit_raw():
-    # _step_prefs mutates the raw dict from typed input; empty input keeps current.
+    # _step_prefs now handles strategy + VRAM only (model is chosen elsewhere).
     import builtins
     from cli import setup_wizard
 
@@ -1191,19 +1191,75 @@ def test_wizard_prefs_edit_raw():
         cfg = load_config(working_dir=tmp, environ={},
                           global_path=_CfgPath(tmp) / "none.json")
         raw: dict = {}
-        answers = iter(["qwen2.5:32b", "", "16"])  # model, keep strategy, vram
+        answers = iter(["", "16"])  # keep strategy, set vram
         orig_input = builtins.input
         builtins.input = lambda *a, **k: next(answers)
         try:
-            model = setup_wizard._step_prefs(cfg, raw)
+            setup_wizard._step_prefs(cfg, raw)
         finally:
             builtins.input = orig_input
 
-        assert model == "qwen2.5:32b"
-        assert raw["default_model"] == "qwen2.5:32b"
+        assert "default_model" not in raw          # not touched here anymore
         assert raw["default_strategy"] == cfg.default_strategy  # kept on empty
         assert raw["max_vram_gb"] == 16.0
     print("  PASS  wizard_prefs_edit_raw")
+
+
+def test_wizard_configure_model_choice():
+    # Pure config mutation for both a local and a cloud choice, then round-trip
+    # it through MapacheConfig to prove the chosen model actually routes.
+    from cli.setup_wizard import configure_model_choice
+    from core.config import (MapacheConfig, KIND_OLLAMA, KIND_OPENAI,
+                             DEFAULT_OPENROUTER_URL)
+
+    # local: only default_model changes; no provider/allow_cloud edits.
+    raw: dict = {}
+    configure_model_choice(raw, provider_name="ollama", kind=KIND_OLLAMA,
+                           base_url="http://127.0.0.1:21434",
+                           model_id="qwen2.5:32b", is_cloud=False)
+    assert raw == {"default_model": "qwen2.5:32b"}
+
+    # cloud: provider enabled, key stored, model listed, allow_cloud on.
+    raw = {}
+    configure_model_choice(raw, provider_name="openrouter", kind=KIND_OPENAI,
+                           base_url=DEFAULT_OPENROUTER_URL,
+                           model_id="anthropic/claude-sonnet-4.6",
+                           api_key="sk-or-test", is_cloud=True)
+    assert raw["default_model"] == "anthropic/claude-sonnet-4.6"
+    assert raw["allow_cloud"] is True
+    orp = raw["providers"]["openrouter"]
+    assert orp["enabled"] and orp["api_key"] == "sk-or-test"
+    assert "anthropic/claude-sonnet-4.6" in orp["models"]
+
+    cfg = MapacheConfig.from_dict(raw)
+    prov = cfg.provider_for_model("anthropic/claude-sonnet-4.6")
+    assert prov is not None and prov.name == "openrouter" and prov.is_usable
+    print("  PASS  wizard_configure_model_choice")
+
+
+async def test_wizard_choose_cloud_model_interactive():
+    # The chooser drives provider + key + model from typed input (cloud path,
+    # no network). Uses a fresh temp config so built-in provider defaults apply.
+    import builtins
+    from cli import setup_wizard
+
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg = load_config(working_dir=tmp, environ={},
+                          global_path=_CfgPath(tmp) / "none.json")
+        raw: dict = {}
+        answers = iter(["openrouter", "sk-or-test", "1"])  # provider, key, model#1
+        orig_input = builtins.input
+        builtins.input = lambda *a, **k: next(answers)
+        try:
+            model, is_cloud = await setup_wizard._step_choose_provider_model(cfg, raw)
+        finally:
+            builtins.input = orig_input
+
+        assert is_cloud is True
+        assert model == "anthropic/claude-sonnet-4.6"  # first openrouter suggestion
+        assert raw["providers"]["openrouter"]["api_key"] == "sk-or-test"
+        assert raw["allow_cloud"] is True
+    print("  PASS  wizard_choose_cloud_model_interactive")
 
 
 def test_wizard_secret_prompt_preserves_on_empty():
@@ -2884,6 +2940,8 @@ async def run_all():
     print("\nSetup wizard (feature C1)")
     test_config_save_and_raw_roundtrip()
     test_wizard_prefs_edit_raw()
+    test_wizard_configure_model_choice()
+    await test_wizard_choose_cloud_model_interactive()
     test_wizard_secret_prompt_preserves_on_empty()
     test_cli_overrides_and_config_precedence()
 

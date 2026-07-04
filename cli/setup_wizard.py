@@ -38,9 +38,15 @@ from pathlib import Path
 from typing import Any, Optional
 
 from core.config import (
+    ANTHROPIC_MODELS,
+    DEFAULT_ANTHROPIC_URL,
     DEFAULT_NOUS_URL,
+    DEFAULT_OPENAI_URL,
     DEFAULT_OPENROUTER_URL,
+    KIND_ANTHROPIC,
+    KIND_OLLAMA,
     KIND_OPENAI,
+    OPENAI_MODELS,
     load_config,
     load_global_raw,
     global_config_path,
@@ -62,11 +68,24 @@ OPTIONAL_BINS = [
     ("tor", "anonymized fetches"),
 ]
 
-# Cloud providers the wizard can configure: name → (default base_url, env var).
-CLOUD_PROVIDERS = [
-    ("openrouter", DEFAULT_OPENROUTER_URL, "OPENROUTER_API_KEY"),
-    ("nous", DEFAULT_NOUS_URL, "NOUS_API_KEY"),
+# Providers the setup chooser offers, in menu order:
+#   (name, kind, default base_url, env var, is_cloud).
+PROVIDER_MENU = [
+    ("ollama", KIND_OLLAMA, "", "", False),
+    ("openrouter", KIND_OPENAI, DEFAULT_OPENROUTER_URL, "OPENROUTER_API_KEY", True),
+    ("anthropic", KIND_ANTHROPIC, DEFAULT_ANTHROPIC_URL, "ANTHROPIC_API_KEY", True),
+    ("openai", KIND_OPENAI, DEFAULT_OPENAI_URL, "OPENAI_API_KEY", True),
+    ("nous", KIND_OPENAI, DEFAULT_NOUS_URL, "NOUS_API_KEY", True),
 ]
+
+# Suggested model ids per cloud provider for the chooser's pick list.
+MODEL_SUGGESTIONS: dict[str, list[str]] = {
+    "openrouter": ["anthropic/claude-sonnet-4.6", "anthropic/claude-opus-4.8",
+                   "openai/gpt-4.1"],
+    "anthropic": list(ANTHROPIC_MODELS),
+    "openai": list(OPENAI_MODELS),
+    "nous": ["Hermes-4-405B"],
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -177,39 +196,128 @@ def _step_bins() -> None:
         print("  Missing tools just disable their feature; nothing here is required.")
 
 
-def _step_cloud(cfg, raw: dict) -> None:
-    """Prompt for cloud-provider keys + exposed model ids (G's providers)."""
-    _hr("Cloud providers (optional — data leaves this machine)")
-    print("  Leave a key blank to skip a provider. Keys are stored in the global")
-    print("  config file; you can instead set the env var and enter ${ENV_VAR}.")
+def _resolve_provider(sel: str):
+    """Map a menu selection (1-based number or name) to a PROVIDER_MENU entry."""
+    sel = (sel or "").strip().lower()
+    if sel.isdigit():
+        idx = int(sel) - 1
+        return PROVIDER_MENU[idx] if 0 <= idx < len(PROVIDER_MENU) else None
+    for entry in PROVIDER_MENU:
+        if entry[0] == sel:
+            return entry
+    return None
 
-    any_key = False
-    for name, base_url, env_var in CLOUD_PROVIDERS:
+
+def configure_model_choice(
+    raw: dict,
+    *,
+    provider_name: str,
+    kind: str,
+    base_url: str,
+    model_id: str,
+    api_key: Optional[str] = None,
+    is_cloud: bool = False,
+) -> str:
+    """Record provider_name/model_id as the default in `raw`. Returns model_id.
+
+    For a cloud provider: enable it, store base_url + (optional) key, ensure
+    model_id is in its `models` list so `provider_for_model` routes it, and turn
+    on `allow_cloud`. Pure config mutation (no I/O), so it is unit-testable.
+    """
+    raw["default_model"] = model_id
+    if is_cloud:
+        prov = raw.setdefault("providers", {}).setdefault(provider_name, {})
+        prov["kind"] = kind
+        prov["base_url"] = base_url
+        prov["enabled"] = True
+        if api_key:
+            prov["api_key"] = api_key
+        models = list(prov.get("models") or [])
+        if model_id and model_id not in models:
+            models.append(model_id)
+        prov["models"] = models
+        raw["allow_cloud"] = True
+    return model_id
+
+
+async def _pick_ollama_model(cfg, current: str) -> str:
+    """List installed Ollama models and let the operator pick one (or type an id)."""
+    from models.providers.ollama_provider import OllamaProvider
+
+    prov = OllamaProvider(model=current or "qwen2.5:32b", base_url=cfg.ollama_url)
+    installed: list[str] = []
+    try:
+        if await prov.is_available():
+            installed = await prov.list_models()
+    except Exception:
+        pass
+    finally:
+        await prov.close()
+
+    if installed:
+        print("  Installed local models:")
+        for i, m in enumerate(installed, 1):
+            print(f"    {i}) {m}")
+        sel = _prompt("Choose a model (number or full name)", current or installed[0])
+        if sel.isdigit() and 1 <= int(sel) <= len(installed):
+            return installed[int(sel) - 1]
+        return sel
+    print("  ⚠  Ollama has no installed models (or is unreachable at "
+          f"{cfg.ollama_url}).")
+    return _prompt("Enter a model id to use (you can `ollama pull` it later)",
+                   current or "qwen2.5:32b")
+
+
+def _pick_cloud_model(name: str, cur) -> str:
+    """Offer suggested + already-configured model ids for a cloud provider."""
+    existing = list(cur.models) if cur and cur.models else []
+    options = existing + [s for s in MODEL_SUGGESTIONS.get(name, []) if s not in existing]
+    if options:
+        print(f"  {name} models:")
+        for i, m in enumerate(options, 1):
+            print(f"    {i}) {m}")
+        sel = _prompt("Choose a model (number or full id)", options[0])
+        if sel.isdigit() and 1 <= int(sel) <= len(options):
+            return options[int(sel) - 1]
+        return sel
+    return _prompt(f"{name} model id", "")
+
+
+async def _step_choose_provider_model(cfg, raw: dict) -> tuple[str, bool]:
+    """Ask which provider + model to use by default. Returns (model_id, is_cloud)."""
+    _hr("Model / provider")
+    print("  Which model should Mapache use by default?")
+    for i, (name, _k, _u, _e, is_cloud) in enumerate(PROVIDER_MENU, 1):
+        print(f"    {i}) {name}  ({'cloud' if is_cloud else 'local'})")
+
+    cur_prov = cfg.provider_for_model(cfg.default_model)
+    default_sel = cur_prov.name if cur_prov else "ollama"
+    entry = (_resolve_provider(_prompt("Provider (number or name)", default_sel))
+             or _resolve_provider(default_sel) or PROVIDER_MENU[0])
+    name, kind, base_url, env_var, is_cloud = entry
+
+    if not is_cloud:
+        model_id = await _pick_ollama_model(cfg, cfg.default_model)
+        configure_model_choice(raw, provider_name=name, kind=kind,
+                               base_url=cfg.ollama_url, model_id=model_id,
+                               is_cloud=False)
+    else:
         cur = cfg.providers.get(name)
         cur_key = cur.api_key if cur else ""
         key, changed = _prompt_secret(f"{name} API key (env: {env_var})", cur_key)
-        if changed:
-            _nested_set(raw, ("providers", name, "kind"), KIND_OPENAI)
-            _nested_set(raw, ("providers", name, "api_key"), key)
-            _nested_set(raw, ("providers", name, "enabled"), True)
-        # If this provider has a key now (typed or pre-existing), collect models.
-        effective_key = key if changed else cur_key
-        if effective_key:
-            any_key = True
-            cur_models = ", ".join(cur.models) if cur and cur.models else ""
-            models = _prompt(f"{name} model ids (comma-separated)", cur_models)
-            ids = [m.strip() for m in models.split(",") if m.strip()]
-            if ids:
-                _nested_set(raw, ("providers", name, "models"), ids)
-            elif not (cur and cur.models):
-                print(f"  ⚠  No model ids for {name}; it won't be routable until you add some.")
-
-    if any_key:
-        cur_allow = bool(raw.get("allow_cloud", cfg.allow_cloud))
-        allow = _prompt_bool("Allow cloud routing by default? (--allow-cloud)", cur_allow)
-        raw["allow_cloud"] = allow
-        if allow:
+        api_key = key if changed else cur_key
+        model_id = _pick_cloud_model(name, cur)
+        configure_model_choice(raw, provider_name=name, kind=kind, base_url=base_url,
+                               model_id=model_id, api_key=api_key or None,
+                               is_cloud=True)
+        if not api_key:
+            print(f"  ⚠  No API key for {name} yet — add one (or set {env_var}) "
+                  "before launching this model.")
+        else:
             print("  ⚠  OPSEC: cloud models may receive target/scan/cred context.")
+
+    print(f"  ✓  Default model: {model_id}  (provider: {name})")
+    return model_id, is_cloud
 
 
 def _step_messaging(cfg, raw: dict) -> None:
@@ -223,12 +331,10 @@ def _step_messaging(cfg, raw: dict) -> None:
         _nested_set(raw, ("messaging", "discord_token"), dc)
 
 
-def _step_prefs(cfg, raw: dict) -> str:
-    """Prompt for the non-secret defaults. Returns the chosen default_model."""
+def _step_prefs(cfg, raw: dict) -> None:
+    """Prompt for the non-secret defaults (strategy + VRAM). The default model is
+    chosen in the model/provider step, not here."""
     _hr("Defaults")
-    model = _prompt("Default model", cfg.default_model)
-    raw["default_model"] = model
-
     strat = _prompt("Default strategy (single|pipeline|auto|hybrid)", cfg.default_strategy)
     if strat not in ("single", "pipeline", "auto", "hybrid"):
         print(f"  ⚠  Unknown strategy '{strat}', keeping '{cfg.default_strategy}'.")
@@ -240,7 +346,6 @@ def _step_prefs(cfg, raw: dict) -> str:
         raw["max_vram_gb"] = float(vram)
     except ValueError:
         print(f"  ⚠  '{vram}' is not a number, keeping {cfg.max_vram_gb}.")
-    return model
 
 
 async def _step_smoke_test(default_model: str, working_dir: Path) -> None:
@@ -316,10 +421,12 @@ async def run_setup(argv: Optional[list[str]] = None) -> int:
     cfg = load_config(working_dir=working_dir)
     raw = load_global_raw()
 
-    default_model = _step_prefs(cfg, raw)
-    await _step_ollama(cfg, raw, default_model)
+    default_model, is_cloud = await _step_choose_provider_model(cfg, raw)
+    if not is_cloud:
+        # Offer to pull the chosen local model if it isn't installed yet.
+        await _step_ollama(cfg, raw, default_model)
     _step_bins()
-    _step_cloud(cfg, raw)
+    _step_prefs(cfg, raw)
     _step_messaging(cfg, raw)
 
     saved = save_global_config(raw)
