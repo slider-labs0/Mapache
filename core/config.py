@@ -46,6 +46,8 @@ DEFAULT_NOUS_URL = "https://inference-api.nousresearch.com/v1"
 # --model of a listed id + --allow-cloud works with no config editing.
 DEFAULT_ANTHROPIC_URL = "https://api.anthropic.com"
 DEFAULT_OPENAI_URL = "https://api.openai.com/v1"
+# xAI's Grok API is OpenAI-compatible (KIND_OPENAI), served from api.x.ai.
+DEFAULT_XAI_URL = "https://api.x.ai/v1"
 
 KIND_OLLAMA = "ollama"
 KIND_OPENAI = "openai_compatible"
@@ -57,6 +59,7 @@ ANTHROPIC_MODELS = [
     "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001",
 ]
 OPENAI_MODELS = ["gpt-4.1", "gpt-4o", "o4-mini"]
+GROK_MODELS = ["grok-4", "grok-3", "grok-3-mini"]
 
 
 def _default_config() -> dict[str, Any]:
@@ -86,6 +89,10 @@ def _default_config() -> dict[str, Any]:
                 "kind": KIND_OPENAI, "base_url": DEFAULT_OPENAI_URL,
                 "api_key": "", "models": list(OPENAI_MODELS), "enabled": True,
             },
+            "grok": {
+                "kind": KIND_OPENAI, "base_url": DEFAULT_XAI_URL,
+                "api_key": "", "models": list(GROK_MODELS), "enabled": True,
+            },
         },
         "messaging": {"telegram_token": "", "discord_token": ""},
         # Execution backend (feature H): where `shell` commands run.
@@ -111,6 +118,8 @@ _ENV_MAP: dict[str, tuple[str, ...]] = {
     "NOUS_API_KEY": ("providers", "nous", "api_key"),
     "ANTHROPIC_API_KEY": ("providers", "anthropic", "api_key"),
     "OPENAI_API_KEY": ("providers", "openai", "api_key"),
+    "XAI_API_KEY": ("providers", "grok", "api_key"),
+    "GROK_API_KEY": ("providers", "grok", "api_key"),
     "TELEGRAM_BOT_TOKEN": ("messaging", "telegram_token"),
     "DISCORD_BOT_TOKEN": ("messaging", "discord_token"),
 }

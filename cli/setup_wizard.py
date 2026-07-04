@@ -43,6 +43,8 @@ from core.config import (
     DEFAULT_NOUS_URL,
     DEFAULT_OPENAI_URL,
     DEFAULT_OPENROUTER_URL,
+    DEFAULT_XAI_URL,
+    GROK_MODELS,
     KIND_ANTHROPIC,
     KIND_OLLAMA,
     KIND_OPENAI,
@@ -75,15 +77,17 @@ PROVIDER_MENU = [
     ("openrouter", KIND_OPENAI, DEFAULT_OPENROUTER_URL, "OPENROUTER_API_KEY", True),
     ("anthropic", KIND_ANTHROPIC, DEFAULT_ANTHROPIC_URL, "ANTHROPIC_API_KEY", True),
     ("openai", KIND_OPENAI, DEFAULT_OPENAI_URL, "OPENAI_API_KEY", True),
+    ("grok", KIND_OPENAI, DEFAULT_XAI_URL, "XAI_API_KEY", True),
     ("nous", KIND_OPENAI, DEFAULT_NOUS_URL, "NOUS_API_KEY", True),
 ]
 
 # Suggested model ids per cloud provider for the chooser's pick list.
 MODEL_SUGGESTIONS: dict[str, list[str]] = {
     "openrouter": ["anthropic/claude-sonnet-4.6", "anthropic/claude-opus-4.8",
-                   "openai/gpt-4.1"],
+                   "openai/gpt-4.1", "x-ai/grok-4"],
     "anthropic": list(ANTHROPIC_MODELS),
     "openai": list(OPENAI_MODELS),
+    "grok": list(GROK_MODELS),
     "nous": ["Hermes-4-405B"],
 }
 

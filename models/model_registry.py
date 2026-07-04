@@ -38,6 +38,7 @@ class Provider(str, Enum):
     HUGGINGFACE = "huggingface"
     ANTHROPIC   = "anthropic"
     NOUS        = "nous"
+    GROK        = "grok"
 
 
 @dataclass

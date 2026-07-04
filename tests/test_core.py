@@ -1082,6 +1082,9 @@ def test_model_pool_routes_anthropic():
     mp = ModelPool(base_url="http://x", config=cfg)
     assert isinstance(mp.get("claude-opus-4-8"), AnthropicProvider)
     assert isinstance(mp.get("gpt-4.1"), OpenAICompatibleProvider)
+    # Grok (xAI) is OpenAI-compatible and routes to its own provider entry.
+    assert cfg.provider_for_model("grok-4").name == "grok"
+    assert isinstance(mp.get("grok-4"), OpenAICompatibleProvider)
     print("  PASS  model_pool_routes_anthropic")
 
 
