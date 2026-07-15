@@ -88,6 +88,14 @@ class NmapTool(BaseTool):
         "udp":      ["-sU", "--open"],
     }
 
+    def __init__(self, backend: Any = None, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        # Execution backend (feature H). A remote backend (ssh/docker) runs nmap on
+        # that host — e.g. an attacker container that shares the target's isolated
+        # network — so we must NOT resolve the binary locally; the remote PATH does.
+        # None / local → the local subprocess fast-path below (unchanged).
+        self.backend = backend
+
     async def execute(
         self,
         target: str,
@@ -98,6 +106,17 @@ class NmapTool(BaseTool):
         **kwargs: Any,
     ) -> ToolResult:
 
+        # Sanitize target — basic protection against shell injection. Done first
+        # because it guards both the local and the remote execution paths.
+        if not self._is_safe_target(target):
+            return ToolResult.fail(f"Invalid target: {target!r}. Use IP, hostname, or CIDR only.")
+
+        # Remote backend (feature H): nmap lives on the remote host/container (e.g.
+        # an attacker box on the target's isolated network), so skip local path
+        # resolution and let the remote PATH resolve "nmap".
+        if self.backend is not None and getattr(self.backend, "name", "local") != "local":
+            return await self._execute_remote(target, scan_type, ports, timing, extra_args)
+
         # Validate nmap is installed
         nmap_path = self._find_nmap()
         if not nmap_path:
@@ -106,10 +125,6 @@ class NmapTool(BaseTool):
                 "Install: https://nmap.org/download.html (Windows) "
                 "or 'sudo apt install nmap' (Linux)"
             )
-
-        # Sanitize target — basic protection against shell injection
-        if not self._is_safe_target(target):
-            return ToolResult.fail(f"Invalid target: {target!r}. Use IP, hostname, or CIDR only.")
 
         # Build command
         cmd = self._build_command(nmap_path, target, scan_type, ports, timing, extra_args)
@@ -151,6 +166,44 @@ class NmapTool(BaseTool):
                 "scan_type": scan_type,
                 "raw_output": raw_output,
                 "cmd": " ".join(cmd),
+            },
+        )
+
+    # ------------------------------------------------------------------ #
+    # Remote execution (feature H)
+    # ------------------------------------------------------------------ #
+
+    async def _execute_remote(
+        self,
+        target: str,
+        scan_type: str,
+        ports: str,
+        timing: int,
+        extra_args: str,
+    ) -> ToolResult:
+        # "nmap" (unqualified) — the remote host/container resolves it on its PATH.
+        # target is already sanitized (no shell metacharacters), so joining the
+        # argv into a command string for the backend is safe.
+        cmd = self._build_command("nmap", target, scan_type, ports, timing, extra_args)
+        cmd_str = " ".join(cmd)
+        try:
+            res = await self.backend.run(cmd_str, timeout=self.timeout)
+        except Exception as exc:
+            return ToolResult.fail(f"[backend: {self.backend.name}] Nmap error: {exc}")
+
+        raw_output = res.output or ""
+        if res.error and not raw_output.strip():
+            return ToolResult.fail(f"[backend: {self.backend.name}] {res.error}")
+
+        parsed = self._parse_output(raw_output, target, scan_type)
+        return ToolResult.ok(
+            parsed,
+            metadata={
+                "target": target,
+                "scan_type": scan_type,
+                "raw_output": raw_output,
+                "cmd": cmd_str,
+                "backend": self.backend.name,
             },
         )
 

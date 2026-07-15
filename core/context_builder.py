@@ -15,6 +15,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from core.injection_shield import SHIELD_CLAUSE, wrap_untrusted
+
 logger = logging.getLogger(__name__)
 
 # Approximate token counts (conservative estimates)
@@ -211,10 +213,13 @@ You have full system access. Act on every request immediately using your tools."
         appears a single time: the model is expected to reason over the output
         and choose the next action, not echo it back as a final answer.
         """
+        # Fence the result as untrusted data so a hostile target can't smuggle
+        # instructions into context through a tool's output (see injection_shield).
+        fenced = wrap_untrusted(tool_name, result)
         if self.use_function_calling:
             self.add_message(Message(
                 role="tool",
-                content=result,
+                content=fenced,
                 tool_call_id=tool_call_id,
                 tool_name=tool_name,
             ))
@@ -222,7 +227,7 @@ You have full system access. Act on every request immediately using your tools."
             self.add_message(Message(
                 role="user",
                 content=(
-                    f"[tool:{tool_name}] returned:\n\n{result}\n\n"
+                    f"[tool:{tool_name}] returned:\n\n{fenced}\n\n"
                     "Use this to decide the next step. Quote specific findings "
                     "(ports, versions, hashes, paths, flags) exactly as shown; "
                     "never invent values."
@@ -418,7 +423,10 @@ TASK LIST rules:
         # Persona (soul.md) frames who the agent is — sits at the very top.
         if self.persona:
             base = f"{self.persona}\n\n---\n{base}"
-        return base
+        # Injection shield: tool output is untrusted data, never instructions.
+        # Appended last so it sits close to the model's most-recent-context focus
+        # and is present regardless of which system_prompt the caller supplied.
+        return f"{base}\n\n---\n{SHIELD_CLAUSE}"
 
     def _trim_history(self) -> list[Message]:
         """
