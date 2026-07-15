@@ -1,0 +1,49 @@
+# Mapache — Python dependencies
+#
+# The agent core is deliberately dependency-light: almost everything runs on the
+# standard library. Every third-party import below is guarded (try/except
+# ImportError), so a missing package disables one feature rather than breaking
+# startup. Install only what you need.
+#
+#   pip install -r requirements.txt          # core (talk to models: Ollama + cloud)
+#   pip install rich pymetasploit3           # add optional features as needed
+#
+# Requires Python 3.10+. For local models you also need Ollama (installed
+# separately, not via pip): https://ollama.com  →  `ollama serve`.
+
+# ── Core ────────────────────────────────────────────────────────────────────
+# HTTP client used by every model provider (Ollama, Anthropic, OpenAI-compatible,
+# Grok) and by web_fetch / the vector store. This is the one you actually need.
+httpx>=0.24
+
+# ── Optional: nicer CLI ───────────────────────────────────────────────────────
+# Rich panels / colour. Falls back to a plain renderer when absent.
+# rich>=13.0
+
+# ── Optional: exploitation ────────────────────────────────────────────────────
+# Metasploit RPC client for the msf_* tools. (msfconsole via shell still works
+# without it.)
+# pymetasploit3>=1.0
+
+# ── Optional: web / browser automation ────────────────────────────────────────
+# Headless-browser scraping (chromium_controller). After install, also run:
+#   playwright install chromium
+# playwright>=1.40
+# Tor control for anonymised browsing (tor_controller); needs a running tor daemon.
+# stem>=1.8
+
+# ── Optional: chat-ops (run Mapache from Telegram / Discord) ───────────────────
+# python-telegram-bot>=20.0
+# discord.py>=2.3
+
+# ── Optional: signed skill provenance ─────────────────────────────────────────
+# ed25519 signatures for the skill hub. Without it, provenance falls back to
+# HMAC-SHA256 (still works).
+# cryptography>=41.0
+
+# ── Optional: voice I/O ───────────────────────────────────────────────────────
+# Text-to-speech. NullTTS is used when absent.
+# pyttsx3>=2.90
+# Speech-to-text. faster-whisper is lighter; openai-whisper pulls in torch (large).
+# faster-whisper>=1.0
+# openai-whisper>=20231117
