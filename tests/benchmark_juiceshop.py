@@ -43,6 +43,8 @@ from browser.scraping_tools import WebFetchTool, HttpRequestTool
 from tools.filesystem_tool import FileReadTool
 from core.exec_backend import DockerBackend
 from models.providers.ollama_provider import OllamaProvider
+from models.model_pool import ModelPool
+from core.config import load_config
 from cli.mapache_cli import SYSTEM_PROMPT
 
 
@@ -79,10 +81,27 @@ async def run_benchmark(port: int, model: str, max_iters: int, objective: str,
                         log_path: Path, shell_container: str, goal: str,
                         base_url: str) -> int:
     base = f"http://127.0.0.1:{port}"
-    provider = OllamaProvider(model=model, base_url=base_url)
-    if not await provider.is_available():
-        print("✗ Ollama not reachable — start it (`ollama serve`) and pull the model.")
-        return 2
+    # Provider-aware (like the metasploitable benchmark): a cloud model id (e.g.
+    # grok-4) resolves to its configured cloud provider from ~/.mapache/config.json;
+    # anything else falls back to local Ollama.
+    config = load_config()
+    pool = ModelPool(base_url=base_url, config=config)
+    prov_cfg = config.provider_for_model(model)
+    if prov_cfg is not None and prov_cfg.is_cloud:
+        if not config.allow_cloud:
+            print(f"✗ '{model}' is a cloud model ({prov_cfg.name}); set "
+                  f'"allow_cloud": true in ~/.mapache/config.json.')
+            return 2
+        if not prov_cfg.is_usable:
+            print(f"✗ Cloud provider '{prov_cfg.name}' has no API key.")
+            return 2
+        provider = pool.get(model)
+        print(f"  provider      : {prov_cfg.name} (cloud) — {prov_cfg.base_url}")
+    else:
+        provider = OllamaProvider(model=model, base_url=base_url)
+        if not await provider.is_available():
+            print("✗ Ollama not reachable — start it (`ollama serve`) and pull the model.")
+            return 2
 
     before = solved_challenges(base)
     print(f"▶ target={base}  model={model}  max_iters={max_iters}")
