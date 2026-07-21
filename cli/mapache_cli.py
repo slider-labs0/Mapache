@@ -31,6 +31,8 @@ from core.opsec_routing import OpsecPolicy
 from core.soul import load_soul, soul_file, init_soul
 from memory.user_profile import UserProfile, UserRememberTool
 from cli.render import make_renderer
+from cli import theme
+from cli import enhanced_input
 from core.exec_backend import backend_from_config
 from voice import voice_from_config
 from models.providers.ollama_provider import OllamaProvider
@@ -64,12 +66,6 @@ except ImportError:
     HAS_MOLTBOOK = False
 
 logger = get_logger(__name__)
-
-BANNER = """
-╔══════════════════════════════════════╗
-║   Mapache  v0.7  —  Attack Mode      ║
-║   Full offensive security suite      ║
-╚══════════════════════════════════════╝"""
 
 HELP_TEXT = """
 Commands:
@@ -209,6 +205,8 @@ class MapacheCLI:
         self.gen_manager: GeneratedToolManager | None = None
         self.scope = None  # EngagementScope, loaded in setup()
         self.engagement_log: EngagementLog | None = None  # feature K, started in run()
+        self._ptk = None          # prompt_toolkit session (enhanced input), set in run()
+        self._input_q = None      # fallback stdin queue, set in run()
         self.memory = MemoryManager()
         self.confirm = args.confirm
         self.working_dir = os.path.abspath(args.dir)
@@ -670,7 +668,8 @@ class MapacheCLI:
                 "roe_enforced": bool(self.scope and self.scope.active),
             })
 
-        print(BANNER)
+        from core.updater import local_version as _lv
+        print(theme.render_banner(_lv(), color=theme.supports_color()))
         print(f"  Model    : {self.model}")
         print(f"  Strategy : {self.strategy.value}")
         print(f"  Dir      : {self.working_dir}")
@@ -714,25 +713,46 @@ class MapacheCLI:
         if notice:
             print(f"  ⬆ {notice}")
 
-        print(f"\n  Type /help for commands")
-        print(f"  (you can type while the agent works to steer it mid-task)\n")
+        hint = "  Type /help for commands"
+        if self._ptk_enabled():
+            hint += "  ·  type / for live command suggestions"
+        print(f"\n{hint}")
+        # Mid-turn steering is a fallback-mode feature (prompt_toolkit's prompt
+        # can't run alongside a turn); only advertise it when it's available.
+        if not self._ptk_enabled():
+            print(f"  (you can type while the agent works to steer it mid-task)")
+        print()
 
-        # One persistent background reader feeds every typed line into a queue.
-        loop = asyncio.get_event_loop()
-        self._input_q = asyncio.Queue()
+        # Input: prompt_toolkit (when available on a real TTY) gives a live slash-
+        # command dropdown + ↑ history; otherwise the persistent background line
+        # reader below is used unchanged — the byte-for-byte path pipes/tests rely on.
+        self._ptk = None
+        self._input_q = None
+        if self._ptk_enabled():
+            hist = None
+            try:
+                hist_dir = os.path.join(os.path.expanduser("~"), ".mapache")
+                os.makedirs(hist_dir, exist_ok=True)
+                hist = os.path.join(hist_dir, "history")
+            except Exception:
+                hist = None
+            self._ptk = enhanced_input.make_session(hist)
 
-        def _stdin_reader() -> None:
-            for line in sys.stdin:
-                loop.call_soon_threadsafe(self._input_q.put_nowait, line.rstrip("\n"))
-            loop.call_soon_threadsafe(self._input_q.put_nowait, None)  # EOF
+        if self._ptk is None:
+            loop = asyncio.get_event_loop()
+            self._input_q = asyncio.Queue()
 
-        threading.Thread(target=_stdin_reader, daemon=True).start()
+            def _stdin_reader() -> None:
+                for line in sys.stdin:
+                    loop.call_soon_threadsafe(self._input_q.put_nowait, line.rstrip("\n"))
+                loop.call_soon_threadsafe(self._input_q.put_nowait, None)  # EOF
+
+            threading.Thread(target=_stdin_reader, daemon=True).start()
 
         try:
             while True:
-                print("you > ", end="", flush=True)
                 try:
-                    raw = await self._input_q.get()
+                    raw = await self._read_command_line()
                 except (asyncio.CancelledError, KeyboardInterrupt):
                     print("\nBye.")
                     break
@@ -745,6 +765,10 @@ class MapacheCLI:
                     continue
 
                 if raw.startswith("/"):
+                    # Unknown command → 'did you mean' rather than a silent no-op.
+                    if not self._is_known_command(raw):
+                        self._suggest_command(raw)
+                        continue
                     if await self._handle_command(raw):
                         continue
                     break
@@ -777,14 +801,32 @@ class MapacheCLI:
         # Colour-coded phase banner + target/ports pulled from the attack state.
         self.render.phase_line(self.controller.chain.attack_state)
         turn_id = self.memory.session.start_turn(user_input) if self.memory.session else None
+        # A "thinking" spinner + rotating raccoon-flavoured word runs until the
+        # first token/output appears, in both input modes (it's a no-op off a TTY).
+        ticker = asyncio.create_task(self._thinking_ticker())
+        first_output = {"seen": False}
+
+        def _on_token(text: str) -> None:
+            if not first_output["seen"]:
+                first_output["seen"] = True
+                # The ticker sleeps between frames, so cancelling here means it
+                # won't paint again before this clears its line and streaming starts.
+                if not ticker.done():
+                    ticker.cancel()
+                self.render.thinking_clear()
+            self.render.stream(text)
+
         try:
             # Stream tokens live when the model supports it (native tool-calling
             # models). The controller no-ops the callback in JSON mode, so the
             # renderer's streamed state stays False and it prints the content.
             turn_task = asyncio.create_task(self.controller.run(
-                user_input, session_id=self.session_id, on_token=self.render.stream
+                user_input, session_id=self.session_id, on_token=_on_token
             ))
             response = await self._drive_turn(turn_task)
+            # If streaming already began, the ticker line was cleared in _on_token
+            # (before "agent > "); clearing again here would wipe that streamed line.
+            await self._stop_ticker(ticker, clear=not first_output["seen"])
             self.session_id = response.session_id
             self.render.agent_result(response.content, response.tool_calls_made,
                                      response.iterations, response.error)
@@ -797,6 +839,7 @@ class MapacheCLI:
             if turn_id and self.memory.session:
                 self.memory.session.end_turn(turn_id, response.content)
         except Exception as exc:
+            await self._stop_ticker(ticker, clear=not first_output["seen"])
             self.render.error(str(exc))
             if self.args.debug:
                 import traceback
@@ -804,14 +847,20 @@ class MapacheCLI:
 
     async def _drive_turn(self, turn_task: asyncio.Task):
         """
-        Await a turn while consuming typed lines as live steering.
+        Await a turn. In the fallback (queue) input mode, typed lines are consumed
+        as live steering — routed to a pending confirmation prompt if one is open,
+        else handed to controller.steer(); lines that arrive after the turn ends
+        stay buffered for the next REPL prompt.
 
-        Each line typed during the turn is routed to a pending confirmation
-        prompt if one is open, otherwise handed to controller.steer(). Lines
-        that arrive after the turn ends stay buffered in the queue for the
-        next REPL prompt (nothing is lost).
+        In prompt_toolkit mode mid-turn steering is disabled: its full-screen
+        Application can't safely run concurrently with (or be torn down and
+        immediately restarted alongside) the turn, so we just await the turn while
+        the 'thinking' spinner shows. Steering remains available in the plain
+        (no-prompt_toolkit) input mode.
         """
-        assert self._input_q is not None
+        if self._ptk is not None or self._input_q is None:
+            return await turn_task
+
         while not turn_task.done():
             get_task = asyncio.create_task(self._input_q.get())
             done, _pending = await asyncio.wait(
@@ -828,13 +877,84 @@ class MapacheCLI:
                     self.controller.steer(line)
                     self.render.steering(line)
             else:
-                # Turn finished first; don't strand the queued get — its item
+                # Turn finished first; don't strand the pending read — its item
                 # (if any) remains buffered for the REPL.
                 get_task.cancel()
         return turn_task.result()
 
+    async def _stop_ticker(self, ticker: asyncio.Task, clear: bool = True) -> None:
+        """Cancel the 'thinking' ticker and AWAIT its teardown before printing
+        anything else, so it can't race the output. `clear` erases the spinner
+        line; pass False once streaming has begun (the line was already cleared in
+        _on_token, and clearing again would wipe the streamed text)."""
+        if ticker is not None and not ticker.done():
+            ticker.cancel()
+            try:
+                await ticker
+            except asyncio.CancelledError:
+                pass
+        if clear:
+            self.render.thinking_clear()
+
+    # -- input plumbing (prompt_toolkit or the queue fallback) ---------- #
+
+    def _ptk_enabled(self) -> bool:
+        """Use prompt_toolkit only with the package present on a real TTY (never
+        under --plain, a pipe, or the smoke harness)."""
+        return (enhanced_input.ptk_available()
+                and not getattr(self.args, "plain", False)
+                and sys.stdin.isatty() and sys.stdout.isatty())
+
+    async def _read_command_line(self):
+        """Read one line at the idle prompt. Returns the line, or None on EOF."""
+        if self._ptk is not None:
+            from prompt_toolkit.patch_stdout import patch_stdout
+            try:
+                with patch_stdout():
+                    return await self._ptk.prompt_async("you > ")
+            except EOFError:
+                return None
+            except KeyboardInterrupt:
+                return ""  # Ctrl-C at the prompt clears the line, doesn't exit
+        print("you > ", end="", flush=True)
+        assert self._input_q is not None
+        line = await self._input_q.get()
+        return None if line is None else line
+
+    async def _thinking_ticker(self) -> None:
+        """The 'thinking' line: a spinner + rotating word, painted until cancelled.
+        The single clear happens in _stop_ticker / _on_token (one owner), so this
+        never clears in its own cancellation path (which could wipe fresh output)."""
+        i = 0
+        while True:
+            self.render.thinking(theme.thinking_line(i))
+            i += 1
+            await asyncio.sleep(0.2)
+
+    def _is_known_command(self, raw: str) -> bool:
+        base = raw.split()[0].lower()
+        return base in {c for c, _ in enhanced_input.SLASH_COMMANDS} or base == "/q"
+
+    def _suggest_command(self, raw: str) -> None:
+        base = raw.split()[0]
+        matches = enhanced_input.suggest_commands(base)
+        if matches:
+            print(f"  Unknown command {base!r}. Did you mean:")
+            for cmd, desc in matches:
+                print(f"    {cmd:12s} {desc}")
+            print()
+        else:
+            print(f"  Unknown command {base!r}. /help for commands.\n")
+
     async def _read_line(self) -> str:
-        """Read one line from the shared stdin queue (no second reader)."""
+        """Read one line for an inline sub-prompt (curator y/N, etc.)."""
+        if self._ptk is not None:
+            from prompt_toolkit.patch_stdout import patch_stdout
+            try:
+                with patch_stdout():
+                    return await self._ptk.prompt_async("")
+            except (EOFError, KeyboardInterrupt):
+                return ""
         if self._input_q is None:
             return ""
         line = await self._input_q.get()

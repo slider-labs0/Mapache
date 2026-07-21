@@ -109,6 +109,28 @@ class Renderer:
 
     is_rich = False
 
+    # -- "thinking" indicator (shared) ---------------------------------- #
+    # A single self-overwriting status line via carriage return. The frame text
+    # already carries its own ANSI colour (from cli.theme), so both renderers
+    # write it raw and identically; it's a no-op off a TTY so pipes/tests stay
+    # byte-for-byte clean.
+
+    def thinking(self, frame: str) -> None:
+        try:
+            if sys.stdout.isatty():
+                sys.stdout.write("\r\033[K" + frame)
+                sys.stdout.flush()
+        except Exception:
+            pass
+
+    def thinking_clear(self) -> None:
+        try:
+            if sys.stdout.isatty():
+                sys.stdout.write("\r\033[K")
+                sys.stdout.flush()
+        except Exception:
+            pass
+
 
 class PlainRenderer(Renderer):
     is_rich = False

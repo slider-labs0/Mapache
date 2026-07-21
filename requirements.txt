@@ -19,6 +19,11 @@ httpx>=0.24
 # ── Optional: nicer CLI ───────────────────────────────────────────────────────
 # Rich panels / colour. Falls back to a plain renderer when absent.
 # rich>=13.0
+# As-you-type slash-command dropdown + ↑ history at the prompt. Without it the
+# CLI uses its plain line reader (and still shows the pixel logo + "thinking"
+# spinner). Needs a real console (cmd.exe/Windows Terminal/PowerShell or a Unix
+# terminal); it auto-falls-back in Git Bash/mintty on Windows.
+# prompt_toolkit>=3.0
 
 # ── Optional: exploitation ────────────────────────────────────────────────────
 # Metasploit RPC client for the msf_* tools. (msfconsole via shell still works

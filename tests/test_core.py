@@ -2657,6 +2657,105 @@ def test_render_plain_output_matches_legacy():
     print("  PASS  render_plain_output_matches_legacy")
 
 
+def test_theme_logo_and_thinking():
+    from cli import theme
+
+    # Banner carries the version + tagline; ASCII fallback avoids block chars.
+    b = theme.render_banner("9.9", color=False)
+    assert "v9.9" in b and theme.TAGLINE in b
+    ascii_logo = theme.render_logo(color=False, unicode=False)
+    assert "MAPACHE" in ascii_logo and "█" not in ascii_logo
+    uni_logo = theme.render_logo(color=False, unicode=True)
+    assert "█" in uni_logo
+
+    # Colour off = no ANSI; colour on = ANSI escapes present.
+    assert "\x1b[" not in theme.render_logo(color=False, unicode=True)
+    assert "\x1b[" in theme.render_logo(color=True, unicode=True)
+
+    # The truecolor pixel mascot (24-bit bg escapes) is the hero when colour is on;
+    # its ANSI asset must stay wired up and load cleanly (no leaked escape fragments).
+    assert theme._MASCOT and "\x1b" in theme._MASCOT
+    assert "\x1b[48;2;" in theme.render_logo(color=True)  # 24-bit bg = the mascot
+    import re as _re
+    assert not _re.findall(r"\[[0-9;]*m", theme._visible(theme._MASCOT))
+
+    # Thinking words rotate and the word advances slower than the spinner.
+    assert theme.thinking_word(0) != theme.thinking_word(1)
+    assert theme.thinking_word(len(theme.THINKING_WORDS)) == theme.thinking_word(0)
+    f0 = theme.thinking_line(0, color=False)
+    assert theme.THINKING_WORDS[0] in f0
+    # frames 0..3 keep the same word (word = i//4), frame 4 advances it
+    assert theme.thinking_word(0 // 4) == theme.thinking_word(3 // 4)
+    assert theme.thinking_word(4 // 4) != theme.thinking_word(0 // 4)
+    print("  PASS  theme_logo_and_thinking")
+
+
+def test_enhanced_input_completion():
+    from cli import enhanced_input as ei
+
+    # Prefix completion over command names, with the fragment length as start pos.
+    comps = ei.complete_slash("/re")
+    names = {c for c, _, _ in comps}
+    assert "/report" in names and "/restore" in names
+    assert all(start == -3 for _, _, start in comps)  # replaces "/re"
+    # A non-slash line yields nothing (normal chat is never auto-completed).
+    assert ei.complete_slash("hello") == []
+    # Sub-argument completion for a recognised command.
+    subs = {s for s, _, _ in ei.complete_slash("/report m")}
+    assert "md" in subs and "html" not in subs
+    subs2 = {s for s, _, _ in ei.complete_slash("/pipeline ")}
+    assert {"single", "pipeline", "auto", "hybrid"} <= subs2
+
+    # 'Did you mean' falls back to fuzzy matches for a typo.
+    sugg = {c for c, _ in ei.suggest_commands("/repot")}
+    assert "/report" in sugg
+
+    # Registry stays in sync with the REPL: every listed command (minus aliases)
+    # appears in HELP_TEXT.
+    from cli.mapache_cli import HELP_TEXT
+    for cmd, _ in ei.SLASH_COMMANDS:
+        if cmd in ("/exit", "/quit"):
+            continue
+        assert cmd in HELP_TEXT, f"{cmd} missing from HELP_TEXT"
+    print("  PASS  enhanced_input_completion")
+
+
+async def test_cli_ptk_turn_no_concurrent_prompt():
+    """Regression: in prompt_toolkit mode a turn must NOT start a second prompt
+    (that crashed with 'Application is already running'), and the thinking ticker
+    must tear down cleanly with a single line-clear."""
+    from cli.mapache_cli import MapacheCLI
+
+    cli = MapacheCLI.__new__(MapacheCLI)  # bypass the heavy __init__
+    cli._input_q = None
+    cli._pending_confirm = None
+
+    class BoomSession:  # any prompt call during a turn is the bug
+        async def prompt_async(self, *a, **k):
+            raise AssertionError("no prompt may run during a turn in ptk mode")
+    cli._ptk = BoomSession()
+
+    async def _turn():
+        await asyncio.sleep(0.01)
+        return "RESULT"
+    result = await cli._drive_turn(asyncio.create_task(_turn()))
+    assert result == "RESULT"
+
+    # The ticker paints, then _stop_ticker cancels + awaits it and clears exactly once.
+    class FakeRender:
+        def __init__(self): self.frames = 0; self.clears = 0
+        def thinking(self, frame): self.frames += 1
+        def thinking_clear(self): self.clears += 1
+    cli.render = FakeRender()
+    ticker = asyncio.create_task(cli._thinking_ticker())
+    await asyncio.sleep(0.05)
+    await cli._stop_ticker(ticker)
+    assert ticker.done() and cli.render.frames >= 1 and cli.render.clears == 1
+    # Idempotent: stopping an already-stopped ticker doesn't raise.
+    await cli._stop_ticker(ticker)
+    print("  PASS  cli_ptk_turn_no_concurrent_prompt")
+
+
 # ------------------------------------------------------------------ #
 # Remote execution backends (feature H)
 # ------------------------------------------------------------------ #
@@ -3177,6 +3276,11 @@ async def run_all():
     test_updater_version_compare_and_local()
     test_updater_check_cache_and_notice()
     test_updater_backup_config()
+
+    print("\nCLI theme + enhanced input (UI)")
+    test_theme_logo_and_thinking()
+    test_enhanced_input_completion()
+    await test_cli_ptk_turn_no_concurrent_prompt()
 
     print("\nCLI presentation layer (feature B)")
     test_render_phase_style_and_summary()
