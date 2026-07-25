@@ -1823,6 +1823,106 @@ async def test_delegate_parallel_fans_out():
     print("  PASS  delegate_parallel_fans_out")
 
 
+def test_dispatcher_with_backend_rebinds_tools():
+    from tools.tool_registry import ToolRegistry
+    from tools.tool_dispatcher import ToolDispatcher
+    from core.engagement_scope import EngagementScope
+    from plugins.sdk.base_tool import BaseTool, ToolResult
+
+    class BackendTool(BaseTool):
+        name = "shelly"; description = "d"; parameters = {"type": "object", "properties": {}}
+        def __init__(self, backend=None):
+            super().__init__(); self.backend = backend
+        async def execute(self, **k): return ToolResult.ok("")
+
+    class PlainTool(BaseTool):
+        name = "planner"; description = "d"; parameters = {"type": "object", "properties": {}}
+        async def execute(self, **k): return ToolResult.ok("")
+
+    lead_be, child_be = object(), object()
+    reg = ToolRegistry()
+    reg.register(BackendTool(backend=lead_be)); reg.register(PlainTool())
+    disp = ToolDispatcher(reg, scope=EngagementScope())
+
+    child = disp.with_backend(child_be)
+    # backend-aware tool is a REBOUND COPY on the child's backend; lead untouched.
+    assert child.registry.get("shelly").backend is child_be
+    assert disp.registry.get("shelly").backend is lead_be
+    assert child.registry.get("shelly") is not disp.registry.get("shelly")
+    # non-backend tool is SHARED (same instance), and the scope carries over.
+    assert child.registry.get("planner") is disp.registry.get("planner")
+    assert child.scope is disp.scope
+    print("  PASS  dispatcher_with_backend_rebinds_tools")
+
+
+async def test_subagent_gets_own_backend_and_teardown():
+    """A delegated child runs its tools on the factory-minted backend (its own
+    terminal), and that backend is torn down (aclose) when the child finishes."""
+    from tools.tool_registry import ToolRegistry
+    from tools.tool_dispatcher import ToolDispatcher
+    from core.engagement_scope import EngagementScope
+    from core.agent_controller import SubAgentContext
+    from plugins.sdk.base_tool import BaseTool, ToolResult
+
+    ran_on: list[str] = []
+
+    class ProbeTool(BaseTool):
+        name = "probe_tool"; description = "probe"; parameters = {"type": "object", "properties": {}}
+        def __init__(self, backend=None, sink=None):
+            super().__init__(); self.backend = backend; self.sink = sink
+        async def execute(self, **k):
+            bid = getattr(self.backend, "bid", "none")
+            (self.sink if self.sink is not None else ran_on).append(bid)
+            return ToolResult.ok(f"TOOLRAN backend={bid}")
+
+    class FakeBackend:
+        name = "fake"
+        def __init__(self, bid): self.bid = bid; self.closed = False
+        async def aclose(self): self.closed = True
+
+    lead_be = FakeBackend("lead")
+    reg = ToolRegistry()
+    reg.register(ProbeTool(backend=lead_be, sink=ran_on))
+    disp = ToolDispatcher(reg, scope=EngagementScope())
+
+    child_be = FakeBackend("child")
+    seen_ctx: list = []
+    def factory(ctx):
+        seen_ctx.append(ctx)
+        return child_be  # sync factory (a ready backend)
+
+    class DelegModel:
+        supports_tools = False
+        async def chat(self, messages, tools=None, json_mode=False, stream=False):
+            joined = " ".join(m.get("content", "") for m in messages)
+            if "subagent result" in joined:                    # lead, after child
+                return json.dumps({"type": "response", "content": "done"})
+            if "TOOLRAN" in joined:                            # child, after its tool
+                return json.dumps({"type": "response", "content": "child done"})
+            if "CHILD_TASK" in joined:                         # child, first turn
+                return json.dumps({"type": "tool_call", "tool": "probe_tool", "args": {}})
+            return json.dumps({"type": "tool_call", "tool": "delegate",  # lead, first
+                               "args": {"task": "CHILD_TASK go"}})
+
+    controller = AgentController(
+        model_provider=DelegModel(), tool_dispatcher=disp, mode=AgentMode.AGENT,
+        use_function_calling=False, subagent_backend_factory=factory)
+    controller.register_tool(ToolSchema(name="probe_tool", description="probe",
+        parameters={"type": "object", "properties": {}}))
+    await controller.start()
+
+    resp = await controller.run("lead goal", session_id="be-test")
+    assert resp.content == "done"
+    # The child's probe_tool ran on the FACTORY backend, not the lead's.
+    assert ran_on == ["child"], ran_on
+    # The factory saw a SubAgentContext for the generalist child at suffix "sub".
+    assert seen_ctx and isinstance(seen_ctx[0], SubAgentContext)
+    assert seen_ctx[0].suffix == "sub" and seen_ctx[0].operator == "generalist"
+    # The child's backend was disposed on teardown; the lead's was never touched.
+    assert child_be.closed is True and lead_be.closed is False
+    print("  PASS  subagent_gets_own_backend_and_teardown")
+
+
 # ------------------------------------------------------------------ #
 # Automated reporting (feature L)
 # ------------------------------------------------------------------ #
@@ -3234,6 +3334,8 @@ async def run_all():
     test_operator_roster()
     await test_delegate_operator_dispatch()
     await test_delegate_parallel_fans_out()
+    test_dispatcher_with_backend_rebinds_tools()
+    await test_subagent_gets_own_backend_and_teardown()
 
     print("\nAutomated reporting (feature L)")
     test_report_builder()

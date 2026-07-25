@@ -83,6 +83,28 @@ class ToolRegistry:
         for tool in tools:
             self.register(tool)
 
+    def clone_with_backend(self, backend: Any) -> "ToolRegistry":
+        """A copy of this registry where every backend-aware tool (ShellTool,
+        NmapTool, KaliRunTool, the MSF tools …) is rebound to `backend`, and every
+        other tool is shared as-is.
+
+        This is how a delegated sub-agent gets its OWN execution terminal: the lead
+        clones its dispatcher onto a per-sub-agent backend (e.g. that agent's own
+        container/SSH host), so the child's shell/nmap/msf run there, isolated from
+        the lead's. Tools are stateless config wrappers, so a shallow copy with a
+        swapped `.backend` is safe; sharing the non-backend tools avoids needless
+        duplication."""
+        import copy as _copy
+        clone = ToolRegistry(granted_permissions=set(self.granted_permissions))
+        for tool in self._tools.values():
+            if hasattr(tool, "backend"):
+                rebound = _copy.copy(tool)
+                rebound.backend = backend
+                clone._tools[tool.name] = rebound
+            else:
+                clone._tools[tool.name] = tool
+        return clone
+
     # ------------------------------------------------------------------ #
     # Lookup
     # ------------------------------------------------------------------ #

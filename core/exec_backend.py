@@ -25,9 +25,11 @@ their output returns) off this machine — the engagement scope (J) still gates
 from __future__ import annotations
 
 import asyncio
+import re
 import shlex
+import uuid
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Callable, Optional
 
 MAX_OUTPUT_BYTES = 50_000
 DEFAULT_TIMEOUT = 30
@@ -205,3 +207,58 @@ def backend_from_config(spec: Optional[dict]) -> tuple[ExecBackend, Optional[str
         return build_backend(spec), None
     except (ValueError, TypeError) as exc:
         return LocalBackend(), f"execution backend misconfigured ({exc}); using local"
+
+
+# --------------------------------------------------------------------------- #
+# Per-sub-agent execution terminals (feature H + P)
+# --------------------------------------------------------------------------- #
+
+
+class DisposableDockerBackend(DockerBackend):
+    """A DockerBackend that OWNS the container it runs in (one spun up for a single
+    sub-agent) and removes it on `aclose()`. The agent controller calls `aclose`
+    when the sub-agent finishes, so each isolated terminal is cleaned up."""
+
+    async def aclose(self) -> None:
+        if self.container:
+            await _spawn(["docker", "rm", "-f", self.container], timeout=30)
+
+
+async def spawn_subagent_container(
+    image: str, *, network: str = "", name: str = "", workdir: str = "",
+) -> DisposableDockerBackend:
+    """Start a detached keep-alive container from `image` and return a disposable
+    backend bound to it — one sub-agent's private terminal. Removed on aclose()."""
+    name = name or f"mapache-sub-{uuid.uuid4().hex[:8]}"
+    argv = ["docker", "run", "-d", "--name", name]
+    if network:
+        argv += ["--network", network]
+    # sleep-keep-alive so `docker exec` has a live container for the child's tools.
+    argv += ["--entrypoint", "sleep", image, "infinity"]
+    res = await _spawn(argv, timeout=120)
+    if res.error:
+        raise RuntimeError(f"could not start sub-agent container from {image!r}: "
+                           f"{res.error or res.output}")
+    return DisposableDockerBackend(container=name, workdir=workdir)
+
+
+def docker_subagent_factory(
+    image: str, *, network: str = "", workdir: str = "",
+) -> Callable[[Any], Any]:
+    """Build a `subagent_backend_factory`: each delegated sub-agent gets its OWN
+    disposable container from `image` (on `network`), named after the child so it's
+    identifiable, and torn down when the child finishes.
+
+    Usage:
+        controller.subagent_backend_factory = docker_subagent_factory(
+            "mapache-attacker:latest", network="mapache-lab")
+
+    The returned factory is async (it spins a container up per child); the agent
+    controller awaits it. On failure the controller falls back to the shared
+    backend, so a Docker hiccup degrades rather than breaks the delegation."""
+    def factory(ctx: Any):
+        tag = re.sub(r"[^a-zA-Z0-9_.-]", "-", f"{ctx.suffix}-{ctx.operator}")[:32]
+        name = f"mapache-sub-{tag}-{uuid.uuid4().hex[:6]}"
+        return spawn_subagent_container(image, network=network, name=name,
+                                        workdir=workdir)
+    return factory

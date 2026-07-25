@@ -41,6 +41,18 @@ DANGEROUS_PATTERNS = [
 DELEGATE_TOOL = "delegate"
 DELEGATE_PARALLEL_TOOL = "delegate_parallel"
 
+
+@dataclass(frozen=True)
+class SubAgentContext:
+    """Identity of a sub-agent about to be spawned, handed to a
+    `subagent_backend_factory` so it can mint (and name) that agent's own
+    execution terminal — e.g. one container per operator, or per target host."""
+    operator: str          # operator name, or "generalist"
+    target: Optional[str]  # the host this child targets (its isolated state's target)
+    session_id: str        # the child's session id (parent:suffix)
+    suffix: str            # the delegation suffix (e.g. "sub", "par0")
+    depth: int             # delegation depth of the child
+
 VERIFIER_SYSTEM_PROMPT = """You are a verification module for an offensive-security agent. \
 Given the user's goal and the agent's final response, decide whether the response actually \
 addresses the goal or whether the agent stopped prematurely, skipped a step, or made an \
@@ -127,6 +139,7 @@ class AgentController:
         opsec_policy: Optional["OpsecPolicy"] = None,
         persona_provider: Optional[Callable[[], str]] = None,
         profile_provider: Optional[Callable[[], str]] = None,
+        subagent_backend_factory: Optional[Callable[["SubAgentContext"], Any]] = None,
     ) -> None:
         self.model = model_provider
         self.tool_dispatcher = tool_dispatcher
@@ -144,6 +157,13 @@ class AgentController:
         # compact summary of durable user facts, injected alongside the attack
         # state. None → no profile. Not propagated to sub-agents.
         self.profile_provider = profile_provider
+        # Per-sub-agent execution backends (feature H + P). When set, each delegated
+        # child gets its OWN execution terminal: the factory maps a SubAgentContext
+        # (operator/target/depth) to an ExecBackend, and the child's dispatcher is
+        # rebound onto it, so its shell/nmap/msf run in an isolated container/host.
+        # None → children share the lead's dispatcher (unchanged). Children inherit
+        # the factory, so deeper delegations stay isolated too.
+        self.subagent_backend_factory = subagent_backend_factory
         # Rules-of-Engagement guardrails (feature J). An absent/inactive scope
         # allows everything, so this is a no-op until an operator defines limits.
         self.scope = scope or EngagementScope()
@@ -1357,11 +1377,35 @@ class AgentController:
         if operator is not None and hasattr(child_model, "for_role"):
             child_model = child_model.for_role(operator.model_role)
 
+        # Per-sub-agent execution terminal (feature H + P): if a factory is set,
+        # mint this child its OWN backend and rebind a private dispatcher onto it,
+        # so its shell/nmap/msf run in an isolated container/host. The factory may
+        # be sync (a ready backend) or async (spins one up). Falls back to sharing
+        # the lead's dispatcher on any failure — never blocks the delegation.
+        child_dispatcher = self.tool_dispatcher
+        child_backend = None
+        if self.subagent_backend_factory is not None and self.tool_dispatcher is not None:
+            ctx = SubAgentContext(
+                operator=(operator.name if operator else "generalist"),
+                target=child_state.target, session_id=session_id,
+                suffix=suffix, depth=self.delegation_depth + 1)
+            try:
+                child_backend = self.subagent_backend_factory(ctx)
+                if asyncio.iscoroutine(child_backend):
+                    child_backend = await child_backend
+            except Exception as exc:
+                logger.warning("subagent_backend_factory failed (%s); "
+                               "sharing the lead's backend", exc)
+                child_backend = None
+            if child_backend is not None:
+                child_dispatcher = self.tool_dispatcher.with_backend(child_backend)
+
         # An operator's toolset is already small and curated, so phase-based
         # subsetting (which keys off the shared phase) is turned off for it.
         child = AgentController(
             model_provider=child_model,
-            tool_dispatcher=self.tool_dispatcher,
+            tool_dispatcher=child_dispatcher,
+            subagent_backend_factory=self.subagent_backend_factory,  # inherited
             system_prompt=operator.system_prompt if operator else self.context.system_prompt,
             mode=self.mode,
             use_function_calling=self.context.use_function_calling,
@@ -1413,7 +1457,12 @@ class AgentController:
             source="controller", session_id=session_id,
         )
 
-        result = await child.run(task, session_id=f"{session_id}:{suffix}")
+        try:
+            result = await child.run(task, session_id=f"{session_id}:{suffix}")
+        finally:
+            # Dispose the child's private backend (e.g. stop the container it
+            # started) — factories opt in by exposing `aclose` on the backend.
+            await self._teardown_backend(child_backend)
 
         # No merge-back: the child shared the lead's AttackState by reference, so
         # its findings are already live in the lead's state.
@@ -1430,6 +1479,21 @@ class AgentController:
         header = (f"[subagent result — host {child_state.target}]" if isolated
                   else "[subagent result]")
         return f"{header}\n{content[:4000]}"
+
+    @staticmethod
+    async def _teardown_backend(backend: Any) -> None:
+        """Close a per-sub-agent backend if it owns disposable resources (e.g. a
+        container it spun up). Opt-in: the backend exposes `aclose` (sync or async).
+        Never lets a teardown error break the delegation result."""
+        closer = getattr(backend, "aclose", None)
+        if closer is None:
+            return
+        try:
+            res = closer()
+            if asyncio.iscoroutine(res):
+                await res
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("sub-agent backend teardown failed: %s", exc)
 
     def _known_tool_names(self) -> set[str]:
         """Every tool the controller can actually dispatch: the built-in

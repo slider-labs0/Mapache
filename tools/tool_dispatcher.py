@@ -53,6 +53,12 @@ class ToolDispatcher:
         self._error_count: int = 0
         self._refused_count: int = 0
 
+    def with_backend(self, backend: Any) -> "ToolDispatcher":
+        """A sibling dispatcher whose backend-aware tools run on `backend` — used
+        to give a delegated sub-agent its own execution terminal (feature H + P).
+        Shares the same RoE scope; call-count stats start fresh for the child."""
+        return ToolDispatcher(self.registry.clone_with_backend(backend), scope=self.scope)
+
     async def dispatch(
         self,
         tool_name: str,
