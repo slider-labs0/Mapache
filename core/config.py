@@ -103,6 +103,10 @@ def _default_config() -> dict[str, Any]:
         # operator's IP. mode: direct | proxy | tor; proxy = socks5://host:port or
         # http://host:port; wrapper = auto|proxychains|torsocks|none (shell tools).
         "egress": {"mode": "direct"},
+        # Integrations: bring-your-own tools the agent can call. Each entry is an
+        # http spec (wrap an API like Shodan; keys via ${ENV}) or a command spec
+        # (wrap a CLI / GitHub repo). See tools/external_tools.py for the shape.
+        "integrations": [],
         # Community skill hub (feature I): registry = path to a local index.json
         # dir (empty disables the hub).
         "hub": {"registry": ""},
@@ -242,6 +246,8 @@ class MapacheConfig:
     execution: dict[str, Any] = field(default_factory=lambda: {"backend": "local"})
     # Egress / operator anonymity: raw dict ({"mode": "direct|proxy|tor", …}).
     egress: dict[str, Any] = field(default_factory=lambda: {"mode": "direct"})
+    # Bring-your-own tool specs (http/command). See tools/external_tools.py.
+    integrations: list[Any] = field(default_factory=list)
     # Community skill hub (feature I): raw dict ({"registry": "<path>"}).
     hub: dict[str, Any] = field(default_factory=dict)
     # Voice I/O (Phase 9): raw dict ({"enabled": bool, "tts": …, "stt": …}).
@@ -277,6 +283,7 @@ class MapacheConfig:
             ),
             execution=dict(data.get("execution") or {"backend": "local"}),
             egress=dict(data.get("egress") or {"mode": "direct"}),
+            integrations=list(data.get("integrations") or []),
             hub=dict(data.get("hub") or {}),
             voice=dict(data.get("voice") or {}),
             sources=list(data.get("_sources") or []),
@@ -339,6 +346,7 @@ class MapacheConfig:
             },
             "execution": dict(self.execution),
             "egress": dict(self.egress),
+            "integrations": list(self.integrations),
             "hub": dict(self.hub),
             "voice": dict(self.voice),
         }

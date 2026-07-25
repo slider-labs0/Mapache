@@ -35,6 +35,7 @@ from cli import theme
 from cli import enhanced_input
 from core.exec_backend import backend_from_config
 from core.egress import EgressProfile
+from tools.external_tools import build_external_tools
 from voice import voice_from_config
 from models.providers.ollama_provider import OllamaProvider
 from plugins.sdk.base_tool import Permission
@@ -88,6 +89,7 @@ Commands:
   /hosts                 Show per-host attack states (multi-host delegation)
   /backend               Show the execution backend (local / ssh / docker)
   /egress                 Show egress/anonymity (proxy/Tor to hide your IP)
+  /integrations           List bring-your-own tools (Shodan/API + GitHub/CLI)
   /hub [search|install]  Browse/install community skills (feature I)
   /voice [on|off]        Voice I/O status / toggle (Phase 9); /say <text> speaks
   /opsec                 Show hybrid OPSEC routing (which ops are pinned local)
@@ -219,6 +221,7 @@ class MapacheCLI:
         self.render = make_renderer(getattr(args, "plain", False))
         self.exec_backend = None  # feature H — built in setup() from config
         self.egress = None        # operator anonymity — built in setup() from config
+        self._integrations = []   # bring-your-own tools — built in setup()
         self.hub_client = None    # feature I — built in setup() if a registry is set
         self.voice = None         # Phase 9 — built in setup() from config
 
@@ -474,6 +477,21 @@ class MapacheCLI:
             # can run on a remote Kali box / container too.
             self.registry.register(KaliRunTool(backend=self.exec_backend, egress=self.egress))
             self.registry.register(SearchsploitTool())
+
+            # Integrations (bring-your-own tools): http (e.g. Shodan) + command (a
+            # CLI / GitHub repo) specs from config.integrations. They run through the
+            # execution backend + egress like the built-ins. Warn-don't-block.
+            ext_tools, ext_warn = build_external_tools(
+                getattr(self.config, "integrations", None),
+                backend=self.exec_backend, egress=self.egress)
+            for _w in ext_warn:
+                print(f"  ⚠ {_w}")
+            for _t in ext_tools:
+                self.registry.register(_t)
+            self._integrations = ext_tools
+            if ext_tools:
+                print(f"  Tools+   : {len(ext_tools)} integration(s): "
+                      f"{', '.join(t.name for t in ext_tools)}")
 
             # Memory
             for tool in self.memory.get_tools():
@@ -1196,6 +1214,19 @@ class MapacheCLI:
                       "tor|<proxy-url>. Strongest hide: attack from a pivot "
                       "(--exec-backend ssh/docker).")
             print()
+
+        elif command == "/integrations":
+            tools = self._integrations
+            if not tools:
+                print("\n  No integrations configured. Add tools under "
+                      "config.integrations (http API like Shodan, or a command / "
+                      "GitHub-repo CLI). See tools/external_tools.py for the shape.\n")
+            else:
+                print(f"\n  Integrations ({len(tools)}) — bring-your-own tools:")
+                for t in tools:
+                    kind = "http" if t.__class__.__name__ == "HttpApiTool" else "cmd"
+                    print(f"    [{kind}] {t.name} — {t.description[:60]}")
+                print()
 
         elif command == "/hosts":
             hosts = self.controller.host_states() if self.controller else {}

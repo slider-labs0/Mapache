@@ -435,6 +435,26 @@ def test_skills_playbook_credential_matching():
     print("  PASS  skills_playbook_credential_matching")
 
 
+def test_skills_playbook_ad_matching():
+    from core.skills_playbook import relevant_skills, AD_ATTACK_SKILL
+    from core.conversation_chain import AttackState
+
+    body = AD_ATTACK_SKILL.body
+    # Kerberos/LDAP port present → fires
+    st = AttackState(); st.open_ports = ["88/tcp", "389/tcp", "445/tcp"]
+    assert body in relevant_skills(st, "own the domain")
+    # request names AD tooling/technique → fires before recon
+    assert body in relevant_skills(AttackState(), "kerberoast the domain controller")
+    assert body in relevant_skills(AttackState(), "run bloodhound and find a path to DA")
+    # a standalone Samba box (445/139, no Kerberos/LDAP) is NOT AD
+    st2 = AttackState(); st2.open_ports = ["445", "139"]
+    assert body not in relevant_skills(st2, "read the flag")
+    # pure web target → silent
+    st3 = AttackState(); st3.open_ports = ["80"]
+    assert body not in relevant_skills(st3, "find an XSS")
+    print("  PASS  skills_playbook_ad_matching")
+
+
 async def test_web_skill_injected_into_context():
     # The web playbook must actually reach the model's system prompt on a
     # web-shaped turn (just-in-time grounding).
@@ -3167,6 +3187,61 @@ def test_config_execution_section():
     assert MapacheConfig.from_dict({}).egress.get("mode") == "direct"
     egc = MapacheConfig.from_dict({"egress": {"mode": "tor"}})
     assert egc.egress["mode"] == "tor" and egc.to_dict()["egress"]["mode"] == "tor"
+    # Integrations default empty and round-trip.
+    assert MapacheConfig.from_dict({}).integrations == []
+    ic = MapacheConfig.from_dict({"integrations": [{"name": "x", "kind": "http"}]})
+    assert ic.to_dict()["integrations"][0]["name"] == "x"
+
+
+async def test_external_tools():
+    import os
+    from tools.external_tools import (build_external_tools, HttpApiTool, CommandTool,
+                                      _fill, _resolve_env)
+    from core.egress import EgressProfile
+    from core.exec_backend import ExecResult
+
+    # Helpers: URL values are percent-encoded; ${ENV} resolves from the environment.
+    assert _fill("h/{ip}?k={key}", {"ip": "1.2.3.4", "key": "a b"}, url=True) == \
+        "h/1.2.3.4?k=a%20b"
+    os.environ["ET_TEST_KEY"] = "secret123"
+    try:
+        assert _resolve_env("k=${ET_TEST_KEY}") == "k=secret123"
+
+        specs = [
+            {"name": "shodan_host", "kind": "http", "method": "GET",
+             "url": "https://api.shodan.io/shodan/host/{ip}?key=${ET_TEST_KEY}",
+             "params": {"ip": {"type": "string", "description": "ip"}}},
+            {"name": "my_tool", "kind": "command", "command": "echo {args}",
+             "params": {"args": {"type": "string", "description": "a"}}},
+            {"name": "BadName!", "kind": "http", "url": "x"},   # bad name → skip
+            {"name": "no_url", "kind": "http"},                 # http w/o url → skip
+            {"name": "weird", "kind": "ftp"},                   # unknown kind → skip
+        ]
+        tools, warns = build_external_tools(specs)
+        assert {t.name for t in tools} == {"shodan_host", "my_tool"}
+        assert len(warns) == 3  # three bad specs skipped, not fatal
+
+        ht = next(t for t in tools if t.name == "shodan_host")
+        assert isinstance(ht, HttpApiTool)
+        assert "ip" in ht.parameters["properties"]
+        assert ht.to_context_schema().name == "shodan_host"  # per-instance name
+
+        # A command tool runs through the backend, egress-wrapped.
+        class FakeBackend:
+            name = "docker"
+            def __init__(self): self.cmds = []
+            async def run(self, cmd, *, timeout=30, working_dir=""):
+                self.cmds.append(cmd); return ExecResult("ran")
+        be = FakeBackend()
+        ct = CommandTool({"name": "my_tool", "kind": "command", "command": "nmap {args}"},
+                         backend=be, egress=EgressProfile(mode="tor"))
+        res = await ct.execute(args="-sT 10.0.0.1")
+        assert be.cmds[0].startswith("torsocks sh -c ")
+        assert "nmap -sT 10.0.0.1" in be.cmds[0]
+        assert res.success and "ran" in res.output
+    finally:
+        os.environ.pop("ET_TEST_KEY", None)
+    print("  PASS  external_tools")
     cfg = MapacheConfig.from_dict(
         {"execution": {"backend": "docker", "container": "kali"}})
     assert cfg.execution["backend"] == "docker" and cfg.execution["container"] == "kali"
@@ -3393,6 +3468,7 @@ async def run_all():
     test_skills_playbook_web_matching()
     test_skills_playbook_network_matching()
     test_skills_playbook_credential_matching()
+    test_skills_playbook_ad_matching()
     await test_web_skill_injected_into_context()
     await test_agent_verifier_retry()
     await test_agent_verifier_off_by_default()
@@ -3521,6 +3597,7 @@ async def run_all():
     test_egress_profile()
     await test_egress_wires_into_tools()
     test_config_execution_section()
+    await test_external_tools()
 
     print("\nCommunity skill hub (feature I)")
     test_hub_manifest_and_verification()

