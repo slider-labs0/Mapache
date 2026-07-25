@@ -49,7 +49,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.agent_controller import AgentController, AgentMode
 from core.engagement_scope import EngagementScope
 from core.engagement_log import EngagementLog
-from core.exec_backend import DockerBackend
+from core.exec_backend import DockerBackend, docker_subagent_factory
 from tools.tool_registry import ToolRegistry
 from tools.tool_dispatcher import ToolDispatcher
 from plugins.sdk.base_tool import Permission
@@ -89,7 +89,8 @@ async def plant_canary(container: str, path: str, token: str) -> bool:
 
 async def run_benchmark(target: str, model: str, max_iters: int, proof_path: str,
                         token: str, attacker_container: str, log_path: Path,
-                        base_url: str, objective: str, extra_scope: list[str]) -> int:
+                        base_url: str, objective: str, extra_scope: list[str],
+                        subagent_image: str = "", subagent_network: str = "") -> int:
     # Provider-aware, exactly like the CLI: a cloud model id (e.g. grok-4) resolves
     # to its configured cloud provider from ~/.mapache/config.json; anything else
     # falls back to local Ollama. This is what lets the benchmark run frontier models.
@@ -144,6 +145,16 @@ async def run_benchmark(target: str, model: str, max_iters: int, proof_path: str
         use_function_calling=provider.supports_tools,
         system_prompt=SYSTEM_PROMPT, scope=scope, enable_verifier=False)
     controller.MAX_ITERATIONS = max_iters
+
+    # Per-sub-agent execution terminals (feature H + P): when enabled, each
+    # delegated sub-agent gets its OWN disposable container (spun from the attacker
+    # image, on the lab network) instead of sharing the lead's — its shell/nmap/msf
+    # run isolated, and the container is removed when the sub-agent finishes.
+    if subagent_image:
+        controller.subagent_backend_factory = docker_subagent_factory(
+            subagent_image, network=subagent_network)
+        print(f"  sub-agents    : own container each ({subagent_image}"
+              f"{' on ' + subagent_network if subagent_network else ''})")
 
     elog = EngagementLog(path=log_path, session_id="metasploitable-benchmark")
     elog.attach(controller.bus)
@@ -225,6 +236,14 @@ def main() -> None:
     ap.add_argument("--log", default="engagements/metasploitable.jsonl")
     ap.add_argument("--base-url", default="http://127.0.0.1:11434",
                     help="Ollama server base URL")
+    ap.add_argument("--subagent-containers", action="store_true",
+                    help="give each delegated sub-agent its OWN disposable container "
+                         "(isolated terminal), spun from --subagent-image on "
+                         "--subagent-network and removed when the sub-agent finishes")
+    ap.add_argument("--subagent-image", default="mapache-attacker:latest",
+                    help="image for per-sub-agent containers (--subagent-containers)")
+    ap.add_argument("--subagent-network", default="mapache-lab",
+                    help="Docker network for per-sub-agent containers")
     ap.add_argument(
         "--objective",
         default=(
@@ -248,9 +267,12 @@ def main() -> None:
             if not await plant_canary(args.target_container, args.proof_path, token):
                 return 2
         extra = [h.strip() for h in args.extra_scope.split(",") if h.strip()]
+        sub_img = args.subagent_image if args.subagent_containers else ""
         return await run_benchmark(args.target, args.model, args.max_iters,
                                    args.proof_path, token, args.attacker_container,
-                                   Path(args.log), args.base_url, args.objective, extra)
+                                   Path(args.log), args.base_url, args.objective, extra,
+                                   subagent_image=sub_img,
+                                   subagent_network=args.subagent_network)
 
     sys.exit(asyncio.run(_driver()))
 

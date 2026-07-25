@@ -1923,6 +1923,62 @@ async def test_subagent_gets_own_backend_and_teardown():
     print("  PASS  subagent_gets_own_backend_and_teardown")
 
 
+async def test_subagent_receives_mission_context():
+    """A delegated sub-agent inherits the lead's overall objective (so it knows the
+    concrete success artifact — e.g. the proof-file path — instead of guessing) plus
+    an honesty directive."""
+    captured: dict = {}
+
+    class Disp:
+        async def dispatch(self, name, args, session_id): return "ok"
+
+    class MissionModel:
+        supports_tools = False
+        async def chat(self, messages, tools=None, json_mode=False, stream=False):
+            joined = " ".join(m.get("content", "") for m in messages)
+            if "subagent result" in joined:                    # lead, after child
+                return json.dumps({"type": "response", "content": "done"})
+            if "SUBTASK_MARK" in joined:                       # the child
+                captured["child"] = joined
+                return json.dumps({"type": "response", "content": "child done"})
+            return json.dumps({"type": "tool_call", "tool": "delegate",  # lead, first
+                               "args": {"task": "SUBTASK_MARK go"}})
+
+    controller = AgentController(model_provider=MissionModel(), tool_dispatcher=Disp(),
+                                 mode=AgentMode.AGENT, use_function_calling=False)
+    await controller.start()
+    resp = await controller.run(
+        "read the file /tmp/PROOF_MARK and return its exact contents", session_id="m")
+    assert resp.content == "done"
+    child_ctx = captured.get("child", "")
+    assert "/tmp/PROOF_MARK" in child_ctx      # the mission (with the path) reached it
+    assert "SUBTASK_MARK" in child_ctx         # its own subtask too
+    assert "never invent it" in child_ctx      # honesty directive present
+    print("  PASS  subagent_receives_mission_context")
+
+
+async def test_fabrication_guard_flags_unverified():
+    """A flag token in the final answer is only trusted if it actually appeared in
+    tool output (attack_state.flags); a made-up one is annotated UNVERIFIED."""
+    controller = AgentController(model_provider=object(), mode=AgentMode.AGENT,
+                                 use_function_calling=False)
+    controller.chain.attack_state.flags = ["FLAG{real-abc}"]  # captured from tool output
+
+    # A verified flag passes through untouched.
+    ok = await controller._guard_fabricated_flags("I found FLAG{real-abc} in /root", "s")
+    assert "UNVERIFIED" not in ok and "FLAG{real-abc}" in ok
+    # A fabricated flag (never seen in tool output) is flagged.
+    bad = await controller._guard_fabricated_flags("The flag is FLAG{made-up-xyz}", "s")
+    assert "UNVERIFIED" in bad and "FLAG{made-up-xyz}" in bad
+    # Mixed: only the unverified token is called out.
+    mix = await controller._guard_fabricated_flags(
+        "Got FLAG{real-abc} and also FLAG{fake}", "s")
+    assert "FLAG{fake}" in mix.split("UNVERIFIED")[1]
+    # No flag tokens → unchanged.
+    assert await controller._guard_fabricated_flags("no flags here", "s") == "no flags here"
+    print("  PASS  fabrication_guard_flags_unverified")
+
+
 # ------------------------------------------------------------------ #
 # Automated reporting (feature L)
 # ------------------------------------------------------------------ #
@@ -3336,6 +3392,8 @@ async def run_all():
     await test_delegate_parallel_fans_out()
     test_dispatcher_with_backend_rebinds_tools()
     await test_subagent_gets_own_backend_and_teardown()
+    await test_subagent_receives_mission_context()
+    await test_fabrication_guard_flags_unverified()
 
     print("\nAutomated reporting (feature L)")
     test_report_builder()

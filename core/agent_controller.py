@@ -164,6 +164,11 @@ class AgentController:
         # None → children share the lead's dispatcher (unchanged). Children inherit
         # the factory, so deeper delegations stay isolated too.
         self.subagent_backend_factory = subagent_backend_factory
+        # The current turn's overall objective, captured at run(). Propagated into
+        # every delegated sub-agent's task (their context is otherwise isolated), so
+        # a child knows the concrete success criteria — e.g. which file to read —
+        # instead of guessing them.
+        self.mission: Optional[str] = None
         # Rules-of-Engagement guardrails (feature J). An absent/inactive scope
         # allows everything, so this is a no-op until an operator defines limits.
         self.scope = scope or EngagementScope()
@@ -332,6 +337,10 @@ class AgentController:
     ) -> AgentResponse:
         session_id = session_id or self._new_session()
         logger.info("Turn start — session=%s input=%r", session_id, user_input[:80])
+
+        # Remember this turn's objective so delegated sub-agents inherit it as
+        # mission context (they can't see the lead's conversation otherwise).
+        self.mission = user_input
 
         # Notify conversation chain of new turn
         self.chain.on_turn_start(user_input)
@@ -620,6 +629,10 @@ class AgentController:
                         session_id=session_id,
                     )
                     continue
+
+            # Anti-fabrication guard (execute-then-answer): don't let a made-up
+            # flag/credential stand as a verified result.
+            content = await self._guard_fabricated_flags(content, session_id)
 
             return AgentResponse(
                 content=content,
@@ -1457,8 +1470,26 @@ class AgentController:
             source="controller", session_id=session_id,
         )
 
+        # Mission propagation: a sub-agent's context is isolated, so it only knows
+        # its narrow task unless we hand it the overall objective — which names the
+        # concrete success artifacts (e.g. the exact proof-file path) it would
+        # otherwise have to guess. Prepend the lead's mission plus an honesty
+        # directive so a child that gains execution but can't find a named artifact
+        # reports that instead of inventing it.
+        child_task = task
+        if self.mission and self.mission.strip() and self.mission.strip() != task.strip():
+            child_task = (
+                "MISSION CONTEXT — the overall objective you are helping accomplish. "
+                "Honor any specific target files, paths, or success criteria named "
+                f"here:\n{self.mission.strip()}\n\n"
+                f"YOUR ASSIGNED SUBTASK:\n{task}\n\n"
+                "Report only what you actually obtained from tool output. If you gain "
+                "execution but cannot retrieve a named target artifact, say so "
+                "explicitly — never invent it."
+            )
+
         try:
-            result = await child.run(task, session_id=f"{session_id}:{suffix}")
+            result = await child.run(child_task, session_id=f"{session_id}:{suffix}")
         finally:
             # Dispose the child's private backend (e.g. stop the container it
             # started) — factories opt in by exposing `aclose` on the backend.
@@ -1494,6 +1525,36 @@ class AgentController:
                 await res
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("sub-agent backend teardown failed: %s", exc)
+
+    async def _guard_fabricated_flags(self, content: str, session_id: str) -> str:
+        """Execute-then-answer guard: a FLAG/CTF token in the final answer is only
+        trustworthy if it actually appeared in this session's tool output (captured
+        into attack_state.flags). Any token that did NOT is annotated as UNVERIFIED,
+        turning a confident hallucination into a visible caveat. This matters most
+        with delegation, where the lead reports second-hand sub-agent findings and
+        is prone to papering over a miss with a plausible-looking token."""
+        if not content:
+            return content
+        found = list(dict.fromkeys(self.chain._FLAG_BRACE_RE.findall(content)))
+        if not found:
+            return content
+        verified = set(self.chain.attack_state.flags)
+        unverified = [t for t in found if t not in verified]
+        if not unverified:
+            return content
+        logger.warning("Fabrication guard: %d unverified flag token(s) in answer: %s",
+                       len(unverified), unverified)
+        try:
+            await self.bus.emit(
+                "agent.fabrication_flagged",
+                {"tokens": unverified, "session_id": session_id},
+                source="controller", session_id=session_id,
+            )
+        except Exception:
+            pass
+        return (content.rstrip() + "\n\n⚠ UNVERIFIED — the token(s) below never "
+                "appeared in this session's tool output and may be fabricated; do not "
+                "trust them: " + ", ".join(unverified))
 
     def _known_tool_names(self) -> set[str]:
         """Every tool the controller can actually dispatch: the built-in
