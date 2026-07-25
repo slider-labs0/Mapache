@@ -50,29 +50,44 @@ class ShellTool(BaseTool):
 
     MAX_OUTPUT_BYTES = 50_000
 
-    def __init__(self, backend: Any = None, **kwargs: Any) -> None:
+    def __init__(self, backend: Any = None, egress: Any = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         # Execution backend (feature H). None / local → the local fast-path below
         # (unchanged). A remote backend (ssh/docker) routes the command off-host.
         self.backend = backend
+        # Egress/OPSEC (EgressProfile): when active, wrap the command so its TCP
+        # goes through the proxy/Tor (torsocks/proxychains), hiding the source IP.
+        # None / direct → no wrapping.
+        self.egress = egress
+
+    def _wrap_egress(self, cmd: str, *, posix: bool) -> str:
+        """Route the command's TCP through the configured proxy/Tor, if any."""
+        if self.egress is None:
+            return cmd
+        return self.egress.wrap_command(cmd, posix=posix)
 
     async def execute(self, cmd: str, timeout: int = 30, working_dir: str = "", **kwargs: Any) -> ToolResult:
         if not cmd or not cmd.strip():
             return ToolResult.fail("Empty command")
 
-        # Remote backend (feature H): dispatch off-host and map the result.
+        # Remote backend (feature H): dispatch off-host and map the result. A remote
+        # backend is POSIX, so egress-wrap there too (the pivot then proxies out).
         if self.backend is not None and getattr(self.backend, "name", "local") != "local":
-            res = await self.backend.run(cmd, timeout=timeout, working_dir=working_dir)
+            run_cmd = self._wrap_egress(cmd, posix=True)
+            res = await self.backend.run(run_cmd, timeout=timeout, working_dir=working_dir)
             meta = {"exit_code": res.exit_code, "cmd": cmd, "backend": self.backend.name}
             if res.error and not (res.output or "").strip():
                 return ToolResult.fail(res.error, output=res.output)
             return ToolResult.ok(res.output, metadata=meta)
 
         cwd = working_dir if working_dir else None
+        # Local egress-wrap only on a POSIX operator box (torsocks/proxychains are
+        # Linux-only); on Windows the shell runs direct (HTTP tools still proxy).
+        run_cmd = self._wrap_egress(cmd, posix=platform.system() != "Windows")
 
         try:
             proc = await asyncio.create_subprocess_shell(
-                cmd,
+                run_cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=cwd,

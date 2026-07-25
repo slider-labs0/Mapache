@@ -116,6 +116,15 @@ class WebFetchTool(BaseTool):
     timeout = 30
     tags = ["browser", "web", "fetch"]
 
+    def __init__(self, egress: Any = None, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        # Egress/OPSEC (EgressProfile): when active, HTTP requests exit through the
+        # configured proxy/Tor so the target sees that IP, not the operator's.
+        self.egress = egress
+
+    def _proxy(self) -> Any:
+        return self.egress.httpx_proxy() if self.egress is not None else None
+
     async def execute(
         self,
         url: str,
@@ -126,7 +135,7 @@ class WebFetchTool(BaseTool):
         if not url.startswith(("http://", "https://")):
             return ToolResult.fail(f"Invalid URL: must start with http:// or https://")
 
-        async with HttpClient(timeout=25.0) as client:
+        async with HttpClient(timeout=25.0, proxy=self._proxy()) as client:
             response = await client.get(url)
 
         if not response.success and response.error:
@@ -189,6 +198,15 @@ class HttpRequestTool(BaseTool):
     _KEY_HEADERS = ("content-type", "set-cookie", "location", "www-authenticate",
                     "server", "x-powered-by")
 
+    def __init__(self, egress: Any = None, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        # Egress/OPSEC: route the request through the configured proxy/Tor so the
+        # target's web logs show that IP, not the operator's.
+        self.egress = egress
+
+    def _proxy(self) -> Any:
+        return self.egress.httpx_proxy() if self.egress is not None else None
+
     async def execute(
         self,
         url: str,
@@ -204,7 +222,7 @@ class HttpRequestTool(BaseTool):
         if not url.startswith(("http://", "https://")):
             return ToolResult.fail("Invalid URL: must start with http:// or https://")
 
-        async with HttpClient(timeout=25.0) as client:
+        async with HttpClient(timeout=25.0, proxy=self._proxy()) as client:
             response = await client.request(
                 method, url, params=params, data=data, json=json_body,
                 content=body, extra_headers=headers,
@@ -398,3 +416,44 @@ class TorFetchTool(BaseTool):
             output,
             metadata={"url": url, "via_tor": True, "exit_ip": ip},
         )
+
+
+class EgressCheckTool(BaseTool):
+    name = "egress_check"
+    description = (
+        "OPSEC leak test: report the PUBLIC IP a target would see for your traffic, "
+        "by fetching an IP-echo service through the configured egress (proxy/Tor). "
+        "Run this before attacking to confirm your real IP is hidden. If egress is "
+        "'direct', the target sees your REAL IP — this warns you of that."
+    )
+    parameters = {"type": "object", "properties": {}}
+    permissions = {Permission.NETWORK}
+    tags = ["opsec", "egress", "recon"]
+
+    def __init__(self, egress: Any = None, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.egress = egress
+
+    async def execute(self, **kwargs: Any) -> ToolResult:
+        proxy = self.egress.httpx_proxy() if self.egress is not None else None
+        desc = self.egress.describe() if self.egress is not None else \
+            "direct — no egress configured"
+        active = bool(self.egress and self.egress.active)
+        try:
+            async with HttpClient(timeout=15.0, proxy=proxy) as client:
+                ip = await client.get_ip()
+        except Exception as exc:
+            return ToolResult.fail(
+                f"Egress check failed ({exc}). Egress: {desc}. If a proxy/Tor is "
+                f"set, make sure it is running and reachable.")
+        if ip == "unknown":
+            return ToolResult.fail(
+                f"Could not determine the apparent IP through the egress ({desc}). "
+                f"The proxy may be down or blocking the IP-echo services.")
+        lines = [f"Egress        : {desc}",
+                 f"Apparent IP   : {ip}  (this is what a target sees)"]
+        if not active:
+            lines.append("⚠ WARNING: egress is DIRECT — this is your REAL IP. Set an "
+                         "egress proxy/Tor or attack from a pivot to hide it.")
+        return ToolResult.ok("\n".join(lines),
+                             metadata={"apparent_ip": ip, "active": active})

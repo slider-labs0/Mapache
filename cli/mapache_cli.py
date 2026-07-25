@@ -34,6 +34,7 @@ from cli.render import make_renderer
 from cli import theme
 from cli import enhanced_input
 from core.exec_backend import backend_from_config
+from core.egress import EgressProfile
 from voice import voice_from_config
 from models.providers.ollama_provider import OllamaProvider
 from plugins.sdk.base_tool import Permission
@@ -47,7 +48,8 @@ from security_tools.cracking.john_tool import JohnCrackTool, JohnFormatTool
 from security_tools.kali.kali_tools_interface import (
     KaliToolListTool, KaliRunTool, SearchsploitTool,
 )
-from browser.scraping_tools import WebFetchTool, HttpRequestTool, WebSearchTool, TorFetchTool
+from browser.scraping_tools import (WebFetchTool, HttpRequestTool, WebSearchTool,
+                                     TorFetchTool, EgressCheckTool)
 from tools.filesystem_tool import (
     FileReadTool, FileWriteTool, FileEditTool,
     FileListTool, FileSearchTool,
@@ -85,6 +87,7 @@ Commands:
   /operators             List specialist sub-agents (delegation roster)
   /hosts                 Show per-host attack states (multi-host delegation)
   /backend               Show the execution backend (local / ssh / docker)
+  /egress                 Show egress/anonymity (proxy/Tor to hide your IP)
   /hub [search|install]  Browse/install community skills (feature I)
   /voice [on|off]        Voice I/O status / toggle (Phase 9); /say <text> speaks
   /opsec                 Show hybrid OPSEC routing (which ops are pinned local)
@@ -215,6 +218,7 @@ class MapacheCLI:
         # installed and --plain wasn't passed; otherwise the plain line printer.
         self.render = make_renderer(getattr(args, "plain", False))
         self.exec_backend = None  # feature H — built in setup() from config
+        self.egress = None        # operator anonymity — built in setup() from config
         self.hub_client = None    # feature I — built in setup() if a registry is set
         self.voice = None         # Phase 9 — built in setup() from config
 
@@ -380,6 +384,14 @@ class MapacheCLI:
         if exec_warn:
             print(f"  ⚠ {exec_warn}")
 
+        # Egress / operator anonymity: how attack traffic exits (hide the operator
+        # IP). From config.egress; --egress overrides (direct | tor | a proxy URL).
+        egress_spec = dict(getattr(self.config, "egress", None) or {"mode": "direct"})
+        if getattr(self.args, "egress", None):
+            self.egress = EgressProfile.parse(self.args.egress)
+        else:
+            self.egress = EgressProfile.from_dict(egress_spec)
+
         # Voice I/O (Phase 9): optional TTS/STT. From config.voice; --voice forces
         # it on. Null providers by default, so this is a no-op until a backend is
         # installed + selected.
@@ -430,7 +442,7 @@ class MapacheCLI:
 
             # Core — `shell` dispatches through the execution backend (feature H:
             # local / ssh / docker), built from config (--exec-backend overrides).
-            self.registry.register(ShellTool(backend=self.exec_backend))
+            self.registry.register(ShellTool(backend=self.exec_backend, egress=self.egress))
 
             # Filesystem
             self.registry.register(FileReadTool())
@@ -440,13 +452,14 @@ class MapacheCLI:
             self.registry.register(FileSearchTool())
 
             # Recon
-            self.registry.register(NmapTool())
+            self.registry.register(NmapTool(egress=self.egress))
 
-            # Browser
-            self.registry.register(WebFetchTool())
-            self.registry.register(HttpRequestTool())
+            # Browser — HTTP tools route through the egress proxy/Tor when active.
+            self.registry.register(WebFetchTool(egress=self.egress))
+            self.registry.register(HttpRequestTool(egress=self.egress))
             self.registry.register(WebSearchTool())
             self.registry.register(TorFetchTool())
+            self.registry.register(EgressCheckTool(egress=self.egress))
 
             # Phase 6 — Advanced security
             self.registry.register(MetasploitSearchTool())
@@ -459,7 +472,7 @@ class MapacheCLI:
             self.registry.register(KaliToolListTool())
             # kali_run shares the execution backend (feature H) so the toolchain
             # can run on a remote Kali box / container too.
-            self.registry.register(KaliRunTool(backend=self.exec_backend))
+            self.registry.register(KaliRunTool(backend=self.exec_backend, egress=self.egress))
             self.registry.register(SearchsploitTool())
 
             # Memory
@@ -697,6 +710,8 @@ class MapacheCLI:
 
         if self.exec_backend is not None and self.exec_backend.name != "local":
             print(f"  Exec     : {self.exec_backend.describe()} (shell runs remote)")
+        if self.egress is not None and self.egress.active:
+            print(f"  Egress   : {self.egress.describe()} (attack traffic anonymised)")
 
         if self.voice is not None and self.voice.enabled:
             print(f"  Voice    : {self.voice.describe()}")
@@ -1168,6 +1183,20 @@ class MapacheCLI:
                 print("  Configure in config.execution (backend: local|ssh|docker) "
                       "or --exec-backend.\n")
 
+        elif command == "/egress":
+            eg = self.egress
+            print(f"\n  Egress: {eg.describe() if eg else 'direct'}")
+            if eg and eg.active:
+                print("  HTTP tools route through the proxy; shell/nmap wrap with "
+                      f"{eg._wrapper_prefix() or 'nothing'} (TCP-connect only).")
+                print("  Run `egress_check` to confirm the apparent IP a target sees.")
+            else:
+                print("  Attack traffic uses your REAL IP. Set config.egress "
+                      "(mode: tor | proxy + proxy: socks5://…) or --egress "
+                      "tor|<proxy-url>. Strongest hide: attack from a pivot "
+                      "(--exec-backend ssh/docker).")
+            print()
+
         elif command == "/hosts":
             hosts = self.controller.host_states() if self.controller else {}
             if not hosts:
@@ -1411,6 +1440,12 @@ def parse_args() -> argparse.Namespace:
                         help="Where `shell` commands run (feature H). ssh/docker "
                              "need host/container details in config.execution "
                              "(mapache.json / ~/.mapache/config.json). Default: local.")
+    parser.add_argument("--egress", default=None,
+                        help="Hide your IP when attacking: 'tor', or a proxy URL "
+                             "(socks5://host:port, http://host:port). HTTP tools route "
+                             "through it; shell/nmap wrap with torsocks/proxychains "
+                             "(TCP-connect only). Strongest hide: attack from a pivot "
+                             "via --exec-backend. Default: config.egress or direct.")
     parser.add_argument("--voice", action="store_true",
                         help="Speak agent responses (Phase 9). Needs a TTS backend "
                              "in config.voice (e.g. tts=pyttsx3); no-op otherwise.")

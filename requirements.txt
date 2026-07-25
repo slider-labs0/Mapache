@@ -14,6 +14,8 @@
 # ── Core ────────────────────────────────────────────────────────────────────
 # HTTP client used by every model provider (Ollama, Anthropic, OpenAI-compatible,
 # Grok) and by web_fetch / the vector store. This is the one you actually need.
+# For SOCKS/Tor egress (--egress tor|socks5://…) install the socks extra:
+#   pip install "httpx[socks]"
 httpx>=0.24
 
 # ── Optional: nicer CLI ───────────────────────────────────────────────────────

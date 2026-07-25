@@ -3097,11 +3097,76 @@ async def test_exec_backend_metasploit_cli():
     print("  PASS  exec_backend_metasploit_cli")
 
 
+def test_egress_profile():
+    from core.egress import EgressProfile
+
+    # Direct (default): no proxy, inactive, commands pass through untouched.
+    d = EgressProfile()
+    assert not d.active and d.httpx_proxy() is None
+    assert d.wrap_command("nmap -sT x") == "nmap -sT x"
+    assert "real IP" in d.describe()
+
+    # Tor mode → default SOCKS proxy + torsocks wrapping on POSIX.
+    t = EgressProfile(mode="tor")
+    assert t.active and t.httpx_proxy() == "socks5://127.0.0.1:9050"
+    w = t.wrap_command("curl http://x | grep y")
+    assert w.startswith("torsocks sh -c ") and "curl http://x | grep y" in w
+    # Non-POSIX (Windows local shell) is not wrapped, but the HTTP proxy still applies.
+    assert t.wrap_command("curl x", posix=False) == "curl x"
+
+    # Explicit proxy → proxychains wrapping (auto).
+    p = EgressProfile(mode="proxy", proxy="socks5://10.0.0.5:1080")
+    assert p.httpx_proxy() == "socks5://10.0.0.5:1080"
+    assert p.wrap_command("nmap -sT t").startswith("proxychains -q sh -c ")
+    # wrapper=none disables shell wrapping (HTTP proxy unaffected).
+    assert EgressProfile(mode="tor", wrapper="none").wrap_command("curl x") == "curl x"
+
+    # Parsing/coercion: 'tor', a bare proxy URL, and a Tor-port URL → tor mode.
+    assert EgressProfile.parse("tor").mode == "tor"
+    assert EgressProfile.parse("socks5://h:1080").mode == "proxy"
+    assert EgressProfile.from_dict({"proxy": "socks5://127.0.0.1:9050"}).mode == "tor"
+    assert EgressProfile.parse("").active is False
+    print("  PASS  egress_profile")
+
+
+async def test_egress_wires_into_tools():
+    from core.egress import EgressProfile
+    from core.exec_backend import ExecResult
+    from security_tools.shell_tool import ShellTool
+    from browser.scraping_tools import HttpRequestTool, WebFetchTool
+
+    class FakeBackend:
+        name = "docker"
+        def __init__(self): self.cmds = []
+        async def run(self, cmd, *, timeout=30, working_dir=""):
+            self.cmds.append(cmd); return ExecResult("ok")
+
+    # shell through a (POSIX) backend + Tor egress → torsocks-wrapped command.
+    be = FakeBackend()
+    await ShellTool(backend=be, egress=EgressProfile(mode="tor")).execute(
+        cmd="id; whoami", timeout=5)
+    assert be.cmds[0].startswith("torsocks sh -c ") and "id; whoami" in be.cmds[0]
+
+    # direct egress → the backend gets the raw command.
+    be2 = FakeBackend()
+    await ShellTool(backend=be2, egress=EgressProfile()).execute(cmd="id")
+    assert be2.cmds[0] == "id"
+
+    # HTTP tools expose the egress proxy to httpx.
+    assert HttpRequestTool(egress=EgressProfile(mode="tor"))._proxy() == \
+        "socks5://127.0.0.1:9050"
+    assert WebFetchTool(egress=None)._proxy() is None
+    print("  PASS  egress_wires_into_tools")
+
+
 def test_config_execution_section():
     from core.config import MapacheConfig
 
-    # Default config carries a local execution backend.
+    # Default config carries a local execution backend + direct egress.
     assert MapacheConfig.from_dict({}).execution.get("backend") == "local"
+    assert MapacheConfig.from_dict({}).egress.get("mode") == "direct"
+    egc = MapacheConfig.from_dict({"egress": {"mode": "tor"}})
+    assert egc.egress["mode"] == "tor" and egc.to_dict()["egress"]["mode"] == "tor"
     cfg = MapacheConfig.from_dict(
         {"execution": {"backend": "docker", "container": "kali"}})
     assert cfg.execution["backend"] == "docker" and cfg.execution["container"] == "kali"
@@ -3453,6 +3518,8 @@ async def run_all():
     await test_exec_backend_kali_run_remote()
     await test_exec_backend_nmap_remote()
     await test_exec_backend_metasploit_cli()
+    test_egress_profile()
+    await test_egress_wires_into_tools()
     test_config_execution_section()
 
     print("\nCommunity skill hub (feature I)")

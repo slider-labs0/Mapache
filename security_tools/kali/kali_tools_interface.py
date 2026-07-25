@@ -260,12 +260,15 @@ class KaliRunTool(BaseTool):
 
     MAX_OUTPUT = 10_000
 
-    def __init__(self, backend: Any = None, **kwargs: Any) -> None:
+    def __init__(self, backend: Any = None, egress: Any = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         # Execution backend (feature H). A remote backend (ssh/docker) runs the
         # tool on that host — e.g. a real Kali box/container — so we must NOT
         # resolve the path locally; the remote PATH resolves it.
         self.backend = backend
+        # Egress/OPSEC: route the tool's TCP through the proxy/Tor when active
+        # (a remote backend is POSIX, so torsocks/proxychains apply there).
+        self.egress = egress
 
     async def execute(
         self,
@@ -279,6 +282,8 @@ class KaliRunTool(BaseTool):
         # so skip local path resolution and let the remote PATH resolve it.
         if self.backend is not None and getattr(self.backend, "name", "local") != "local":
             full_cmd = f"{tool} {args}".strip()
+            if self.egress is not None:
+                full_cmd = self.egress.wrap_command(full_cmd, posix=True)
             res = await self.backend.run(full_cmd, timeout=timeout, working_dir=working_dir)
             header = (f"{tool} {args[:60]}\n"
                       f"[backend: {self.backend.name}] exit: {res.exit_code}\n\n")

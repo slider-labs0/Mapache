@@ -99,6 +99,10 @@ def _default_config() -> dict[str, Any]:
         # backend: local | ssh | docker. ssh needs host (+user/port/key);
         # docker needs container OR image (+optional workdir).
         "execution": {"backend": "local"},
+        # Egress / operator anonymity: how attack traffic exits, to hide the
+        # operator's IP. mode: direct | proxy | tor; proxy = socks5://host:port or
+        # http://host:port; wrapper = auto|proxychains|torsocks|none (shell tools).
+        "egress": {"mode": "direct"},
         # Community skill hub (feature I): registry = path to a local index.json
         # dir (empty disables the hub).
         "hub": {"registry": ""},
@@ -236,6 +240,8 @@ class MapacheConfig:
     messaging: MessagingConfig = field(default_factory=MessagingConfig)
     # Execution backend (feature H): raw dict ({"backend": "local|ssh|docker", …}).
     execution: dict[str, Any] = field(default_factory=lambda: {"backend": "local"})
+    # Egress / operator anonymity: raw dict ({"mode": "direct|proxy|tor", …}).
+    egress: dict[str, Any] = field(default_factory=lambda: {"mode": "direct"})
     # Community skill hub (feature I): raw dict ({"registry": "<path>"}).
     hub: dict[str, Any] = field(default_factory=dict)
     # Voice I/O (Phase 9): raw dict ({"enabled": bool, "tts": …, "stt": …}).
@@ -270,6 +276,7 @@ class MapacheConfig:
                 discord_token=msg.get("discord_token", ""),
             ),
             execution=dict(data.get("execution") or {"backend": "local"}),
+            egress=dict(data.get("egress") or {"mode": "direct"}),
             hub=dict(data.get("hub") or {}),
             voice=dict(data.get("voice") or {}),
             sources=list(data.get("_sources") or []),
@@ -331,6 +338,7 @@ class MapacheConfig:
                 else self.messaging.discord_token,
             },
             "execution": dict(self.execution),
+            "egress": dict(self.egress),
             "hub": dict(self.hub),
             "voice": dict(self.voice),
         }

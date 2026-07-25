@@ -88,13 +88,18 @@ class NmapTool(BaseTool):
         "udp":      ["-sU", "--open"],
     }
 
-    def __init__(self, backend: Any = None, **kwargs: Any) -> None:
+    def __init__(self, backend: Any = None, egress: Any = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         # Execution backend (feature H). A remote backend (ssh/docker) runs nmap on
         # that host — e.g. an attacker container that shares the target's isolated
         # network — so we must NOT resolve the binary locally; the remote PATH does.
         # None / local → the local subprocess fast-path below (unchanged).
         self.backend = backend
+        # Egress/OPSEC: when active, route the scan through the proxy/Tor. NOTE:
+        # proxychains/torsocks hook connect(), so only a TCP-connect scan (-sT)
+        # honors it — raw SYN/UDP does not. For raw scans, hide the IP with a pivot
+        # backend instead. Applied on the (POSIX) remote path.
+        self.egress = egress
 
     async def execute(
         self,
@@ -186,8 +191,9 @@ class NmapTool(BaseTool):
         # argv into a command string for the backend is safe.
         cmd = self._build_command("nmap", target, scan_type, ports, timing, extra_args)
         cmd_str = " ".join(cmd)
+        run_str = self.egress.wrap_command(cmd_str, posix=True) if self.egress is not None else cmd_str
         try:
-            res = await self.backend.run(cmd_str, timeout=self.timeout)
+            res = await self.backend.run(run_str, timeout=self.timeout)
         except Exception as exc:
             return ToolResult.fail(f"[backend: {self.backend.name}] Nmap error: {exc}")
 
