@@ -21,7 +21,8 @@ from memory.memory_manager import MemoryManager
 from models.model_registry import (
     ModelRegistry, ModelRole, ModelProfile, ModelCapabilities, Provider,
 )
-from core.config import load_config
+from core.config import load_config, load_global_raw, save_global_config
+from core.integration_catalog import detect_missing_integration
 from core.engagement_scope import load_scope
 from core.engagement_log import EngagementLog
 from models.routing_engine import RoutingEngine, RoutingStrategy
@@ -813,6 +814,11 @@ class MapacheCLI:
                 if raw.startswith("?"):
                     raw = f"search the web for: {raw[1:].strip()}"
 
+                # Just-in-time integration setup: if the request names a known
+                # service (Shodan/VirusTotal/…) that isn't wired up, offer to add
+                # it now (paste key), then run the turn with the tool available.
+                await self._maybe_setup_integration(raw)
+
                 await self._agent_turn(raw)
         finally:
             if self.engagement_log:
@@ -992,6 +998,89 @@ class MapacheCLI:
             return ""
         line = await self._input_q.get()
         return "" if line is None else line
+
+    async def _ask(self, prompt: str) -> str:
+        """Print an inline prompt and read one line (mode-agnostic)."""
+        print(prompt, end="", flush=True)
+        return (await self._read_line()).strip()
+
+    def _configured_integration_names(self) -> set:
+        return {t.name for t in (self._integrations or [])}
+
+    async def _maybe_setup_integration(self, user_input: str) -> None:
+        """If the request names a known service (Shodan/VirusTotal/…) that isn't set
+        up, offer a one-question setup: paste the key, we register the tool(s) live
+        and persist the spec (key stays a ${ENV} ref). Wizard-style, mid-conversation."""
+        if self.controller is None:
+            return
+        from core.integration_catalog import is_configured
+        configured = self._configured_integration_names()
+        recipe = detect_missing_integration(user_input, configured)
+        if recipe is None:
+            return
+        have_spec = is_configured(recipe, configured)
+        if have_spec:
+            # Tools exist; only the API key is missing (a call would 401).
+            print(f"\n  🔑 {recipe.display} is wired up but has no API key set "
+                  f"(${recipe.env_var}).")
+        else:
+            print(f"\n  🔌 You mentioned {recipe.display}, but it isn't set up yet.")
+            print(f"     {recipe.blurb}")
+        print(f"     Get a key: {recipe.signup_url}")
+        if (await self._ask("  Set it up now? [Y/n] ")).lower() in ("n", "no"):
+            print("  Skipped — add it anytime under config.integrations.\n")
+            return
+        key = await self._ask(f"  Paste your {recipe.env_var} (blank to cancel): ")
+        if not key:
+            print("  Cancelled.\n")
+            return
+
+        # Make the key usable immediately (this session).
+        os.environ[recipe.env_var] = key
+
+        if not have_spec:
+            # Persist the spec(s) (key stays a ${ENV} ref) and register the tools live.
+            try:
+                raw = load_global_raw()
+                ints = raw.setdefault("integrations", [])
+                names = {i.get("name") for i in ints if isinstance(i, dict)}
+                for spec in recipe.specs:
+                    if spec["name"] not in names:
+                        ints.append(spec)
+                save_global_config(raw)
+            except Exception as exc:
+                print(f"  ⚠ couldn't persist the spec ({exc}); added this session only.")
+            tools, warns = build_external_tools(
+                list(recipe.specs), backend=self.exec_backend, egress=self.egress)
+            for w in warns:
+                print(f"  ⚠ {w}")
+            for t in tools:
+                self.registry.register(t)
+                self.controller.register_tool(t.to_context_schema())
+                self._integrations.append(t)
+            print(f"  ✓ {recipe.display} ready — tools: "
+                  f"{', '.join(t.name for t in tools)}")
+        else:
+            print(f"  ✓ {recipe.env_var} set — {recipe.display} is ready to use.")
+
+        # Offer to persist the key across sessions (else it's just this session).
+        if (await self._ask(f"  Remember {recipe.env_var} for future sessions? [y/N] ")
+                ).lower() in ("y", "yes"):
+            self._persist_env_var(recipe.env_var, key)
+        print()
+
+    def _persist_env_var(self, name: str, value: str) -> None:
+        """Persist an env var for future sessions (best-effort, per-OS)."""
+        try:
+            if sys.platform == "win32":
+                import subprocess
+                subprocess.run(["setx", name, value], capture_output=True, check=False)
+                print(f"  ✓ {name} saved to your user environment (new shells pick it up).")
+            else:
+                print(f"  To persist, add to your shell profile:\n"
+                      f"     export {name}='<your key>'")
+        except Exception as exc:
+            print(f"  ⚠ couldn't persist {name} ({exc}); set it manually to keep it.")
 
     async def _curate(self) -> None:
         """

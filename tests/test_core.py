@@ -3242,6 +3242,34 @@ async def test_external_tools():
     finally:
         os.environ.pop("ET_TEST_KEY", None)
     print("  PASS  external_tools")
+
+
+def test_integration_catalog():
+    from core.integration_catalog import detect_missing_integration, CATALOG
+    from tools.external_tools import build_external_tools
+
+    # Names a service, nothing configured → returns its recipe.
+    r = detect_missing_integration("search 8.8.8.8 in shodan", set(), environ={})
+    assert r is not None and r.key == "shodan"
+    # Spec present AND key set → fully ready, no prompt.
+    assert detect_missing_integration(
+        "shodan this ip", {"shodan_host", "shodan_search"},
+        environ={"SHODAN_API_KEY": "x"}) is None
+    # Spec present but key missing → still prompts (to add just the key).
+    r2 = detect_missing_integration(
+        "shodan this ip", {"shodan_host", "shodan_search"}, environ={})
+    assert r2 is not None and r2.key == "shodan"
+    # Other services + unrelated input.
+    assert detect_missing_integration(
+        "run this hash through virustotal", set(), environ={}).key == "virustotal"
+    assert detect_missing_integration(
+        "scan the web app for sqli", set(), environ={}) is None
+    # Every recipe's spec(s) are valid and buildable (no bad templates).
+    for recipe in CATALOG:
+        tools, warns = build_external_tools(list(recipe.specs))
+        assert tools and not warns, (recipe.key, warns)
+        assert recipe.env_var and recipe.signup_url
+    print("  PASS  integration_catalog")
     cfg = MapacheConfig.from_dict(
         {"execution": {"backend": "docker", "container": "kali"}})
     assert cfg.execution["backend"] == "docker" and cfg.execution["container"] == "kali"
@@ -3598,6 +3626,7 @@ async def run_all():
     await test_egress_wires_into_tools()
     test_config_execution_section()
     await test_external_tools()
+    test_integration_catalog()
 
     print("\nCommunity skill hub (feature I)")
     test_hub_manifest_and_verification()
