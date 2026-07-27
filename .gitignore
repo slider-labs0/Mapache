@@ -12,3 +12,8 @@ plugins/generated/
 plugins/archived/
 engagements/
 scope.json
+
+# Packaging build artifacts
+*.egg-info/
+build/
+dist/

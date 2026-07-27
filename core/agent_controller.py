@@ -14,6 +14,7 @@ import json
 import logging
 import re
 import threading
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, AsyncIterator, Callable, Optional
@@ -92,6 +93,7 @@ class ToolCallResult:
     tool_call_id: str
     output: str
     error: Optional[str] = None
+    duration_ms: float = 0.0
 
 
 class AgentController:
@@ -1195,9 +1197,18 @@ class AgentController:
         if not approved:
             return
 
+        # Announce each tool starting so the UI can show a live "running X…" line.
+        for call_id, name, args in approved:
+            await self.bus.emit(
+                "task.start",
+                {"task_id": call_id, "tool_name": name, "args": args,
+                 "session_id": session_id},
+                source="controller", session_id=session_id,
+            )
+
         # Dispatch concurrently; preserve order when collecting results.
         results = await asyncio.gather(*(
-            self._dispatch_tool(name, args, call_id, session_id)
+            self._dispatch_tool_timed(name, args, call_id, session_id)
             for call_id, name, args in approved
         ))
 
@@ -1226,6 +1237,7 @@ class AgentController:
                     "args": _args,
                     "output": result.output,
                     "error": result.error,
+                    "duration_ms": result.duration_ms,
                     "session_id": session_id,
                 },
                 source="controller",
@@ -1569,6 +1581,17 @@ class AgentController:
             except Exception:  # a misbehaving registry must not break dispatch
                 pass
         return names
+
+    async def _dispatch_tool_timed(
+        self, tool_name: str, tool_args: dict[str, Any],
+        tool_call_id: str, session_id: str,
+    ) -> ToolCallResult:
+        """Wrap _dispatch_tool with wall-clock timing so the UI can report how long
+        each tool took (carried on the task.result event as duration_ms)."""
+        t0 = time.monotonic()
+        result = await self._dispatch_tool(tool_name, tool_args, tool_call_id, session_id)
+        result.duration_ms = (time.monotonic() - t0) * 1000.0
+        return result
 
     async def _dispatch_tool(
         self,

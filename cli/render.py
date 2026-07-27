@@ -131,6 +131,19 @@ class Renderer:
         except Exception:
             pass
 
+    def step_line(self, text: str) -> None:
+        """Print a completed-step line, clearing the live spinner first so the line
+        settles above the resuming spinner. The text already carries its own ANSI,
+        so both renderers use this identically; prints plainly off a TTY."""
+        try:
+            if sys.stdout.isatty():
+                sys.stdout.write("\r\033[K" + text + "\n")
+            else:
+                sys.stdout.write(text + "\n")
+            sys.stdout.flush()
+        except Exception:
+            pass
+
 
 class PlainRenderer(Renderer):
     is_rich = False

@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mapache"
+version = "0.7.0"
+description = "Autonomous offensive-security agent"
+readme = "README.md"
+requires-python = ">=3.10"
+dynamic = ["dependencies"]
+
+# `mapache serve` (full-screen TUI), `mapache setup`, `mapache version`, etc.
+# all route through the same entry point as `python -m cli`.
+[project.scripts]
+mapache = "cli.mapache_cli:main_sync"
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+# Flat multi-package layout: discover every package (and sub-package) but keep the
+# tests/ tree and scratch dirs out of the install.
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+  "cli*", "core*", "hub*", "tools*", "models*", "memory*", "reporting*",
+  "voice*", "browser*", "integrations*", "plugins*", "security_tools*",
+]
+
+# Ship non-Python assets that live inside packages (e.g. the ANSI mascot).
+[tool.setuptools.package-data]
+cli = ["*.ans"]

@@ -214,9 +214,11 @@ class MapacheCLI:
         self.engagement_log: EngagementLog | None = None  # feature K, started in run()
         self._ptk = None          # prompt_toolkit session (enhanced input), set in run()
         self._input_q = None      # fallback stdin queue, set in run()
+        self._running_tool = None  # tool currently executing, for the live status line
+        self.tui = None           # full-screen TUI (RaccoonTUI) when --tui is active
         self.memory = MemoryManager()
         self.confirm = args.confirm
-        self.working_dir = os.path.abspath(args.dir)
+        self.working_dir, self._workdir_note = self._resolve_working_dir(args.dir)
 
         # Presentation layer (feature B): rich UI on a TTY when `rich` is
         # installed and --plain wasn't passed; otherwise the plain line printer.
@@ -254,6 +256,36 @@ class MapacheCLI:
         }
         self.strategy = strategy_map.get(self.config.default_strategy.lower(),
                                          RoutingStrategy.AUTO)
+
+    @staticmethod
+    def _is_writable_dir(path: str) -> bool:
+        try:
+            probe = os.path.join(path, ".mapache_write_probe")
+            with open(probe, "w"):
+                pass
+            os.remove(probe)
+            return True
+        except OSError:
+            return False
+
+    def _resolve_working_dir(self, arg_dir) -> "tuple[str, str | None]":
+        """Pick the working dir (holds plugins/generated, engagements, project config).
+
+        An explicit --dir always wins. Otherwise use the current directory when it's
+        writable; when it isn't — e.g. `mapache serve` launched from C:\\Windows\\
+        System32 as a global command — fall back to a stable per-user workspace so
+        the app doesn't crash trying to write where it can't. Returns (dir, note)."""
+        if arg_dir:
+            return os.path.abspath(arg_dir), None
+        cwd = os.getcwd()
+        if self._is_writable_dir(cwd):
+            return cwd, None
+        home = os.path.join(os.path.expanduser("~"), ".mapache", "workspace")
+        try:
+            os.makedirs(home, exist_ok=True)
+        except OSError:
+            pass
+        return home, f"cwd not writable ({cwd}) — using {home}"
 
     @staticmethod
     def _cli_overrides(args: argparse.Namespace) -> dict:
@@ -433,6 +465,12 @@ class MapacheCLI:
             profile_provider=lambda: self.user_profile.summary(),
         )
         self._wire_scope_notifier()
+        # Live status: a spinner shows "running <tool>…" while a tool executes,
+        # then a "ran <tool> · <N>s" line settles above it. Replaces the raw
+        # agent_controller INFO logs (silenced on the console; still in the file).
+        self.controller.bus.subscribe("task.start", self._on_task_start)
+        self.controller.bus.subscribe("task.result", self._on_task_end)
+        self.controller.bus.subscribe("task.error", self._on_task_end)
 
         if not self.args.no_tools:
             self.registry = ToolRegistry(granted_permissions={
@@ -741,11 +779,45 @@ class MapacheCLI:
                 "roe_enforced": bool(self.scope and self.scope.active),
             })
 
+        # Full-screen TUI (--tui): a bordered input box pinned to the bottom with a
+        # scrolling output region above. Decided BEFORE the banner so the banner and
+        # every command handler's print() land in the TUI region (via a stdout shim)
+        # instead of corrupting the full-screen display. Falls back to the classic
+        # CLI if it isn't a real TTY or prompt_toolkit can't init a full-screen app.
+        tui_mode = (getattr(self.args, "tui", False)
+                    and enhanced_input.ptk_available()
+                    and sys.stdin.isatty() and sys.stdout.isatty())
+        self._orig_stdout = sys.stdout
+        if tui_mode:
+            from cli.tui import build_tui, _ModelStdout
+            self.tui = build_tui(
+                on_run=self._tui_on_run,
+                on_steer=lambda s: self.controller.steer(s) if self.controller else None,
+            )
+            if self.tui is not None:
+                self.render = self.tui.renderer
+                sys.stdout = _ModelStdout(self.tui.model)
+                # Re-point the console log handler at the model too, so a WARNING/
+                # ERROR (e.g. the OPSEC notice) lands in the output region instead of
+                # corrupting the full-screen display. The file handler is untouched.
+                import logging as _logging
+                for _h in _logging.getLogger("mapache").handlers:
+                    if (isinstance(_h, _logging.StreamHandler)
+                            and not isinstance(_h, _logging.FileHandler)):
+                        try:
+                            _h.setStream(sys.stdout)
+                        except Exception:
+                            pass
+            else:
+                tui_mode = False  # init failed → classic CLI
+
         from core.updater import local_version as _lv
         print(theme.render_banner(_lv(), color=theme.supports_color()))
         print(f"  Model    : {self.model}")
         print(f"  Strategy : {self.strategy.value}")
         print(f"  Dir      : {self.working_dir}")
+        if self._workdir_note:
+            print(f"  ⚠ {self._workdir_note}")
         print(f"  Confirm  : {'on' if self.confirm else 'off'}")
         print(f"  Verifier : {'on (--verify)' if self.args.verify else 'off'}")
         print(f"  ToolSubset: {'off (all tools)' if self.args.all_tools else 'on (phase-based)'}")
@@ -789,21 +861,24 @@ class MapacheCLI:
             print(f"  ⬆ {notice}")
 
         hint = "  Type /help for commands"
-        if self._ptk_enabled():
+        if tui_mode or self._ptk_enabled():
             hint += "  ·  type / for live command suggestions"
         print(f"\n{hint}")
-        # Mid-turn steering is a fallback-mode feature (prompt_toolkit's prompt
-        # can't run alongside a turn); only advertise it when it's available.
-        if not self._ptk_enabled():
+        # Mid-turn steering: always on in the TUI (submit while a turn runs → steer);
+        # in the classic CLI only the plain fallback mode supports it.
+        if tui_mode:
+            print(f"  (type while the agent works to steer it · Ctrl-C to quit)")
+        elif not self._ptk_enabled():
             print(f"  (you can type while the agent works to steer it mid-task)")
         print()
 
         # Input: prompt_toolkit (when available on a real TTY) gives a live slash-
         # command dropdown + ↑ history; otherwise the persistent background line
         # reader below is used unchanged — the byte-for-byte path pipes/tests rely on.
+        # The TUI owns its own input widget, so neither path is set up in TUI mode.
         self._ptk = None
         self._input_q = None
-        if self._ptk_enabled():
+        if not tui_mode and self._ptk_enabled():
             hist = None
             try:
                 hist_dir = os.path.join(os.path.expanduser("~"), ".mapache")
@@ -813,7 +888,7 @@ class MapacheCLI:
                 hist = None
             self._ptk = enhanced_input.make_session(hist)
 
-        if self._ptk is None:
+        if not tui_mode and self._ptk is None:
             loop = asyncio.get_event_loop()
             self._input_q = asyncio.Queue()
 
@@ -825,6 +900,9 @@ class MapacheCLI:
             threading.Thread(target=_stdin_reader, daemon=True).start()
 
         try:
+            if tui_mode and self.tui is not None:
+                await self.tui.run()
+                return
             while True:
                 try:
                     raw = await self._read_command_line()
@@ -835,33 +913,12 @@ class MapacheCLI:
                     print("\nBye.")
                     break
 
-                raw = raw.strip()
-                if not raw:
-                    continue
-
-                if raw.startswith("/"):
-                    # Unknown command → 'did you mean' rather than a silent no-op.
-                    if not self._is_known_command(raw):
-                        self._suggest_command(raw)
-                        continue
-                    if await self._handle_command(raw):
-                        continue
+                if not await self._process_line(raw):
                     break
-
-                if raw.startswith("!"):
-                    await self._run_shell_direct(raw[1:].strip())
-                    continue
-
-                if raw.startswith("?"):
-                    raw = f"search the web for: {raw[1:].strip()}"
-
-                # Just-in-time integration setup: if the request names a known
-                # service (Shodan/VirusTotal/…) that isn't wired up, offer to add
-                # it now (paste key), then run the turn with the tool available.
-                await self._maybe_setup_integration(raw)
-
-                await self._agent_turn(raw)
         finally:
+            # Restore stdout first so shutdown messages print to the real terminal
+            # (the TUI's full-screen app has torn down by now).
+            sys.stdout = getattr(self, "_orig_stdout", sys.stdout)
             if self.engagement_log:
                 self.engagement_log.close(summary={
                     "target": self.controller.chain.attack_state.target
@@ -873,6 +930,44 @@ class MapacheCLI:
             if self.mcp:
                 await self.mcp.close_all()
             await self.memory.end_session()
+
+    async def _process_line(self, raw: str) -> bool:
+        """Handle one submitted line (command, shell, web-search shorthand, or a
+        turn). Returns False if the session should exit. Shared by the classic REPL
+        loop and the full-screen TUI so both behave identically."""
+        raw = (raw or "").strip()
+        if not raw:
+            return True
+
+        if raw.startswith("/"):
+            # Unknown command → 'did you mean' rather than a silent no-op.
+            if not self._is_known_command(raw):
+                self._suggest_command(raw)
+                return True
+            # _handle_command returns truthy to keep the session, falsy to quit.
+            return bool(await self._handle_command(raw))
+
+        if raw.startswith("!"):
+            await self._run_shell_direct(raw[1:].strip())
+            return True
+
+        if raw.startswith("?"):
+            raw = f"search the web for: {raw[1:].strip()}"
+
+        # Just-in-time integration setup asks for an API key on stdin, which can't
+        # run under the full-screen TUI — skip the prompt there (still available in
+        # the classic CLI). The turn itself runs the same in both.
+        if self.tui is None:
+            await self._maybe_setup_integration(raw)
+
+        await self._agent_turn(raw)
+        return True
+
+    async def _tui_on_run(self, text: str) -> None:
+        """A line submitted in the TUI: run it; if a command asked to quit, exit."""
+        keep_going = await self._process_line(text)
+        if not keep_going and self.tui is not None and self.tui._app is not None:
+            self.tui._app.exit()
 
     async def _agent_turn(self, user_input: str) -> None:
         if self.controller is None:
@@ -1003,13 +1098,32 @@ class MapacheCLI:
 
     async def _thinking_ticker(self) -> None:
         """The 'thinking' line: a spinner + rotating word, painted until cancelled.
-        The single clear happens in _stop_ticker / _on_token (one owner), so this
-        never clears in its own cancellation path (which could wipe fresh output)."""
+        While a tool is executing it shows 'running <tool>…' instead of a filler
+        word. The single clear happens in _stop_ticker / _on_token (one owner), so
+        this never clears in its own cancellation path (could wipe fresh output)."""
         i = 0
         while True:
-            self.render.thinking(theme.thinking_line(i))
+            tool = getattr(self, "_running_tool", None)
+            frame = theme.running_line(i, tool) if tool else theme.thinking_line(i)
+            self.render.thinking(frame)
             i += 1
             await asyncio.sleep(0.2)
+
+    async def _on_task_start(self, event) -> None:
+        """A tool began — the spinner switches to 'running <tool>…'."""
+        self._running_tool = event.data.get("tool_name")
+
+    async def _on_task_end(self, event) -> None:
+        """A tool finished — settle a 'ran <tool> · <N>s' line above the spinner."""
+        self._running_tool = None
+        data = event.data
+        frame = theme.step_done_line(
+            data.get("tool_name", "?"),
+            (data.get("duration_ms") or 0.0) / 1000.0,
+            error=bool(data.get("error")),
+            color=theme.supports_color(),
+        )
+        self.render.step_line(frame)
 
     def _is_known_command(self, raw: str) -> bool:
         base = raw.split()[0].lower()
@@ -1574,7 +1688,10 @@ def parse_args() -> argparse.Namespace:
                         help="Primary model id (default: from config / "
                              "MAPACHE_MODEL env / built-in default)")
     parser.add_argument("--ollama-url", default=None)
-    parser.add_argument("--dir", "-d", default=os.getcwd())
+    parser.add_argument("--dir", "-d", default=None,
+                        help="Working directory (holds plugins/generated, "
+                             "engagements, project config). Default: the current "
+                             "directory, or a per-user workspace if it isn't writable.")
     parser.add_argument("--strategy", default=None,
                         choices=["single", "pipeline", "auto", "hybrid"],
                         help="single: always use --model. "
@@ -1598,6 +1715,10 @@ def parse_args() -> argparse.Namespace:
                         help="Disable the rich TUI (panels/colour) and use plain "
                              "line output. Auto-selected for pipes/dumb terminals "
                              "or when the `rich` package isn't installed.")
+    parser.add_argument("--tui", action="store_true",
+                        help="Full-screen chat UI: a bordered input box pinned to "
+                             "the bottom with a scrolling output region above "
+                             "(needs prompt_toolkit + a real terminal).")
     parser.add_argument("--exec-backend", default=None,
                         choices=["local", "ssh", "docker"],
                         help="Where `shell` commands run (feature H). ssh/docker "
@@ -1649,11 +1770,28 @@ async def main() -> None:
         from cli.setup_wizard import run_config_cmd
         setup_logging(level="WARNING")
         sys.exit(await run_config_cmd(argv[1:]))
+    if argv and argv[0] == "serve":
+        # `serve` = launch the full-screen TUI. Rewrite argv so the normal flag
+        # parser handles any extra options (--model, …) with --tui forced on.
+        sys.argv = [sys.argv[0], *argv[1:], "--tui"]
 
     args = parse_args()
-    setup_logging(level="DEBUG" if args.debug else "INFO", log_dir=args.log_dir)
+    # Console stays quiet by default (WARNING) so the live status line isn't buried
+    # under agent_controller INFO logs; the file log keeps everything at DEBUG.
+    # `--debug` restores full console verbosity.
+    setup_logging(level="DEBUG" if args.debug else "WARNING", log_dir=args.log_dir)
     cli = MapacheCLI(args)
     await cli.run()
+
+
+def main_sync() -> None:
+    """Console-script entry point (`mapache …`). Wraps the async main()."""
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nBye.")
+    except SystemExit:
+        raise
 
 
 if __name__ == "__main__":

@@ -209,3 +209,33 @@ def thinking_line(i: int, *, color: bool = True) -> str:
     word = thinking_word(i // 4)
     ell = "…" if _can_encode("…") else "..."
     return paint(f"  {spin} {word}{ell}", "amber", color=color)
+
+
+def running_line(i: int, label: str, *, color: bool = True) -> str:
+    """Live spinner line for an in-flight tool: '⠹ running <label>…'."""
+    uni = _can_encode(SPINNER_FRAMES)
+    spin = spinner_frame(i, unicode=uni)
+    ell = "…" if _can_encode("…") else "..."
+    return paint(f"  {spin} running {label}{ell}", "amber", color=color)
+
+
+def format_duration(seconds: float) -> str:
+    """Compact human duration: '820ms', '3s', '1m20s'."""
+    if seconds < 1:
+        return f"{int(round(seconds * 1000))}ms"
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    minutes, secs = divmod(int(round(seconds)), 60)
+    return f"{minutes}m{secs:02d}s"
+
+
+def step_done_line(label: str, seconds: float, *, error: bool = False,
+                   color: bool = True) -> str:
+    """Completion line shown when a tool finishes: '⏺ ran <label> · 3s'
+    (or '✗ <label> failed · 3s'). Degrades to ASCII glyphs on a cp1252 console."""
+    dur = format_duration(seconds)
+    if error:
+        glyph = "✗" if _can_encode("✗") else "x"
+        return paint(f"  {glyph} {label} failed · {dur}", "amber", color=color)
+    glyph = "⏺" if _can_encode("⏺") else "*"
+    return paint(f"  {glyph} ran {label} · {dur}", "grey", color=color)

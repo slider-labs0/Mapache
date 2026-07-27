@@ -841,6 +841,49 @@ async def test_agent_duplicate_call_guard():
     print("  PASS  agent_duplicate_call_guard")
 
 
+async def test_agent_tool_events_carry_timing():
+    """Each tool call emits task.start, then task.result with a duration_ms — the
+    signals the CLI uses to draw 'running <tool>…' / 'ran <tool> · <N>s'."""
+    class Stub:
+        async def dispatch(self, name, args, session_id):
+            return "ok"
+
+    class OneToolModel:
+        supports_tools = False
+        def __init__(self):
+            self.n = 0
+        async def chat(self, messages, tools=None, json_mode=False, stream=False):
+            self.n += 1
+            if self.n == 1:
+                return json.dumps({"type": "tool_call", "tool": "shell",
+                                   "args": {"cmd": "id"}})
+            return json.dumps({"type": "response", "content": "done"})
+
+    controller = AgentController(
+        model_provider=OneToolModel(), tool_dispatcher=Stub(),
+        mode=AgentMode.AGENT, use_function_calling=False,
+    )
+    controller.register_tool(ToolSchema(
+        name="shell", description="run",
+        parameters={"type": "object", "properties": {"cmd": {"type": "string"}},
+                    "required": ["cmd"]}))
+    starts: list = []
+    results: list = []
+    async def cap_start(e):
+        starts.append(e.data)
+    async def cap_result(e):
+        results.append(e.data)
+    controller.bus.subscribe("task.start", cap_start)
+    controller.bus.subscribe("task.result", cap_result)
+    await controller.start()
+    await controller.run("go", session_id="timing-test")
+
+    assert any(d.get("tool_name") == "shell" for d in starts), starts
+    shell_result = next(d for d in results if d.get("tool_name") == "shell")
+    assert "duration_ms" in shell_result and shell_result["duration_ms"] >= 0.0
+    print("  PASS  agent_tool_events_carry_timing")
+
+
 # ------------------------------------------------------------------ #
 # Model routing tests (Phase 7)
 # ------------------------------------------------------------------ #
@@ -2898,7 +2941,57 @@ def test_theme_logo_and_thinking():
     # frames 0..3 keep the same word (word = i//4), frame 4 advances it
     assert theme.thinking_word(0 // 4) == theme.thinking_word(3 // 4)
     assert theme.thinking_word(4 // 4) != theme.thinking_word(0 // 4)
+
+    # Live "running <tool>" line + "ran <tool> · <dur>" completion line.
+    rl = theme.running_line(0, "install_github_tool", color=False)
+    assert "running install_github_tool" in rl
+    assert theme.format_duration(0.82) == "820ms"
+    assert theme.format_duration(3.0) == "3s"
+    assert theme.format_duration(80) == "1m20s"
+    done = theme.step_done_line("shell", 20.0, color=False)
+    assert "ran shell" in done and "20s" in done
+    failed = theme.step_done_line("nmap_scan", 2.0, error=True, color=False)
+    assert "nmap_scan failed" in failed and "2s" in failed
     print("  PASS  theme_logo_and_thinking")
+
+
+def test_tui_output_model_and_renderer():
+    """The full-screen TUI's pure state: transcript + live status line, and the
+    renderer/submit routing that feed it (no prompt_toolkit console needed)."""
+    from cli.tui import (OutputModel, TuiRenderer, classify_submit,
+                         SUBMIT_EMPTY, SUBMIT_STEER, SUBMIT_RUN)
+
+    # OutputModel: committed text + one mutable status line at the bottom.
+    changed = []
+    m = OutputModel(on_change=lambda: changed.append(1))
+    m.commit("hello")
+    m.append("agent > ")
+    m.append("hi")
+    m.set_status("  ⠹ running shell…")
+    r = m.render()
+    assert "hello" in r and "agent > hi" in r and "running shell" in r
+    assert r.endswith("running shell…")  # status renders last
+    m.clear_status()
+    assert "running shell" not in m.render()
+    assert changed  # on_change fired (drives app.invalidate)
+
+    # Submit routing: empty ignored; steer while a turn runs; else a fresh turn.
+    assert classify_submit("  ", turn_running=False) == SUBMIT_EMPTY
+    assert classify_submit("go", turn_running=True) == SUBMIT_STEER
+    assert classify_submit("go", turn_running=False) == SUBMIT_RUN
+
+    # TuiRenderer writes turn output into the model (same shape as PlainRenderer).
+    m2 = OutputModel()
+    tr = TuiRenderer(m2)
+    tr.start_turn()
+    tr.stream("answer")
+    tr.agent_result("", ["shell", "nmap_scan"], 3, None)
+    tr.step_line("  ⏺ ran shell · 2s")
+    out = m2.render()
+    assert "agent > answer" in out
+    assert "used: shell, nmap_scan, 3 steps" in out
+    assert "ran shell · 2s" in out
+    print("  PASS  tui_output_model_and_renderer")
 
 
 def test_enhanced_input_completion():
@@ -3864,6 +3957,7 @@ async def run_all():
     await test_agent_delegation()
     await test_mcp_client()
     await test_agent_duplicate_call_guard()
+    await test_agent_tool_events_carry_timing()
 
     print("\nSelf-authored tools (feature A)")
     await test_generated_tool_roundtrip()
@@ -3963,6 +4057,7 @@ async def run_all():
 
     print("\nCLI theme + enhanced input (UI)")
     test_theme_logo_and_thinking()
+    test_tui_output_model_and_renderer()
     test_enhanced_input_completion()
     await test_cli_ptk_turn_no_concurrent_prompt()
 
