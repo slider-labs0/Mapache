@@ -21,12 +21,19 @@ the integrity gate and the signature confirms a self-/key-shared publisher.
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 # Installable types with a clear home. (prompt/persona packs are a documented
 # future type — no consumer wired yet, so not accepted here.)
-VALID_TYPES = {"generated_tool", "mcp_server"}
+#   generated_tool — self-authored tool package (feature A)
+#   mcp_server     — an MCP server entry in mcp.json (the MCP client)
+#   external_tool  — a bring-your-own command tool backed by a GitHub repo, an
+#                    `integrations` entry the CLI turns into a CommandTool
+#                    (tools/external_tools.py). This is the shape a user's
+#                    uploaded GitHub tool takes in the hub.
+VALID_TYPES = {"generated_tool", "mcp_server", "external_tool"}
 
 
 def _sha256(text: str) -> str:
@@ -47,10 +54,14 @@ class SkillManifest:
     parameters: dict[str, Any] = field(default_factory=dict)
     code: str = ""
     phase: str = "always"
-    # mcp_server payload
+    # mcp_server payload (command is also the external_tool command template)
     command: str = ""
     args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
+    # external_tool payload (a GitHub-repo command tool). `command` (above) is the
+    # run template ({dir} = clone path, {param} = args); `parameters` is its schema.
+    repo: str = ""
+    permission: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -60,6 +71,7 @@ class SkillManifest:
             "signature": self.signature, "signer": self.signer,
             "parameters": self.parameters, "code": self.code, "phase": self.phase,
             "command": self.command, "args": list(self.args), "env": dict(self.env),
+            "repo": self.repo, "permission": self.permission,
         }
 
     @classmethod
@@ -72,6 +84,7 @@ class SkillManifest:
             parameters=dict(d.get("parameters") or {}), code=d.get("code", ""),
             phase=d.get("phase", "always"), command=d.get("command", ""),
             args=list(d.get("args") or []), env=dict(d.get("env") or {}),
+            repo=d.get("repo", ""), permission=d.get("permission", ""),
         )
 
 
@@ -87,6 +100,15 @@ def payload_digest(m: SkillManifest) -> str:
         return sha256_of(render_tool_source(m.code))
     if m.skill_type == "mcp_server":
         canonical = m.command + "\n" + " ".join(m.args)
+        return _sha256(canonical)
+    if m.skill_type == "external_tool":
+        # Digest the whole runnable spec: the repo that gets cloned and the
+        # command that runs are what a tamperer would change, so both (plus the
+        # param schema and permission) are covered. Order-stable via sort_keys.
+        canonical = json.dumps(
+            {"repo": m.repo, "command": m.command,
+             "permission": m.permission, "parameters": m.parameters},
+            sort_keys=True, separators=(",", ":"))
         return _sha256(canonical)
     return _sha256(m.code or "")
 
@@ -141,3 +163,19 @@ def make_mcp_server_manifest(
         name=name, version=version, skill_type="mcp_server",
         description=description, deps=deps or [], command=command,
         args=list(args), env=env or {}), sign_key)
+
+
+def make_external_tool_manifest(
+    name: str, version: str, description: str, repo: str, command: str,
+    *, parameters: Optional[dict] = None, permission: str = "shell",
+    deps: Optional[list[str]] = None, sign_key: Optional[bytes] = None,
+) -> SkillManifest:
+    """Package a GitHub-repo command tool for the hub. `repo` is git-cloned once
+    at install ({dir} = clone path); `command` is the run template. Installs as a
+    config `integrations` entry that the CLI builds into a CommandTool."""
+    # parameters is the property map external_tools.py expects under `params`
+    # (name -> {type, description, required?}), NOT a full JSON schema.
+    return _sign(SkillManifest(
+        name=name, version=version, skill_type="external_tool",
+        description=description, deps=deps or [], repo=repo, command=command,
+        parameters=dict(parameters or {}), permission=permission), sign_key)

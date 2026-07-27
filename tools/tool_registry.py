@@ -39,6 +39,15 @@ class PermissionDeniedError(Exception):
         self.permission = permission
 
 
+class ToolNameCollisionError(Exception):
+    """A tool tried to claim a name already held by a different tool."""
+    def __init__(self, name: str, incumbent: str) -> None:
+        super().__init__(
+            f"Tool name '{name}' is already registered by {incumbent}; "
+            f"pass replace=True to intentionally replace it")
+        self.tool_name = name
+
+
 class ToolRegistry:
     """
     Central registry of all available tools.
@@ -66,12 +75,25 @@ class ToolRegistry:
     # Registration
     # ------------------------------------------------------------------ #
 
-    def register(self, tool: BaseTool) -> None:
-        """Register a tool. Overwrites if name already exists."""
+    def register(self, tool: BaseTool, *, replace: bool = False) -> None:
+        """Register a tool by name.
+
+        Name-collision guard: a *different* tool may not silently overwrite an
+        existing name — that lets one source (e.g. a self-authored `create_tool`
+        tool) shadow another (e.g. an installed GitHub/integration tool of the same
+        name), which is almost always a mistake. On collision this raises
+        `ToolNameCollisionError` unless `replace=True` is passed to signal an
+        intentional update (a reinstall, a live refresh). Re-registering the *same*
+        tool instance is always a harmless no-op.
+        """
         if not tool.name:
             raise ValueError(f"Tool {tool.__class__.__name__} has no name")
+        existing = self._tools.get(tool.name)
+        if existing is not None and existing is not tool and not replace:
+            raise ToolNameCollisionError(tool.name, type(existing).__name__)
         self._tools[tool.name] = tool
-        logger.info("Tool registered: %s (perms=%s)", tool.name,
+        verb = "replaced" if (existing is not None and existing is not tool) else "registered"
+        logger.info("Tool %s: %s (perms=%s)", verb, tool.name,
                     [p.value for p in tool.permissions])
 
     def unregister(self, name: str) -> None:

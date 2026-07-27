@@ -1449,6 +1449,41 @@ async def test_openai_provider_normalizes_response():
     print("  PASS  openai_provider_normalizes_response")
 
 
+async def test_openai_provider_stream_surfaces_error_body():
+    """A non-2xx streamed response surfaces the real API error, not the httpx
+    'access streaming content without read()' masking error."""
+    p = OpenAICompatibleProvider(model="grok-4", base_url="https://api.x.ai/v1",
+                                 api_key="sk-test")
+
+    class _FakeResp:
+        status_code = 429
+        def __init__(self):
+            self.text = ""
+        async def aread(self):
+            self.text = '{"error":"rate limit exceeded"}'
+        async def aiter_lines(self):  # pragma: no cover - error path never streams
+            if False:
+                yield ""
+
+    class _FakeStream:
+        async def __aenter__(self):
+            return _FakeResp()
+        async def __aexit__(self, *a):
+            return False
+
+    p._client.stream = lambda *a, **k: _FakeStream()
+
+    err = None
+    try:
+        async for _ in p.chat_stream(messages=[{"role": "user", "content": "hi"}]):
+            pass
+    except RuntimeError as exc:
+        err = str(exc)
+    assert err and "429" in err and "rate limit exceeded" in err, err
+    await p.close()
+    print("  PASS  openai_provider_stream_surfaces_error_body")
+
+
 def test_model_pool_provider_selection():
     cfg = MapacheConfig.from_dict({"providers": {
         "ollama": {"kind": "ollama", "base_url": "http://localhost:11434"},
@@ -3210,7 +3245,7 @@ async def test_external_tools():
         specs = [
             {"name": "shodan_host", "kind": "http", "method": "GET",
              "url": "https://api.shodan.io/shodan/host/{ip}?key=${ET_TEST_KEY}",
-             "params": {"ip": {"type": "string", "description": "ip"}}},
+             "params": {"ip": {"type": "string", "description": "ip", "required": True}}},
             {"name": "my_tool", "kind": "command", "command": "echo {args}",
              "params": {"args": {"type": "string", "description": "a"}}},
             {"name": "BadName!", "kind": "http", "url": "x"},   # bad name → skip
@@ -3224,6 +3259,11 @@ async def test_external_tools():
         ht = next(t for t in tools if t.name == "shodan_host")
         assert isinstance(ht, HttpApiTool)
         assert "ip" in ht.parameters["properties"]
+        # A convenience `required: true` on a param is promoted to the object-level
+        # array and STRIPPED from the property — an inline required boolean is
+        # invalid JSON Schema and strict validators (xAI) 400 on it.
+        assert ht.parameters["required"] == ["ip"]
+        assert "required" not in ht.parameters["properties"]["ip"]
         assert ht.to_context_schema().name == "shodan_host"  # per-instance name
 
         # A command tool runs through the backend, egress-wrapped.
@@ -3242,6 +3282,138 @@ async def test_external_tools():
     finally:
         os.environ.pop("ET_TEST_KEY", None)
     print("  PASS  external_tools")
+
+
+async def test_command_tool_clone_autoheal():
+    """A stale/partial clone dir (only .git) is detected + re-cloned, not reused."""
+    import os
+    from pathlib import Path
+    from tools.external_tools import CommandTool
+
+    # _has_checkout: real checkout has working-tree files; empty / .git-only don't.
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp)
+        (p / "empty").mkdir()
+        assert CommandTool._has_checkout(p / "empty") is False
+        (p / "gitonly" / ".git").mkdir(parents=True)
+        assert CommandTool._has_checkout(p / "gitonly") is False
+        (p / "good").mkdir()
+        (p / "good" / "README").write_text("hi", encoding="utf-8")
+        assert CommandTool._has_checkout(p / "good") is True
+
+    # Auto-heal: a `.git`-only remnant is removed before a fresh clone.
+    old = {"HOME": os.environ.get("HOME"), "USERPROFILE": os.environ.get("USERPROFILE")}
+    with tempfile.TemporaryDirectory() as home:
+        os.environ["HOME"] = home
+        os.environ["USERPROFILE"] = home
+        try:
+            ct = CommandTool({"name": "autoheal_x", "kind": "command",
+                              "command": "echo {dir}", "repo": "https://github.com/me/x"})
+            dest = Path(home) / ".mapache" / "tools" / "autoheal_x"
+            (dest / ".git").mkdir(parents=True)
+            (dest / ".git" / "stale").write_text("x", encoding="utf-8")  # partial clone
+
+            async def fake_clone(d: Path):  # stand in for a real network clone
+                d.mkdir(parents=True, exist_ok=True)
+                (d / "README").write_text("hello", encoding="utf-8")
+                return None
+            ct._clone_local = fake_clone  # type: ignore[assignment]
+
+            result = await ct._ensure_repo()
+            assert result == str(dest)
+            assert (dest / "README").exists()             # re-cloned
+            assert not (dest / ".git" / "stale").exists()  # stale removed first
+        finally:
+            for k, v in old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+    print("  PASS  command_tool_clone_autoheal")
+
+
+def test_tool_registry_name_collision_guard():
+    """A different tool can't silently overwrite an existing name; replace=True can."""
+    from tools.tool_registry import ToolRegistry, ToolNameCollisionError
+    from plugins.sdk.base_tool import BaseTool, ToolResult
+
+    class _Dup(BaseTool):
+        name = "dup"
+        description = "d"
+        parameters = {"type": "object", "properties": {}}
+        async def execute(self, **k):
+            return ToolResult.ok("x")
+
+    reg = ToolRegistry()
+    a, b = _Dup(), _Dup()
+    reg.register(a)
+    reg.register(a)  # same instance → harmless no-op
+    assert reg.get("dup") is a
+    try:
+        reg.register(b)  # different tool, same name → guarded
+        assert False, "expected ToolNameCollisionError"
+    except ToolNameCollisionError:
+        pass
+    assert reg.get("dup") is a  # incumbent kept, not clobbered
+    reg.register(b, replace=True)  # explicit, intentional replace
+    assert reg.get("dup") is b
+    print("  PASS  tool_registry_name_collision_guard")
+
+
+async def test_generated_tool_collision_guard():
+    """create_tool refuses a taken name — up front, and via rollback if it races."""
+    from pathlib import Path
+    from tools.tool_registry import ToolRegistry
+    from tools.generated_tool_manager import GeneratedToolManager
+    from plugins.sdk.base_tool import BaseTool, ToolResult
+
+    class _Incumbent(BaseTool):
+        name = "taken"
+        description = "the real tool"
+        parameters = {"type": "object", "properties": {}}
+        async def execute(self, **k):
+            return ToolResult.ok("real")
+
+    schema = {"type": "object", "properties": {}}
+
+    # Up-front: the name is already registered → refuse, write nothing.
+    with tempfile.TemporaryDirectory() as base:
+        reg = ToolRegistry()
+        reg.register(_Incumbent())
+        mgr = GeneratedToolManager(registry=reg, controller=None, base_dir=base)
+        msg = mgr.create("taken", "d", schema, 'return "x"\n')
+        assert "already exists" in msg
+        assert not (mgr.generated_dir / "taken").exists()  # nothing persisted
+
+    # Race: has() passes (name looks free) but the register at _expose collides —
+    # the package must roll back so no orphan shadows the real tool.
+    with tempfile.TemporaryDirectory() as base:
+        reg = ToolRegistry()
+        inc = _Incumbent()
+        inc.name = "racy"
+        reg.register(inc)
+        mgr = GeneratedToolManager(registry=reg, controller=None, base_dir=base)
+        reg.has = lambda _n: False  # simulate the check-then-register race window
+        msg = mgr.create("racy", "d", schema, 'return "y"\n')
+        assert "already exists" in msg
+        assert not (mgr.generated_dir / "racy").exists()  # rolled back, no orphan
+        assert reg.get("racy") is inc  # the real tool still wins
+    print("  PASS  generated_tool_collision_guard")
+
+
+def test_installed_integration_visible_via_always_tools():
+    """A freshly installed integration is exposed to the model only when pinned into
+    always_tools — as install_github_tool / integration registration now does. Without
+    the pin, phase-based subsetting filters it out and the model never sees it."""
+    from core.conversation_chain import ConversationChain, CORE_TOOLS
+    chain = ConversationChain()
+    registered = set(CORE_TOOLS) | {"hello_recon"}
+    # Not pinned → filtered out (the invisibility bug that made grok flail/delegate).
+    assert "hello_recon" not in chain.active_tool_names(registered)
+    # Pinned → visible (the fix).
+    chain.always_tools.add("hello_recon")
+    assert "hello_recon" in chain.active_tool_names(registered)
+    print("  PASS  installed_integration_visible_via_always_tools")
 
 
 def test_integration_catalog():
@@ -3378,6 +3550,188 @@ async def test_hub_tools_no_registry():
     out = await SkillInstallTool(lambda: None).execute(name="whatever")
     assert "No skill hub" in out.output
     print("  PASS  hub_tools_no_registry")
+
+
+def test_hub_external_tool_publish_and_verify():
+    """Publishing a GitHub repo → a verified external_tool manifest (the upload flow)."""
+    import json as _json
+    from hub import (manifest_from_github, verify_manifest, add_to_index,
+                     PublishError)
+    from core import provenance
+
+    repo = "https://github.com/me/mytool"
+    repo_manifest = _json.dumps({
+        "name": "my_recon",
+        "version": "1.0.0",
+        "description": "my custom recon tool",
+        "command": "python3 {dir}/run.py {args}",
+        "params": {"args": {"type": "string", "description": "arguments"}},
+        "permission": "shell",
+        "deps": ["requests"],
+    })
+
+    key = b"\x09" * 32
+    m = manifest_from_github(repo, repo_manifest, sign_key=key)
+    assert m.skill_type == "external_tool"
+    assert m.repo == repo and "{dir}" in m.command
+    # Checksum + signature verify; tampering the command breaks the checksum.
+    assert verify_manifest(m, key=key)[0] is True
+    assert verify_manifest(m, key=None)[1].__contains__("unverified")
+    m2 = manifest_from_github(repo, repo_manifest, sign_key=key)
+    m2.command = "python3 {dir}/evil.py {args}"  # tamper post-publish
+    assert verify_manifest(m2, key=key)[0] is False
+
+    # repo_url is authoritative — a repo field inside the file is ignored.
+    lying = _json.dumps({"name": "my_recon", "command": "sh {dir}/x.sh",
+                         "repo": "https://evil.example/x"})
+    assert manifest_from_github(repo, lying).repo == repo
+
+    # Validation: a command without {dir}, a bad name, and a bad remote are refused.
+    for bad, needle in [
+        ({"name": "my_recon", "command": "echo hi"}, "{dir}"),
+        ({"name": "Bad Name", "command": "sh {dir}/x"}, "name"),
+    ]:
+        try:
+            manifest_from_github(repo, _json.dumps(bad))
+            assert False, f"expected PublishError for {bad}"
+        except PublishError as exc:
+            assert needle in str(exc)
+    try:
+        manifest_from_github("not-a-url", _json.dumps(
+            {"name": "my_recon", "command": "sh {dir}/x"}))
+        assert False, "expected PublishError for bad repo url"
+    except PublishError as exc:
+        assert "remote" in str(exc)
+
+    # add_to_index folds it in (replacing a same-name entry) after verifying.
+    idx = add_to_index([{"name": "other", "skill_type": "mcp_server"}], m)
+    assert {e["name"] for e in idx} == {"other", "my_recon"}
+    idx2 = add_to_index(idx, m)  # same name → replaced, not duplicated
+    assert sum(1 for e in idx2 if e["name"] == "my_recon") == 1
+    print("  PASS  hub_external_tool_publish_and_verify")
+
+
+async def test_hub_install_external_tool():
+    """Installing an external_tool writes an integrations entry a CommandTool builds from."""
+    import json as _json
+    from pathlib import Path
+    from hub import manifest_from_github
+    from hub.registry import LocalRegistry
+    from hub.client import HubClient
+    from tools.external_tools import build_external_tools, CommandTool
+    from core.config import load_config
+
+    repo = "https://github.com/me/mytool"
+    m = manifest_from_github(repo, _json.dumps({
+        "name": "my_recon", "version": "2.0.0", "description": "recon",
+        "command": "python3 {dir}/run.py {args}",
+        "params": {"args": {"type": "string", "description": "arguments"}},
+        "permission": "shell"}))
+
+    with tempfile.TemporaryDirectory() as reg, tempfile.TemporaryDirectory() as home:
+        (Path(reg) / "index.json").write_text(
+            _json.dumps([m.to_dict()]), encoding="utf-8")
+        cfg_path = Path(home) / "config.json"
+
+        client = HubClient(LocalRegistry(reg),
+                           generated_dir=Path(home) / "gen",
+                           mcp_path=Path(home) / "mcp.json",
+                           config_path=cfg_path)
+        msg = client.install("my_recon")
+        assert "Installed external tool 'my_recon'" in msg
+
+        # The config now carries the integrations entry in external_tools shape.
+        data = _json.loads(cfg_path.read_text(encoding="utf-8"))
+        entry = next(e for e in data["integrations"] if e["name"] == "my_recon")
+        assert entry["kind"] == "command" and entry["repo"] == repo
+        assert entry["params"]["args"]["type"] == "string"
+
+        # …and the CLI builds a working CommandTool from it (no warnings).
+        cfg = load_config(global_path=cfg_path,
+                          environ={"HOME": home, "USERPROFILE": home})
+        tools, warnings = build_external_tools(cfg.integrations)
+        assert warnings == []
+        tool = next(t for t in tools if t.name == "my_recon")
+        assert isinstance(tool, CommandTool)
+
+        # Re-installing replaces rather than duplicates the entry.
+        client.install("my_recon")
+        data2 = _json.loads(cfg_path.read_text(encoding="utf-8"))
+        assert sum(1 for e in data2["integrations"] if e["name"] == "my_recon") == 1
+
+        # No config path configured → external_tool install is refused, not crashed.
+        no_cfg = HubClient(LocalRegistry(reg), generated_dir=Path(home) / "g2",
+                           mcp_path=Path(home) / "m2.json")
+        assert "Refused" in no_cfg.install("my_recon")
+    print("  PASS  hub_install_external_tool")
+
+
+async def test_hub_install_github_tool_via_nl():
+    """The natural-language front door: install_github_tool from a repo URL."""
+    import json as _json
+    from pathlib import Path
+    from hub.tools import InstallGithubToolTool
+    from tools.external_tools import CommandTool
+    from core.config import load_config
+
+    with tempfile.TemporaryDirectory() as home:
+        cfg = Path(home) / "config.json"
+        registered: list = []
+
+        # A fake GitHub fetch: the repo carries a mapache-tool.json.
+        async def fake_fetch(owner, repo, path):
+            assert path == "mapache-tool.json"
+            if owner == "me" and repo == "mytool":
+                return _json.dumps({
+                    "name": "my_recon", "version": "1.0.0", "description": "recon",
+                    "command": "python {dir}/run.py {args}",
+                    "params": {"args": {"type": "string", "description": "arguments"}},
+                    "permission": "shell"})
+            return None  # 404 for anything else
+
+        tool = InstallGithubToolTool(lambda: cfg, on_installed=registered.append,
+                                     fetch=fake_fetch)
+
+        # 1. Install from a repo that has a mapache-tool.json.
+        res = await tool.execute(repo="https://github.com/me/mytool")
+        assert res.success and "my_recon" in res.output
+        assert "callable now" in res.output  # hot-registered
+        assert registered and isinstance(registered[0], CommandTool)
+        assert registered[0].name == "my_recon"
+        # …persisted to config in external_tools shape.
+        entry = next(e for e in _json.loads(cfg.read_text("utf-8"))["integrations"]
+                     if e["name"] == "my_recon")
+        assert entry["kind"] == "command" and entry["repo"].endswith("me/mytool.git")
+        # …and load_config + build sees it (the CLI startup path).
+        cfg_obj = load_config(global_path=cfg, environ={"HOME": home, "USERPROFILE": home})
+        assert any(e["name"] == "my_recon" for e in cfg_obj.integrations)
+
+        # 2. A repo with NO mapache-tool.json → asks for a command (doesn't crash).
+        res2 = await tool.execute(repo="octocat/Hello-World")
+        assert not res2.success and "no mapache-tool.json" in res2.error
+
+        # 3. …and installs when the caller supplies the command inline (NL path where
+        #    the user describes how to run it). No fetch needed.
+        res3 = await tool.execute(
+            repo="octocat/Hello-World", name="hello_recon",
+            command="python -c \"import os,sys;print(os.listdir(sys.argv[1]))\" {dir}")
+        assert res3.success and "hello_recon" in res3.output
+        names = {e["name"] for e in _json.loads(cfg.read_text("utf-8"))["integrations"]}
+        assert names == {"my_recon", "hello_recon"}
+
+        # 4. A command without {dir} is refused (validation carries through).
+        res4 = await tool.execute(repo="me/x", name="bad", command="echo hi")
+        assert not res4.success and "{dir}" in res4.error
+
+        # 5. An unparseable repo is refused cleanly.
+        res5 = await tool.execute(repo="not a repo!!")
+        assert not res5.success
+
+    # Regression: the tool must be in CORE_TOOLS or the phase-subset filter hides it
+    # from the model (the exact bug that made grok fall back to create_tool).
+    from core.conversation_chain import CORE_TOOLS
+    assert "install_github_tool" in CORE_TOOLS
+    print("  PASS  hub_install_github_tool_via_nl")
 
 
 def test_hub_url_registry():
@@ -3537,6 +3891,7 @@ async def run_all():
 
     print("\nCloud providers (feature G)")
     await test_openai_provider_normalizes_response()
+    await test_openai_provider_stream_surfaces_error_body()
     test_model_pool_provider_selection()
     test_model_profile_is_local_gate()
 
@@ -3626,11 +3981,18 @@ async def run_all():
     await test_egress_wires_into_tools()
     test_config_execution_section()
     await test_external_tools()
+    await test_command_tool_clone_autoheal()
+    test_tool_registry_name_collision_guard()
+    await test_generated_tool_collision_guard()
+    test_installed_integration_visible_via_always_tools()
     test_integration_catalog()
 
     print("\nCommunity skill hub (feature I)")
     test_hub_manifest_and_verification()
     test_hub_install_generated_and_mcp()
+    test_hub_external_tool_publish_and_verify()
+    await test_hub_install_external_tool()
+    await test_hub_install_github_tool_via_nl()
     await test_hub_tools_no_registry()
     test_hub_url_registry()
 

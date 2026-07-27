@@ -45,8 +45,9 @@ CORE_TOOLS = {
     "cve_lookup",
     # Agent-maintained user profile (feature F) — record durable user facts.
     "user_remember",
-    # Community skill hub (feature I) — browse + install downloadable skills.
-    "skill_search", "skill_list", "skill_install",
+    # Community skill hub (feature I) — browse + install downloadable skills,
+    # and install a GitHub repo as a tool straight from a natural-language request.
+    "skill_search", "skill_list", "skill_install", "install_github_tool",
 }
 
 PHASE_TOOLS = {

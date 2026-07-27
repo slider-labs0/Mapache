@@ -7,6 +7,9 @@ Installs a verified skill into the right home:
   on-disk manifest is stamped `origin="hub"`, so A's loader re-verifies its sha256
   before compiling — a tampered package refuses to load even after install.
 - `mcp_server`     → an entry under `mcpServers` in `mcp.json` (the MCP client).
+- `external_tool`  → an entry in the global config's `integrations` list (a BYO
+  command tool backed by a GitHub repo); the CLI turns it into a CommandTool at
+  startup (tools/external_tools.py). This is how an uploaded GitHub tool installs.
 
 Safety: every install re-checks the checksum (and the signature when a trusted key
 is configured) BEFORE writing anything; a failure refuses the install. Installs do
@@ -33,11 +36,15 @@ class HubClient:
         *,
         generated_dir: str | Path,
         mcp_path: str | Path,
+        config_path: Optional[str | Path] = None,
         trusted_key: Optional[bytes] = None,
     ) -> None:
         self.registry = registry
         self.generated_dir = Path(generated_dir)
         self.mcp_path = Path(mcp_path)
+        # Where an `external_tool` install writes its integrations entry. When
+        # None, external_tool installs are refused (nothing to write into).
+        self.config_path = Path(config_path) if config_path else None
         self.trusted_key = trusted_key
 
     # -- browse --------------------------------------------------------- #
@@ -63,6 +70,10 @@ class HubClient:
             detail = self._install_generated_tool(m)
         elif m.skill_type == "mcp_server":
             detail = self._install_mcp_server(m)
+        elif m.skill_type == "external_tool":
+            if self.config_path is None:
+                return f"Refused '{name}': no config path configured for integrations."
+            detail = self._install_external_tool(m)
         else:  # pragma: no cover - verify_manifest already gates this
             return f"Refused '{name}': unsupported type {m.skill_type!r}."
         return f"{detail}  [{reason}]  Loads on next start."
@@ -96,3 +107,10 @@ class HubClient:
         self.mcp_path.parent.mkdir(parents=True, exist_ok=True)
         self.mcp_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
         return f"Installed MCP server '{m.name}' v{m.version} → {self.mcp_path}"
+
+    def _install_external_tool(self, m: SkillManifest) -> str:
+        # Append/replace this tool's integrations entry (verbatim config edit,
+        # preserving other entries' ${ENV} secrets). See hub.publish.install_to_config.
+        from .publish import install_to_config
+        path = install_to_config(m, self.config_path)
+        return f"Installed external tool '{m.name}' v{m.version} → integrations in {path}"

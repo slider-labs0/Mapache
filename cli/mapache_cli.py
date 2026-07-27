@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import shutil
 import sys
 import threading
 
@@ -57,7 +58,7 @@ from tools.filesystem_tool import (
     FileListTool, FileSearchTool,
 )
 from tools.tool_dispatcher import ToolDispatcher
-from tools.tool_registry import ToolRegistry
+from tools.tool_registry import ToolRegistry, ToolNameCollisionError
 from tools.generated_tool_manager import GeneratedToolManager, build_meta_tools
 
 try:
@@ -487,12 +488,20 @@ class MapacheCLI:
                 backend=self.exec_backend, egress=self.egress)
             for _w in ext_warn:
                 print(f"  ⚠ {_w}")
+            registered_ext = []
             for _t in ext_tools:
-                self.registry.register(_t)
-            self._integrations = ext_tools
-            if ext_tools:
-                print(f"  Tools+   : {len(ext_tools)} integration(s): "
-                      f"{', '.join(t.name for t in ext_tools)}")
+                try:  # an integration must not shadow a built-in of the same name
+                    self.registry.register(_t)
+                    registered_ext.append(_t)
+                except ToolNameCollisionError as _e:
+                    print(f"  ⚠ integration '{_t.name}' skipped — {_e}")
+            self._integrations = registered_ext
+            if registered_ext:
+                # Pin integrations so phase-based subsetting exposes them (they're
+                # phase-agnostic, like MCP tools) — otherwise the model never sees them.
+                self.controller.chain.always_tools |= {t.name for t in registered_ext}
+                print(f"  Tools+   : {len(registered_ext)} integration(s): "
+                      f"{', '.join(t.name for t in registered_ext)}")
 
             # Memory
             for tool in self.memory.get_tools():
@@ -605,7 +614,10 @@ class MapacheCLI:
             return
 
         for tool in mcp_tools:
-            self.registry.register(tool)
+            try:  # an MCP tool must not shadow a built-in / another server's tool
+                self.registry.register(tool)
+            except ToolNameCollisionError as exc:
+                print(f"  ⚠ MCP tool '{tool.name}' skipped — {exc}")
         if mcp_tools:
             # Pin MCP tool names so phase-based subsetting keeps them exposed.
             self.controller.chain.always_tools |= set(self.mcp.tool_names)
@@ -658,14 +670,43 @@ class MapacheCLI:
         registry_path = str((getattr(self.config, "hub", None) or {}).get("registry", "")).strip()
         if registry_path:
             from hub import make_registry, HubClient
+            from core.config import global_config_path
             self.hub_client = HubClient(
                 make_registry(registry_path),  # path → Local, http(s):// → Url
                 generated_dir=self.gen_manager.generated_dir,
-                mcp_path=self.args.mcp_config)
-        from hub.tools import SkillSearchTool, SkillListTool, SkillInstallTool
+                mcp_path=self.args.mcp_config,
+                # external_tool installs append to the global config's integrations.
+                config_path=global_config_path())
+        from hub.tools import (SkillSearchTool, SkillListTool, SkillInstallTool,
+                               InstallGithubToolTool)
+        from core.config import global_config_path
         self.registry.register(SkillSearchTool(lambda: self.hub_client))
         self.registry.register(SkillListTool(lambda: self.hub_client))
         self.registry.register(SkillInstallTool(lambda: self.hub_client))
+
+        # Natural-language front door: install a GitHub repo as a tool on request,
+        # registered live (same live-register path as generated tools) + persisted.
+        # An explicit install WINS (replace=True) — a reinstall/refresh, and it
+        # supersedes any same-named self-authored tool (retiring its package so it
+        # can't reclaim the name on restart). This is the deliberate asymmetry to the
+        # registry guard: implicit create_tool must not shadow; explicit install may.
+        def _live_register(tool):
+            if self.gen_manager is not None and tool.name in self.gen_manager.tools:
+                self.gen_manager._unexpose(tool.name)
+                shutil.rmtree(self.gen_manager.generated_dir / tool.name,
+                              ignore_errors=True)
+            self.registry.register(tool, replace=True)
+            self.controller.register_tool(tool.to_context_schema())
+            # Pin into always_tools so phase-based subsetting exposes it — without
+            # this the freshly installed tool is filtered out of the model's tool
+            # list (like MCP tools, integrations are phase-agnostic).
+            self.controller.chain.always_tools.add(tool.name)
+            if tool not in self._integrations:
+                self._integrations.append(tool)
+        self.registry.register(InstallGithubToolTool(
+            lambda: global_config_path(),
+            egress=self.egress, backend=self.exec_backend,
+            on_installed=_live_register))
 
         stats = self.gen_manager.load_all()
         if stats["loaded"] or stats["failed"]:
@@ -1055,9 +1096,11 @@ class MapacheCLI:
             for w in warns:
                 print(f"  ⚠ {w}")
             for t in tools:
-                self.registry.register(t)
+                self.registry.register(t, replace=True)  # re-running setup refreshes
                 self.controller.register_tool(t.to_context_schema())
-                self._integrations.append(t)
+                self.controller.chain.always_tools.add(t.name)  # pin for subsetting
+                if t not in self._integrations:
+                    self._integrations.append(t)
             print(f"  ✓ {recipe.display} ready — tools: "
                   f"{', '.join(t.name for t in tools)}")
         else:

@@ -1,0 +1,19 @@
+{
+  "_comment": "Drop this as `mapache-tool.json` in the root of a GitHub repo to publish it as a Mapache tool. The community hub reads it and mints a verified, installable skill (hub.publish.manifest_from_github). See tools/external_tools.py for the runtime.",
+
+  "name": "my_recon",
+  "version": "1.0.0",
+  "description": "My custom recon tool.",
+
+  "command": "python3 {dir}/run.py {args}",
+  "_command_note": "{dir} is the clone path (filled in at run time); {param} tokens map to the params below. A repo tool MUST reference {dir}.",
+
+  "params": {
+    "args": {"type": "string", "description": "arguments to pass", "required": true}
+  },
+
+  "permission": "shell",
+  "_permission_note": "one of: shell, network, filesystem, system_info, dangerous",
+
+  "deps": ["requests"]
+}

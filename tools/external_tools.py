@@ -38,6 +38,8 @@ import asyncio
 import os
 import re
 import shlex
+import shutil
+import stat
 from pathlib import Path
 from typing import Any, Optional
 
@@ -56,6 +58,17 @@ _PERMISSIONS = {
     "dangerous": Permission.DANGEROUS,
     "system_info": Permission.SYSTEM_INFO,
 }
+
+
+def _rmtree_force(path: Path) -> None:
+    """rmtree that survives read-only files (git packs on Windows resist deletion)."""
+    def _onerror(func: Any, p: str, _exc: Any) -> None:
+        try:
+            os.chmod(p, stat.S_IWRITE)
+            func(p)
+        except OSError:
+            pass
+    shutil.rmtree(path, onerror=_onerror)
 
 
 def _resolve_env(text: str) -> str:
@@ -80,9 +93,23 @@ def _fill(template: str, values: dict[str, Any], *, url: bool) -> str:
 
 
 def _param_schema(spec: dict) -> dict:
-    props = dict(spec.get("params") or {})
-    required = [k for k, v in props.items()
-                if isinstance(v, dict) and v.get("required")]
+    """Build a valid JSON-Schema object from a param spec.
+
+    A param may carry a convenience `"required": true` flag; that's promoted to the
+    object-level `required` array and STRIPPED from the property itself — an inline
+    `required` boolean is invalid JSON Schema and strict validators (e.g. the xAI
+    API) reject the whole tool with a 400.
+    """
+    raw = dict(spec.get("params") or {})
+    props: dict[str, Any] = {}
+    required: list[str] = []
+    for key, val in raw.items():
+        if isinstance(val, dict):
+            if val.get("required"):
+                required.append(key)
+            props[key] = {k: v for k, v in val.items() if k != "required"}
+        else:
+            props[key] = val
     return {"type": "object", "properties": props,
             "required": required or list(props.keys())}
 
@@ -178,17 +205,61 @@ class CommandTool(BaseTool):
             return None
         if self._clone_dir:
             return self._clone_dir
-        base = "/root/.mapache-tools" if self._remote() else \
-            str(Path.home() / ".mapache" / "tools")
-        d = f"{base}/{self.name}"
-        # Idempotent clone: only if the dir isn't already there.
-        clone = (f"[ -d {shlex.quote(d)} ] || "
-                 f"git clone --depth 1 {shlex.quote(self._repo)} {shlex.quote(d)}")
-        _out, err = await self._run(clone, 300)
-        if err:
-            raise RuntimeError(f"clone of {self._repo} failed: {err}")
-        self._clone_dir = d
-        return d
+        if self._remote():
+            # Remote backends (docker/ssh) are POSIX: an idempotent `[ -d ] ||`
+            # guard on the target host, run through the backend.
+            d = f"/root/.mapache-tools/{self.name}"
+            clone = (f"[ -d {shlex.quote(d)} ] || "
+                     f"git clone --depth 1 {shlex.quote(self._repo)} {shlex.quote(d)}")
+            _out, err = await self._run(clone, 300)
+            if err:
+                raise RuntimeError(f"clone of {self._repo} failed: {err}")
+            self._clone_dir = d
+            return d
+        # Local: check for the checkout in Python and clone via argv (no shell), so
+        # it's correct on Windows cmd.exe too — POSIX shell quoting / `[ -d ]` don't
+        # survive there.
+        dest = Path.home() / ".mapache" / "tools" / self.name
+        if not self._has_checkout(dest):
+            # A stale/partial dir (e.g. an interrupted clone, or a `.git`-only
+            # remnant a failed cleanup left behind) would otherwise wedge the tool
+            # forever — remove it so the clone lands in a clean path.
+            if dest.exists():
+                _rmtree_force(dest)
+            err = await self._clone_local(dest)
+            if err:
+                raise RuntimeError(f"clone of {self._repo} failed: {err}")
+        self._clone_dir = str(dest)
+        return self._clone_dir
+
+    @staticmethod
+    def _has_checkout(dest: Path) -> bool:
+        """True only if dest looks like a COMPLETED clone — a working tree with real
+        files, not an empty dir or a `.git`-only partial clone."""
+        try:
+            return dest.is_dir() and any(p.name != ".git" for p in dest.iterdir())
+        except OSError:
+            return False
+
+    async def _clone_local(self, dest: Path) -> Optional[str]:
+        """git clone into `dest` on the local host via argv (portable). Returns an
+        error string on failure, else None."""
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "git", "clone", "--depth", "1", self._repo, str(dest),
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        except (FileNotFoundError, OSError) as exc:
+            return f"could not launch git: {exc}"
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=300)
+        except asyncio.TimeoutError:
+            proc.kill()
+            return "clone timed out after 300s"
+        if proc.returncode != 0:
+            text = out.decode("utf-8", errors="replace").strip()
+            return text[:500] or f"git exited {proc.returncode}"
+        return None
 
     async def execute(self, **kwargs: Any) -> ToolResult:
         try:

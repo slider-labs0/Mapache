@@ -51,6 +51,7 @@ from tools.generated_tool import (
     save_manifest,
     write_generated_tool,
 )
+from tools.tool_registry import ToolNameCollisionError
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +141,14 @@ class GeneratedToolManager:
                 continue
             if tool.state == STATE_ARCHIVED:
                 continue  # archived tools live in archive_dir; ignore strays
-            self._expose(tool)
+            try:
+                self._expose(tool)
+            except ToolNameCollisionError as exc:
+                # A generated tool must not shadow a built-in / installed tool of
+                # the same name — skip it rather than crash startup.
+                failed += 1
+                logger.warning("Generated tool '%s' not loaded: %s", tool.name, exc)
+                continue
             loaded += 1
 
         stale = len(self.refresh_states())
@@ -193,6 +201,13 @@ class GeneratedToolManager:
         try:
             tool = load_generated_tool(tool_dir, shell=self.shell)
             self._expose(tool)
+        except ToolNameCollisionError:
+            # The registry guard catches a name taken between the has() check above
+            # and now (e.g. an install_github_tool running in the same turn) — roll
+            # back the just-written package so no orphan shadows the real tool.
+            shutil.rmtree(tool_dir, ignore_errors=True)
+            return (f"Error: a tool named '{name}' already exists (registered by "
+                    f"another tool). Pick another name.")
         except Exception as exc:
             shutil.rmtree(tool_dir, ignore_errors=True)
             return f"Error: failed to register '{name}': {exc}"
@@ -333,7 +348,10 @@ class CreateToolTool(BaseTool):
         "`async def run(args, shell)`: `args` is a dict of the validated "
         "arguments you declare, and `await shell(\"cmd\")` runs a shell command "
         "and returns its output. Return a string. The tool persists and becomes "
-        "callable on your next step. Do not recreate a tool that already exists."
+        "callable on your next step. Do not recreate a tool that already exists. "
+        "If the user points you at a GitHub repo (a URL or owner/repo) to add/install "
+        "as a tool, do NOT author a wrapper here — use `install_github_tool`, which "
+        "clones and wires the repo itself."
     )
     parameters = {
         "type": "object",

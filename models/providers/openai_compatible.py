@@ -127,7 +127,17 @@ class OpenAICompatibleProvider:
             async with self._client.stream(
                 "POST", f"{self.base_url}/chat/completions", json=payload,
             ) as response:
-                response.raise_for_status()
+                if response.status_code >= 400:
+                    # Read the error body while the stream is still OPEN — a streamed
+                    # response's .text isn't available until aread(), and touching it
+                    # after the context closes raises the confusing "Attempted to
+                    # access streaming response content, without having called read()"
+                    # error that MASKS the real API failure (rate limit, bad key, …).
+                    await response.aread()
+                    raise RuntimeError(
+                        f"{self.base_url} API error {response.status_code}: "
+                        f"{response.text[:300]}"
+                    )
                 async for line in response.aiter_lines():
                     line = line.strip()
                     if not line or not line.startswith("data:"):
@@ -150,9 +160,14 @@ class OpenAICompatibleProvider:
                     if content:
                         yield content
         except httpx.HTTPStatusError as exc:
+            # Fallback if a non-2xx slips through as an exception elsewhere.
+            try:
+                await exc.response.aread()
+                detail = exc.response.text[:300]
+            except Exception:
+                detail = "(unreadable error body)"
             raise RuntimeError(
-                f"{self.base_url} API error {exc.response.status_code}: "
-                f"{exc.response.text[:300]}"
+                f"{self.base_url} API error {exc.response.status_code}: {detail}"
             )
         except httpx.ConnectError:
             raise ConnectionError(f"Cannot connect to {self.base_url}.")
