@@ -257,6 +257,86 @@ _add(Operator(
 
 
 # --------------------------------------------------------------------------- #
+# Vulnerability-research pipeline (Vulnresearch) — five staged specialists that
+# run in order, passing state exclusively through the knowledge graph (each stage
+# spawns with a fresh context, reads prior findings via kg_query, records its own
+# via kg_add). VULN_PIPELINE is the canonical stage order.
+# --------------------------------------------------------------------------- #
+
+_add(Operator(
+    name="scanner", title="Scanner", phase="enumeration", model_role="executor",
+    description="Vuln-research stage 1 — surface vulnerability candidates (CVE/CVSS).",
+    tools={"nmap_scan", "kali_run", "searchsploit", "web_fetch", "http_request",
+           "cve_lookup", "web_search"},
+    expertise="broad discovery: enumerate services/versions and surface VULNERABILITY "
+              "CANDIDATES with CVE/CVSS where known. Record each candidate to the "
+              "knowledge graph (kg_add type=vulnerability) with the affected service; "
+              "do NOT confirm or exploit — that is later stages' job.",
+))
+_add(Operator(
+    name="detector", title="Detector", phase="analysis", model_role="planner",
+    read_only=True,
+    description="Vuln-research stage 2 — analyze candidates into confidence-rated findings.",
+    tools={"file_read", "kali_run", "cve_lookup", "web_search", "searchsploit"},
+    expertise="read the scanner's candidates from the knowledge graph, analyze each "
+              "(version match, exposure, preconditions) and RATE CONFIDENCE. READ-ONLY: "
+              "no exploitation. Record confidence + reasoning back to the graph for the "
+              "verifier.",
+))
+_add(Operator(
+    name="verifier", title="Verifier", phase="analysis", model_role="planner",
+    description="Vuln-research stage 3 — confirm findings (2+ methods for CRITICAL/HIGH).",
+    tools={"kali_run", "shell", "http_request", "msf_search", "searchsploit"},
+    expertise="confirm detector findings with concrete evidence — for CRITICAL/HIGH use "
+              "TWO independent methods. Quote the exact proof. Mark each finding verified "
+              "or refuted in the knowledge graph; only verified findings proceed.",
+))
+_add(Operator(
+    name="patcher", title="Patcher", phase="report", model_role="planner",
+    description="Vuln-research stage 4 — produce a patch or configuration fix.",
+    tools={"file_read", "file_write", "file_edit", "shell", "kali_run"},
+    expertise="for each verified finding, produce a concrete remediation: a code patch "
+              "or configuration change with exact file/line/setting. Write the fix to the "
+              "workspace and record its location in the knowledge graph.",
+))
+_add(Operator(
+    name="exploiter", title="Exploiter", phase="exploitation", model_role="executor",
+    description="Vuln-research stage 5 — build a working proof-of-concept.",
+    tools={"msf_search", "msf_run", "kali_run", "shell", "searchsploit"},
+    expertise="for a verified finding, build a WORKING proof-of-concept against the "
+              "in-scope target and capture the exact evidence (session, output, artifact). "
+              "Record the PoC + evidence in the knowledge graph.",
+))
+
+# Canonical Vulnresearch stage order (Discovery → Analysis → Confirmation →
+# Remediation → Exploitation). State flows between stages via the knowledge graph.
+VULN_PIPELINE = ("scanner", "detector", "verifier", "patcher", "exploiter")
+
+# Engagement planner (Soundwave-style). Delegated 'plan the engagement': turns the
+# mission into an OPPLAN of objectives and a short engagement brief, before any
+# offensive action. Read-only w.r.t. the target (planning + document generation).
+_add(Operator(
+    name="soundwave", title="Engagement Planner", phase="recon", model_role="planner",
+    read_only=True,
+    description="Engagement planner — turn the mission into an OPPLAN + engagement brief.",
+    tools={"opplan_add", "opplan_update", "opplan_show", "file_write", "web_search"},
+    expertise="translate the operator's mission into a concrete plan BEFORE any "
+              "offensive action: (1) seed the OPPLAN with ordered objectives via "
+              "opplan_add, each owned by the right specialist (recon_operator → "
+              "exploit_operator → post_operator, or the Vulnresearch stages); (2) write "
+              "a short engagement brief to the workspace covering rules of engagement, "
+              "scope, objectives, and abort/cleanup notes. Do not scan or exploit — "
+              "planning only.",
+))
+
+
+# Every specialist can read prior findings and record its own in the shared
+# knowledge graph — the durable channel between fresh-context objectives.
+for _op in _OPERATORS.values():
+    _op.tools |= {"kg_query", "kg_add"}
+
+
+# --------------------------------------------------------------------------- #
 # Lookup
 # --------------------------------------------------------------------------- #
 

@@ -11,6 +11,8 @@ mapache.json
 plugins/generated/
 plugins/archived/
 engagements/
+knowledge/
+opplan.json
 scope.json
 
 # Packaging build artifacts

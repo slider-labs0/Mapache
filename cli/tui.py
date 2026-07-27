@@ -94,6 +94,9 @@ class TuiRenderer(Renderer):
     def __init__(self, model: OutputModel) -> None:
         self.model = model
         self._streamed = False
+        # The active agent's accent colour — "green" for the lead, a per-specialist
+        # colour while a sub-agent is running (set by the CLI on delegate start/end).
+        self.accent = "green"
 
     # -- turn lifecycle ------------------------------------------------- #
 
@@ -103,21 +106,53 @@ class TuiRenderer(Renderer):
 
     def stream(self, text: str) -> None:
         if not self._streamed:
-            self.model.append("agent > ")
+            self.model.append(theme.agent_line("", dot=self.accent, color=True))  # "● "
             self._streamed = True
         self.model.append(text)
 
     def agent_result(self, content, tools, iterations, error) -> None:
         if self._streamed:
             self.model.append("\n")
-        else:
-            self.model.commit(f"agent > {content}")
-        if tools:
-            self.model.commit(f"        (used: {', '.join(tools)}, {iterations} steps)")
+        elif content:
+            self.model.commit(theme.agent_line(content, dot=self.accent, color=True))
         if error and error != "max_iterations":
-            self.model.commit(f"        ✗ {error}")
+            self.model.commit(theme.paint(f"  ✗ {error}", "amber", color=True))
         self.model.commit("")
         self._streamed = False
+
+    # -- transcript pieces the CLI event handlers commit --------------- #
+
+    def user_message(self, text: str) -> None:
+        self.model.commit("")
+        self.model.commit(theme.user_bar(text, color=True))
+        self.model.commit("")
+
+    def tool_call(self, name: str, summary: str = "") -> None:
+        self._break_stream()
+        self.model.commit(theme.tool_call_line(name, summary, accent=self.accent,
+                                               color=True))
+
+    def shell_command(self, cmd: str, *, user: str, host: str, cwd: str) -> None:
+        self._break_stream()
+        self.model.commit(theme.shell_command_block(cmd, user=user, host=host,
+                                                    cwd=cwd, accent=self.accent,
+                                                    color=True))
+
+    def shell_result(self, exit_code: int, *, empty: bool) -> None:
+        self.model.commit(theme.shell_result_line(exit_code, empty=empty, color=True))
+
+    def handoff(self, title: str, accent: str, *, back: bool = False,
+                detail: str = "") -> None:
+        """Announce work routing to/from a specialist sub-agent."""
+        self._break_stream()
+        self.model.commit(theme.handoff_line(title, accent=accent, back=back,
+                                             detail=detail, color=True))
+
+    def _break_stream(self) -> None:
+        # After a tool line, the next agent prose should start a fresh '● ' bullet.
+        if self._streamed:
+            self.model.append("\n")
+            self._streamed = False
 
     def phase_line(self, state) -> None:
         from cli.render import _phase_summary

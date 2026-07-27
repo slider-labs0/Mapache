@@ -36,6 +36,16 @@ logger = get_logger(__name__)
 DEFAULT_TIMEOUT = 300.0
 
 
+def _norm_usage(usage: Any) -> dict[str, int]:
+    """Normalize an OpenAI-style usage block to {prompt,completion,total}_tokens."""
+    u = usage or {}
+    return {
+        "prompt_tokens": int(u.get("prompt_tokens") or 0),
+        "completion_tokens": int(u.get("completion_tokens") or 0),
+        "total_tokens": int(u.get("total_tokens") or 0),
+    }
+
+
 class OpenAICompatibleProvider:
     """A model provider speaking the OpenAI /chat/completions protocol."""
 
@@ -95,10 +105,12 @@ class OpenAICompatibleProvider:
         # as a JSON string, are handled by _normalize_call downstream).
         choices = data.get("choices") or [{}]
         message = choices[0].get("message", {}) or {}
-        return {"message": {
+        result: dict[str, Any] = {"message": {
             "content": message.get("content") or "",
             "tool_calls": message.get("tool_calls"),
         }}
+        result["usage"] = _norm_usage(data.get("usage"))
+        return result
 
     # ------------------------------------------------------------------ #
     # Streaming chat
@@ -114,6 +126,8 @@ class OpenAICompatibleProvider:
             "model": self.model,
             "messages": messages,
             "stream": True,
+            # Ask for a final usage chunk so token accounting works while streaming.
+            "stream_options": {"include_usage": True},
         }
         if tools and self.supports_tools:
             payload["tools"] = tools
@@ -148,6 +162,11 @@ class OpenAICompatibleProvider:
                     try:
                         chunk = json.loads(body)
                     except json.JSONDecodeError:
+                        continue
+                    # The usage chunk (from stream_options) has empty choices and
+                    # arrives just before [DONE] — surface it to the caller.
+                    if chunk.get("usage"):
+                        yield {"type": "usage", **_norm_usage(chunk["usage"])}
                         continue
                     delta = (chunk.get("choices") or [{}])[0].get("delta", {})
                     for tc in delta.get("tool_calls") or []:

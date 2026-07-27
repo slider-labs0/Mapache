@@ -141,9 +141,15 @@ class AgentController:
         opsec_policy: Optional["OpsecPolicy"] = None,
         persona_provider: Optional[Callable[[], str]] = None,
         profile_provider: Optional[Callable[[], str]] = None,
+        opplan_provider: Optional[Callable[[], str]] = None,
         subagent_backend_factory: Optional[Callable[["SubAgentContext"], Any]] = None,
+        knowledge_graph: Optional[Any] = None,
     ) -> None:
         self.model = model_provider
+        # Disk-persisted findings store shared with sub-agents (fresh-context state).
+        # Synced from the AttackState blackboard as findings appear; children inherit
+        # the same graph so a freshly-spawned specialist can query prior findings.
+        self.knowledge_graph = knowledge_graph
         self.tool_dispatcher = tool_dispatcher
         self.mode = mode
         # Hybrid OPSEC routing (feature O). Decides whether a delegated operator
@@ -154,6 +160,10 @@ class AgentController:
         # User-editable persona (feature E). Called each turn to re-read soul.md
         # so edits hot-reload. None → no persona (backwards-compatible). Not
         # propagated to sub-agents — operators carry their own focused prompts.
+        # Operation plan (OPPLAN) table, injected into the lead's context each turn
+        # so it drives objectives through pending→in_progress→passed|blocked. Not
+        # propagated to sub-agents (they get their one focused objective).
+        self.opplan_provider = opplan_provider
         self.persona_provider = persona_provider
         # Agent-maintained user profile (feature F). Called each turn for a
         # compact summary of durable user facts, injected alongside the attack
@@ -212,6 +222,9 @@ class AgentController:
         self.chain = ConversationChain(
             shared_state=shared_state, allow_state_reset=allow_state_reset
         )
+        # Cumulative model token usage this session (fed by provider `usage`),
+        # surfaced live in the CLI status line.
+        self.session_tokens = 0
 
         # Wire subsystems
         self.executor.set_model_caller(self._call_model_raw)
@@ -363,6 +376,13 @@ class AgentController:
                 profile = self.profile_provider()
                 if profile:
                     snippets.append(profile)
+            except Exception:
+                pass
+        if self.opplan_provider is not None:
+            try:
+                plan = self.opplan_provider()
+                if plan:
+                    snippets.append(plan)
             except Exception:
                 pass
         chain_context = self.chain.get_context_injection()
@@ -784,16 +804,24 @@ class AgentController:
             and hasattr(self.model, "chat_stream")
         )
         if not can_stream:
-            return await self.model.chat(messages=messages, **model_kwargs)
+            resp = await self.model.chat(messages=messages, **model_kwargs)
+            if isinstance(resp, dict):
+                self._add_usage(resp.get("usage"))
+            return resp
 
         text_parts: list[str] = []
         tool_call: Optional[dict[str, Any]] = None
         async for piece in self.model.chat_stream(
             messages=messages, tools=model_kwargs.get("tools")
         ):
-            if isinstance(piece, dict) and piece.get("type") == "tool_call":
-                tool_call = piece
-                break
+            if isinstance(piece, dict):
+                if piece.get("type") == "usage":
+                    self._add_usage(piece)
+                    continue
+                if piece.get("type") == "tool_call":
+                    tool_call = piece
+                    break
+                continue  # unknown control dict — ignore
             token = str(piece)
             text_parts.append(token)
             try:
@@ -810,6 +838,11 @@ class AgentController:
                 }
             }]
         return {"message": message}
+
+    def _add_usage(self, usage: Any) -> None:
+        """Accumulate a provider `usage` block into the session token total."""
+        if isinstance(usage, dict):
+            self.session_tokens += int(usage.get("total_tokens") or 0)
 
     # ------------------------------------------------------------------ #
     # Response parsing
@@ -1272,6 +1305,13 @@ class AgentController:
                  "target": st.target, "session_id": session_id},
                 source="controller", session_id=session_id,
             )
+        # Keep the durable findings store in step with the blackboard so a
+        # fresh-context sub-agent can query what's known (idempotent sync).
+        if new and self.knowledge_graph is not None:
+            try:
+                self.knowledge_graph.sync_from_attack_state(st)
+            except Exception:  # a findings-store hiccup must not break the turn
+                pass
 
     # ------------------------------------------------------------------ #
     # Sub-agent delegation
@@ -1455,6 +1495,9 @@ class AgentController:
             bus=self.bus,
             # Children inherit the OPSEC policy so deeper delegations stay pinned.
             opsec_policy=self.opsec,
+            # Share the durable findings store: a fresh-context specialist queries
+            # prior findings through it and records its own for the next stage.
+            knowledge_graph=self.knowledge_graph,
         )
         # Give the child its tools: an operator gets only its curated subset
         # (intersected with what's registered); a generalist gets everything.

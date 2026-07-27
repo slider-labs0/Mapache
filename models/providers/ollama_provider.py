@@ -85,7 +85,14 @@ class OllamaProvider:
                 json=payload,
             )
             response.raise_for_status()
-            return response.json()
+            data = response.json()
+            # Normalize Ollama's eval counts to an OpenAI-style usage block so the
+            # controller accounts tokens the same way across providers.
+            p = int(data.get("prompt_eval_count") or 0)
+            c = int(data.get("eval_count") or 0)
+            data["usage"] = {"prompt_tokens": p, "completion_tokens": c,
+                             "total_tokens": p + c}
+            return data
         except httpx.ConnectError:
             raise ConnectionError(
                 f"Cannot connect to Ollama at {self.base_url}. "
@@ -157,6 +164,11 @@ class OllamaProvider:
                         yield content
 
                     if chunk.get("done"):
+                        p = int(chunk.get("prompt_eval_count") or 0)
+                        c = int(chunk.get("eval_count") or 0)
+                        if p or c:
+                            yield {"type": "usage", "prompt_tokens": p,
+                                   "completion_tokens": c, "total_tokens": p + c}
                         return
 
         except httpx.ConnectError:

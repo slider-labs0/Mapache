@@ -24,6 +24,9 @@ _ANSI = {
     "grey": "\033[38;5;245m", "dgrey": "\033[38;5;240m", "black": "\033[38;5;236m",
     "cyan": "\033[38;5;44m", "teal": "\033[38;5;37m", "white": "\033[97m",
     "amber": "\033[38;5;214m", "green": "\033[38;5;42m",
+    # Agent-routing accents (recon/initial-access/post-exploitation + more).
+    "red": "\033[38;5;203m", "magenta": "\033[38;5;170m",
+    "blue": "\033[38;5;39m", "yellow": "\033[38;5;221m",
     # Lavender pair pulled from the mascot's own palette (its slate-purple body
     # ~rgb(46,43,58), brightened) so the wordmark + tagline read as one piece.
     "lav": "\033[38;2;176;165;222m", "lavdim": "\033[38;2;122;114;152m",
@@ -239,3 +242,103 @@ def step_done_line(label: str, seconds: float, *, error: bool = False,
         return paint(f"  {glyph} {label} failed · {dur}", "amber", color=color)
     glyph = "⏺" if _can_encode("⏺") else "*"
     return paint(f"  {glyph} ran {label} · {dur}", "grey", color=color)
+
+
+# --------------------------------------------------------------------------- #
+# Transcript line styles (the full-screen TUI, modeled on the design mock)
+# --------------------------------------------------------------------------- #
+
+def _dot(style: str, color: bool) -> str:
+    glyph = "●" if _can_encode("●") else "*"
+    return paint(glyph, style, color=color)
+
+
+def format_tokens(n: int) -> str:
+    """Compact token count: '640', '46.3k', '1.2M'."""
+    n = int(n or 0)
+    if n < 1000:
+        return str(n)
+    if n < 1_000_000:
+        return f"{n / 1000:.1f}k"
+    return f"{n / 1_000_000:.1f}M"
+
+
+def user_bar(text: str, *, color: bool = True) -> str:
+    """The operator's message as a highlighted bar: '> …'."""
+    body = f"> {text}"
+    if not color:
+        return body
+    # Dark background bar with light text, spanning the line it's printed on.
+    return f"\033[48;5;237m\033[38;5;253m {body} \033[0m"
+
+
+def agent_line(text: str, *, dot: str = "green", color: bool = True) -> str:
+    """A line of agent prose: '● …' with a coloured dot (the active agent's accent)."""
+    return f"{_dot(dot, color)} {text}"
+
+
+def tool_call_line(name: str, summary: str = "", *, accent: str = "teal",
+                   color: bool = True) -> str:
+    """A tool/skill invocation: '● Name (summary)'. The dot + name take the active
+    agent's accent so you can see which specialist ran it; args stay dim."""
+    line = f"{_dot(accent, color)} {paint(name, 'bold', accent, color=color)}"
+    if summary:
+        line += " " + paint(f"({summary})", "grey", color=color)
+    return line
+
+
+def shell_command_block(cmd: str, *, user: str = "root", host: str = "sandbox",
+                        cwd: str = "~", accent: str = "green", color: bool = True) -> str:
+    """A Kali-style two-line prompt over the command:
+        ┌──(user💀host)-[cwd]
+        └─# cmd
+    The frame takes the active agent's accent (green = lead). Degrades to
+    'user@host:cwd$ cmd' where box-drawing/emoji can't render."""
+    if not _can_encode("┌─"):
+        return paint(f"{user}@{host}:{cwd}$ ", accent, color=color) + \
+            paint(cmd, "white", color=color)
+    skull = "💀 " if _can_encode("💀") else "@"
+    top = (paint("┌──(", accent, color=color)
+           + paint(user, "red", color=color) + skull
+           + paint(host, accent, color=color)
+           + paint(")-[", accent, color=color)
+           + paint(cwd, "cyan", color=color)
+           + paint("]", accent, color=color))
+    bottom = paint("└─# ", accent, color=color) + paint(cmd, "bold", "white", color=color)
+    return top + "\n" + bottom
+
+
+def handoff_line(title: str, *, accent: str = "cyan", back: bool = False,
+                 detail: str = "", color: bool = True) -> str:
+    """A routing banner when work moves to/from a specialist sub-agent:
+        ● → Recon Operator        (delegating to it)
+        ● ← Recon Operator         (control returns to the lead)"""
+    if back:
+        arrow = "←" if _can_encode("←") else "<-"
+        body = f"{arrow} {title}"
+    else:
+        arrow = "→" if _can_encode("→") else "->"
+        body = f"{arrow} {title}"
+        if detail:
+            body += "  " + detail
+    return f"{_dot(accent, color)} {paint(body, 'bold', accent, color=color)}"
+
+
+def shell_result_line(exit_code: int, *, empty: bool = False, color: bool = True) -> str:
+    """The dim status under a shell command: '[Command completed… Exit code: N]'."""
+    if empty:
+        msg = f"[Command completed with no output. Exit code: {exit_code}]"
+    else:
+        msg = f"[Exit code: {exit_code}]"
+    return paint(msg, "dgrey", color=color)
+
+
+def status_line(word: str, elapsed_s: float, tokens: int = 0, *, color: bool = True) -> str:
+    """The live bottom status: '● Hacking… (10s · ↑ 46.3k tokens)'."""
+    ell = "…" if _can_encode("…") else "..."
+    up = "↑" if _can_encode("↑") else "^"
+    parts = [format_duration(elapsed_s)]
+    if tokens:
+        parts.append(f"{up} {format_tokens(tokens)} tokens")
+    meta = paint("(" + " · ".join(parts) + ")", "grey", color=color)
+    return f"  {_dot('amber', color)} {paint(word + ell, 'amber', color=color)} {meta}"

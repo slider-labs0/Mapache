@@ -48,6 +48,12 @@ CORE_TOOLS = {
     # Community skill hub (feature I) — browse + install downloadable skills,
     # and install a GitHub repo as a tool straight from a natural-language request.
     "skill_search", "skill_list", "skill_install", "install_github_tool",
+    # Shared findings store — query/record findings across objectives + sub-agents.
+    "kg_query", "kg_add",
+    # Operation plan (OPPLAN) — objectives + status transitions for the orchestrator.
+    "opplan_add", "opplan_update", "opplan_show",
+    # Vulnerability-research pipeline seeder (scanner→detector→verifier→patcher→exploiter).
+    "vuln_research",
 }
 
 PHASE_TOOLS = {

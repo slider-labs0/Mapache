@@ -11,6 +11,7 @@ import os
 import shutil
 import sys
 import threading
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -216,6 +217,9 @@ class MapacheCLI:
         self._input_q = None      # fallback stdin queue, set in run()
         self._running_tool = None  # tool currently executing, for the live status line
         self.tui = None           # full-screen TUI (RaccoonTUI) when --tui is active
+        self._accent_stack = []   # per-agent transcript accent while sub-agents nest
+        self.kg = None            # shared knowledge graph (findings store), built in setup()
+        self.opplan = None        # operation plan (objectives + status), built in setup()
         self.memory = MemoryManager()
         self.confirm = args.confirm
         self.working_dir, self._workdir_note = self._resolve_working_dir(args.dir)
@@ -446,9 +450,20 @@ class MapacheCLI:
                 messages=messages, role=ModelRole.VERIFIER, json_mode=True
             )
 
+        # Shared, disk-persisted findings store (knowledge graph). Sub-agents read
+        # prior findings + record their own through it across fresh contexts.
+        from core.knowledge_graph import KnowledgeGraph
+        self.kg = KnowledgeGraph(
+            path=os.path.join(self.working_dir, "knowledge", "graph.json"))
+        # Operation plan (OPPLAN): objectives + status transitions for the lead.
+        from core.opplan import OPPLAN
+        self.opplan = OPPLAN(path=os.path.join(self.working_dir, "opplan.json"))
+
         self.controller = AgentController(
             model_provider=self.routed,
             mode=mode,
+            knowledge_graph=self.kg,
+            opplan_provider=lambda: self.opplan.table() if self.opplan else "",
             use_function_calling=self.routed.supports_tools,
             system_prompt=SYSTEM_PROMPT,
             working_dir=self.working_dir,
@@ -471,6 +486,10 @@ class MapacheCLI:
         self.controller.bus.subscribe("task.start", self._on_task_start)
         self.controller.bus.subscribe("task.result", self._on_task_end)
         self.controller.bus.subscribe("task.error", self._on_task_end)
+        # Colour the transcript by the active specialist: work routing to a recon /
+        # initial-access / post-exploitation sub-agent switches the accent colour.
+        self.controller.bus.subscribe("agent.delegate.start", self._on_delegate_start)
+        self.controller.bus.subscribe("agent.delegate.end", self._on_delegate_end)
 
         if not self.args.no_tools:
             self.registry = ToolRegistry(granted_permissions={
@@ -715,6 +734,22 @@ class MapacheCLI:
                 mcp_path=self.args.mcp_config,
                 # external_tool installs append to the global config's integrations.
                 config_path=global_config_path())
+        # Knowledge-graph tools: query/record shared findings (feature: fresh-context
+        # state). Available to the lead and every specialist sub-agent.
+        from tools.kg_tools import KGQueryTool, KGAddTool
+        self.registry.register(KGQueryTool(lambda: self.kg))
+        self.registry.register(KGAddTool(lambda: self.kg))
+
+        # Operation-plan tools: the lead seeds objectives and transitions their
+        # status (pending → in_progress → passed | blocked) as it dispatches work.
+        from tools.opplan_tools import OpplanAddTool, OpplanUpdateTool, OpplanShowTool
+        self.registry.register(OpplanAddTool(lambda: self.opplan))
+        self.registry.register(OpplanUpdateTool(lambda: self.opplan))
+        self.registry.register(OpplanShowTool(lambda: self.opplan))
+        # Vulnresearch pipeline runner: seeds the 5 staged objectives into the OPPLAN.
+        from tools.pipeline_tools import VulnResearchTool
+        self.registry.register(VulnResearchTool(lambda: self.opplan))
+
         from hub.tools import (SkillSearchTool, SkillListTool, SkillInstallTool,
                                InstallGithubToolTool)
         from core.config import global_config_path
@@ -964,7 +999,10 @@ class MapacheCLI:
         return True
 
     async def _tui_on_run(self, text: str) -> None:
-        """A line submitted in the TUI: run it; if a command asked to quit, exit."""
+        """A line submitted in the TUI: echo it as the operator bar, run it; if a
+        command asked to quit, exit."""
+        if text.strip() and self.tui is not None:
+            self.render.user_message(text.strip())
         keep_going = await self._process_line(text)
         if not keep_going and self.tui is not None and self.tui._app is not None:
             self.tui._app.exit()
@@ -972,6 +1010,7 @@ class MapacheCLI:
     async def _agent_turn(self, user_input: str) -> None:
         if self.controller is None:
             return
+        self._turn_start_ts = time.monotonic()  # drives the TUI status elapsed clock
         self.render.start_turn()
         # Colour-coded phase banner + target/ports pulled from the attack state.
         self.render.phase_line(self.controller.chain.attack_state)
@@ -1096,34 +1135,137 @@ class MapacheCLI:
         line = await self._input_q.get()
         return None if line is None else line
 
+    # Tools whose call renders as a Kali-style command block in the TUI.
+    _SHELL_TOOLS = {"shell", "kali_run"}
+
     async def _thinking_ticker(self) -> None:
-        """The 'thinking' line: a spinner + rotating word, painted until cancelled.
-        While a tool is executing it shows 'running <tool>…' instead of a filler
-        word. The single clear happens in _stop_ticker / _on_token (one owner), so
-        this never clears in its own cancellation path (could wipe fresh output)."""
+        """The live status line, painted until cancelled. In the TUI it's the mock's
+        '● <word>… (<elapsed> · ↑ <tokens>)'; in the classic CLI it's the spinner
+        (or 'running <tool>…' while a tool runs). The single clear happens in
+        _stop_ticker / _on_token (one owner)."""
         i = 0
         while True:
-            tool = getattr(self, "_running_tool", None)
-            frame = theme.running_line(i, tool) if tool else theme.thinking_line(i)
-            self.render.thinking(frame)
+            if getattr(self, "tui", None) is not None:
+                word = theme.thinking_word(i // 4)
+                elapsed = time.monotonic() - getattr(self, "_turn_start_ts", time.monotonic())
+                tokens = getattr(getattr(self, "controller", None), "session_tokens", 0)
+                self.render.thinking(theme.status_line(word, elapsed, tokens))
+            else:
+                tool = getattr(self, "_running_tool", None)
+                frame = theme.running_line(i, tool) if tool else theme.thinking_line(i)
+                self.render.thinking(frame)
             i += 1
             await asyncio.sleep(0.2)
 
     async def _on_task_start(self, event) -> None:
-        """A tool began — the spinner switches to 'running <tool>…'."""
-        self._running_tool = event.data.get("tool_name")
+        """A tool began. Classic: the spinner shows 'running <tool>…'. TUI: commit a
+        '● Name (args)' line, or a Kali command block for shell tools."""
+        data = event.data
+        name = data.get("tool_name", "")
+        self._running_tool = name
+        if self.tui is None:
+            return
+        if name in ("delegate", "delegate_parallel"):
+            return  # the handoff banner (delegate.start) renders the routing instead
+        args = data.get("args") or {}
+        cmd = args.get("cmd") or args.get("command")
+        if name in self._SHELL_TOOLS and cmd:
+            user, host, cwd = self._shell_context(args)
+            self.render.shell_command(str(cmd), user=user, host=host, cwd=cwd)
+        else:
+            self.render.tool_call(name, self._summarize_args(args))
 
     async def _on_task_end(self, event) -> None:
-        """A tool finished — settle a 'ran <tool> · <N>s' line above the spinner."""
+        """A tool finished. Classic: a 'ran <tool> · <N>s' line. TUI: shell tools get
+        the dim exit-code line; other tools already showed their '● Name' line."""
         self._running_tool = None
         data = event.data
-        frame = theme.step_done_line(
-            data.get("tool_name", "?"),
-            (data.get("duration_ms") or 0.0) / 1000.0,
-            error=bool(data.get("error")),
-            color=theme.supports_color(),
-        )
-        self.render.step_line(frame)
+        name = data.get("tool_name", "")
+        if self.tui is None:
+            self.render.step_line(theme.step_done_line(
+                name, (data.get("duration_ms") or 0.0) / 1000.0,
+                error=bool(data.get("error")), color=theme.supports_color()))
+            return
+        if name in self._SHELL_TOOLS:
+            err = data.get("error")
+            output = data.get("output") or ""
+            self.render.shell_result(0 if not err else 1, empty=not output.strip())
+
+    @staticmethod
+    def _summarize_args(args: dict) -> str:
+        """A short one-line summary of tool args for the '● Name (…)' line."""
+        if not args:
+            return ""
+        if len(args) == 1:
+            return str(next(iter(args.values())))[:60]
+        return ", ".join(f"{k}={str(v)[:20]}" for k, v in list(args.items())[:2])[:60]
+
+    def _shell_context(self, args: dict) -> "tuple[str, str, str]":
+        """(user, host, cwd) for the Kali command block — the real exec context."""
+        import getpass
+        import socket
+        cwd = str(args.get("working_dir") or self.working_dir)
+        be = self.exec_backend
+        if be is not None and getattr(be, "name", "local") != "local":
+            return "root", str(getattr(be, "name", "remote")), cwd
+        try:
+            user = getpass.getuser()
+        except Exception:
+            user = "user"
+        try:
+            host = socket.gethostname()
+        except Exception:
+            host = "local"
+        return user, host, cwd
+
+    # Killchain phase → transcript accent colour. Recon/initial-access/post read as
+    # cyan/red/magenta; the lead agent stays green.
+    _PHASE_ACCENT = {
+        "recon": "cyan", "enumeration": "blue", "exploitation": "red",
+        "post": "magenta", "analysis": "amber", "report": "green",
+    }
+
+    def _agent_accent(self, operator_name) -> str:
+        if not operator_name or operator_name == "generalist":
+            return "green"  # the lead agent
+        try:
+            from core.operators import get_operator
+            op = get_operator(operator_name)
+        except Exception:
+            op = None
+        return self._PHASE_ACCENT.get(op.phase, "teal") if op else "teal"
+
+    @staticmethod
+    def _operator_title(operator_name) -> str:
+        try:
+            from core.operators import get_operator
+            op = get_operator(operator_name)
+            if op:
+                return op.title
+        except Exception:
+            pass
+        return (operator_name or "sub-agent").replace("_", " ").title()
+
+    async def _on_delegate_start(self, event) -> None:
+        """Work is routing to a specialist — switch the transcript accent + banner."""
+        if self.tui is None:
+            return
+        name = event.data.get("operator")
+        accent = self._agent_accent(name)
+        task = (event.data.get("task") or "").strip()
+        self._accent_stack.append(getattr(self.render, "accent", "green"))
+        self.render.accent = accent
+        self.render.handoff(self._operator_title(name), accent,
+                            detail=(f"— {task[:60]}" if task else ""))
+
+    async def _on_delegate_end(self, event) -> None:
+        """Control returns to the caller — banner, then restore the prior accent."""
+        if self.tui is None:
+            return
+        accent = getattr(self.render, "accent", "green")
+        self.render.handoff(self._operator_title(event.data.get("operator")), accent,
+                            back=True)
+        self.render.accent = self._accent_stack.pop() if self._accent_stack else "green"
 
     def _is_known_command(self, raw: str) -> bool:
         base = raw.split()[0].lower()

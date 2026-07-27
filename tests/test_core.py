@@ -1527,6 +1527,37 @@ async def test_openai_provider_stream_surfaces_error_body():
     print("  PASS  openai_provider_stream_surfaces_error_body")
 
 
+async def test_provider_usage_and_token_accounting():
+    """Providers surface `usage`; the controller accumulates it into session_tokens
+    (what the TUI status line shows as '↑ N tokens')."""
+    from models.providers.openai_compatible import OpenAICompatibleProvider
+    from core.agent_controller import AgentController, AgentMode
+
+    p = OpenAICompatibleProvider(model="grok-4", base_url="https://x/v1", api_key="sk")
+
+    async def fake_post(path, payload):
+        return {"choices": [{"message": {"content": "hi"}}],
+                "usage": {"prompt_tokens": 1000, "completion_tokens": 234,
+                          "total_tokens": 1234}}
+    p._post = fake_post
+    r = await p.chat(messages=[{"role": "user", "content": "x"}])
+    assert r["usage"]["total_tokens"] == 1234
+    await p.close()
+
+    class _M:
+        supports_tools = False
+        async def chat(self, messages, tools=None, json_mode=False, stream=False):
+            return {"message": {"content": "done"}, "usage": {"total_tokens": 500}}
+    c = AgentController(model_provider=_M(), mode=AgentMode.AGENT,
+                        use_function_calling=False)
+    assert c.session_tokens == 0
+    c._add_usage({"total_tokens": 500})
+    c._add_usage({"total_tokens": 734})
+    c._add_usage(None)  # tolerated
+    assert c.session_tokens == 1234
+    print("  PASS  provider_usage_and_token_accounting")
+
+
 def test_model_pool_provider_selection():
     cfg = MapacheConfig.from_dict({"providers": {
         "ollama": {"kind": "ollama", "base_url": "http://localhost:11434"},
@@ -2960,6 +2991,7 @@ def test_tui_output_model_and_renderer():
     renderer/submit routing that feed it (no prompt_toolkit console needed)."""
     from cli.tui import (OutputModel, TuiRenderer, classify_submit,
                          SUBMIT_EMPTY, SUBMIT_STEER, SUBMIT_RUN)
+    from cli import theme
 
     # OutputModel: committed text + one mutable status line at the bottom.
     changed = []
@@ -2980,18 +3012,51 @@ def test_tui_output_model_and_renderer():
     assert classify_submit("go", turn_running=True) == SUBMIT_STEER
     assert classify_submit("go", turn_running=False) == SUBMIT_RUN
 
-    # TuiRenderer writes turn output into the model (same shape as PlainRenderer).
+    # TuiRenderer writes the transcript in the design-mock style: a highlighted
+    # user bar, '●' agent prose, '● Name (args)' tool lines, and Kali shell blocks.
     m2 = OutputModel()
     tr = TuiRenderer(m2)
+    tr.user_message("run a scan")
     tr.start_turn()
     tr.stream("answer")
-    tr.agent_result("", ["shell", "nmap_scan"], 3, None)
-    tr.step_line("  ⏺ ran shell · 2s")
+    tr.agent_result("", [], 1, None)
+    tr.tool_call("Skill", "engagement-startup")
+    tr.shell_command("ls -1 /workspace", user="root", host="sandbox", cwd="/workspace")
+    tr.shell_result(0, empty=True)
     out = m2.render()
-    assert "agent > answer" in out
-    assert "used: shell, nmap_scan, 3 steps" in out
-    assert "ran shell · 2s" in out
+    assert "> run a scan" in out                       # highlighted operator bar
+    assert "answer" in out                              # streamed agent prose
+    assert "Skill" in out and "engagement-startup" in out
+    assert "ls -1 /workspace" in out and "sandbox" in out
+    assert "Exit code: 0" in out
+    # Token formatting for the status line.
+    assert theme.format_tokens(46300) == "46.3k"
     print("  PASS  tui_output_model_and_renderer")
+
+
+def test_agent_color_routing():
+    """Delegation routes the transcript accent to the specialist: recon=cyan,
+    initial-access(exploit)=red, post-ex=magenta, lead=green."""
+    from cli import theme
+    from cli.mapache_cli import MapacheCLI
+
+    inst = MapacheCLI.__new__(MapacheCLI)
+    assert inst._agent_accent("recon_operator") == "cyan"
+    assert inst._agent_accent("exploit_operator") == "red"
+    assert inst._agent_accent("post_operator") == "magenta"
+    assert inst._agent_accent(None) == "green"          # the lead
+    assert inst._agent_accent("generalist") == "green"
+    assert inst._operator_title("recon_operator") == "Recon Operator"
+
+    # Handoff banner + accent-coloured lines carry the specialist's colour.
+    ho = theme.handoff_line("Recon Operator", accent="cyan")
+    assert "Recon Operator" in theme._visible(ho) and theme._ANSI["cyan"] in ho
+    back = theme.handoff_line("Recon Operator", accent="cyan", back=True)
+    assert ("←" in back) or ("<-" in back)
+    assert theme._ANSI["red"] in theme.tool_call_line("msf_run", "x", accent="red")
+    assert theme._ANSI["magenta"] in theme.shell_command_block(
+        "id", user="root", host="h", cwd="/", accent="magenta")
+    print("  PASS  agent_color_routing")
 
 
 def test_enhanced_input_completion():
@@ -3509,6 +3574,127 @@ def test_installed_integration_visible_via_always_tools():
     print("  PASS  installed_integration_visible_via_always_tools")
 
 
+def test_knowledge_graph():
+    """The disk-persisted findings store: idempotent add/merge, typed query, sync
+    from the blackboard, and persistence across fresh instances (sub-agent state)."""
+    import os
+    from core.knowledge_graph import KnowledgeGraph
+    from core.conversation_chain import AttackState
+
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "kg.json")
+        kg = KnowledgeGraph(path=path)
+        kg.add("host", "10.0.0.5", source="recon")
+        kg.add("host", "10.0.0.5", attrs={"os": "linux"})  # merge, not duplicate
+        kg.add("credential", "msfadmin:msfadmin", source="exploit")
+        hosts = kg.query(type="host")
+        assert len(hosts) == 1 and hosts[0].attrs.get("os") == "linux"
+        assert "host:1" in kg.summary() and "credential:1" in kg.summary()
+
+        # Blackboard → graph sync (host runs services; creds/flags recorded).
+        st = AttackState(target="10.0.0.5")
+        st.open_ports = ["21/tcp", "445/tcp"]
+        st.services = {"21": "ftp", "445": "microsoft-ds"}
+        st.versions = {"21": "vsftpd 2.3.4"}
+        st.credentials = ["root:root"]
+        st.flags = ["FLAG{x}"]
+        assert kg.sync_from_attack_state(st) >= 5
+        assert any("vsftpd" in str(e.attrs) for e in kg.query(type="service"))
+        assert any(r.rel == "runs" for r in kg.relations())
+
+        # Persistence: a fresh instance (a freshly-spawned agent) reads prior findings.
+        kg2 = KnowledgeGraph(path=path)
+        assert len(kg2.query(type="service")) == 2
+        assert kg2.query(contains="vsftpd")  # substring query across value+attrs
+
+        # Invalid adds are rejected, not persisted.
+        assert kg2.add("bogus_type", "x") is None
+    print("  PASS  knowledge_graph")
+
+
+async def test_vuln_pipeline():
+    """The Vulnresearch pipeline: five staged operators (fresh context, KG state) +
+    a soundwave planner, and the vuln_research runner that seeds them into the OPPLAN."""
+    from core.operators import VULN_PIPELINE, get_operator
+    from core.opplan import OPPLAN
+    from tools.pipeline_tools import VulnResearchTool
+
+    assert VULN_PIPELINE == ("scanner", "detector", "verifier", "patcher", "exploiter")
+    for stage in VULN_PIPELINE:
+        op = get_operator(stage)
+        assert op is not None, stage
+        # Every stage can pass state through the knowledge graph.
+        assert {"kg_query", "kg_add"} <= op.tools
+    # Read-only analysis stage; exploitation stage carries exploit tooling.
+    assert get_operator("detector").read_only is True
+    assert "msf_run" in get_operator("exploiter").tools
+    # Soundwave planner owns the OPPLAN + is read-only w.r.t. the target.
+    sw = get_operator("soundwave")
+    assert sw and sw.read_only and "opplan_add" in sw.tools
+
+    # The runner seeds one objective per stage, in order, into the OPPLAN.
+    plan = OPPLAN()
+    res = await VulnResearchTool(lambda: plan).execute(target="10.0.0.5")
+    assert res.success and "10.0.0.5" in res.output
+    assert [o.operator for o in plan.objectives()] == list(VULN_PIPELINE)
+    # No OPPLAN / no target degrade gracefully.
+    assert "No OPPLAN" in (await VulnResearchTool(lambda: None).execute(target="x")).output
+    assert (await VulnResearchTool(lambda: plan).execute(target="")).success is False
+    print("  PASS  vuln_pipeline")
+
+
+def test_opplan():
+    """OPPLAN objectives + status transitions + persistence + next-pending logic."""
+    import os
+    from core.opplan import OPPLAN
+
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "opplan.json")
+        plan = OPPLAN(path=path)
+        plan.add("Recon the target", "recon_operator")
+        plan.add("Gain initial access", "exploit_operator")
+        plan.add("Loot + persistence", "post_operator")
+
+        plan.update(1, status="passed", note="4 ports")
+        plan.update("initial access", status="blocked", note="no exploit")  # by substring
+        assert plan.next_pending().id == 3  # in_progress first, else first pending
+        plan.update(3, status="in_progress")
+        assert plan.next_pending().id == 3
+
+        c = plan.counts()
+        assert c["passed"] == 1 and c["blocked"] == 1 and c["in_progress"] == 1
+        table = plan.table()
+        assert "1/3 passed" in table and "@recon_operator" in table and "[blocked]" in table
+
+        # Invalid status rejected; unknown ref rejected.
+        assert plan.update(1, status="bogus") is False
+        assert plan.update(99, status="passed") is False
+
+        # Persistence across a fresh instance (survives restart).
+        plan2 = OPPLAN(path=path)
+        assert len(plan2.objectives()) == 3
+        assert plan2._resolve(1).status == "passed"
+        # A new objective gets a fresh id (no collision after reload).
+        assert plan2.add("Report").id == 4
+    print("  PASS  opplan")
+
+
+async def test_knowledge_graph_tools():
+    from core.knowledge_graph import KnowledgeGraph
+    from tools.kg_tools import KGQueryTool, KGAddTool
+
+    kg = KnowledgeGraph()  # in-memory (no path)
+    prov = lambda: kg
+    r = await KGAddTool(prov).execute(type="flag", value="FLAG{y}", note="root.txt")
+    assert r.success and "FLAG{y}" in r.output
+    out = (await KGQueryTool(prov).execute(type="flag")).output
+    assert "FLAG{y}" in out
+    assert (await KGAddTool(prov).execute(type="bogus", value="x")).success is False
+    # No graph configured → graceful, not a crash.
+    assert "No knowledge graph" in (await KGQueryTool(lambda: None).execute()).output
+    print("  PASS  knowledge_graph_tools")
+
+
 def test_integration_catalog():
     from core.integration_catalog import detect_missing_integration, CATALOG
     from tools.external_tools import build_external_tools
@@ -3986,6 +4172,7 @@ async def run_all():
     print("\nCloud providers (feature G)")
     await test_openai_provider_normalizes_response()
     await test_openai_provider_stream_surfaces_error_body()
+    await test_provider_usage_and_token_accounting()
     test_model_pool_provider_selection()
     test_model_profile_is_local_gate()
 
@@ -4058,6 +4245,7 @@ async def run_all():
     print("\nCLI theme + enhanced input (UI)")
     test_theme_logo_and_thinking()
     test_tui_output_model_and_renderer()
+    test_agent_color_routing()
     test_enhanced_input_completion()
     await test_cli_ptk_turn_no_concurrent_prompt()
 
@@ -4080,6 +4268,10 @@ async def run_all():
     test_tool_registry_name_collision_guard()
     await test_generated_tool_collision_guard()
     test_installed_integration_visible_via_always_tools()
+    test_knowledge_graph()
+    await test_knowledge_graph_tools()
+    test_opplan()
+    await test_vuln_pipeline()
     test_integration_catalog()
 
     print("\nCommunity skill hub (feature I)")

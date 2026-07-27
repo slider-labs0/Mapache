@@ -157,10 +157,14 @@ class AnthropicProvider:
                     "name": block.get("name", ""),
                     "arguments": block.get("input") or {},
                 }})
+        u = data.get("usage") or {}
+        p = int(u.get("input_tokens") or 0)
+        c = int(u.get("output_tokens") or 0)
         return {"message": {
             "content": "".join(text_parts),
             "tool_calls": tool_calls or None,
-        }}
+        }, "usage": {"prompt_tokens": p, "completion_tokens": c,
+                     "total_tokens": p + c}}
 
     # ------------------------------------------------------------------ #
     # Chat
