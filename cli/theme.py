@@ -176,6 +176,26 @@ def render_banner(version: str, mode: str = "Attack Mode", color: bool = True,
     return render_logo(color=color, unicode=unicode) + "\n" + sub + "\n"
 
 
+def box(lines: list[str], *, color: bool = True, accent: str = "lavdim") -> str:
+    """Draw a rounded border around pre-rendered (possibly ANSI-coloured) lines.
+
+    Width is measured on the *visible* text so embedded colour escapes don't throw
+    the alignment off. Degrades to ASCII corners on a console that can't render the
+    box-drawing glyphs (cp1252 without UTF-8)."""
+    uni = _can_encode("╭─╮│╰╯")
+    tl, tr, bl, br, h, v = ("╭", "╮", "╰", "╯", "─", "│") if uni else ("+", "+", "+", "+", "-", "|")
+    width = max((len(_visible(ln)) for ln in lines), default=0)
+    top = paint(tl + h * (width + 2) + tr, accent, color=color)
+    bottom = paint(bl + h * (width + 2) + br, accent, color=color)
+    side = paint(v, accent, color=color)
+    out = [top]
+    for ln in lines:
+        pad = " " * (width - len(_visible(ln)))
+        out.append(f"{side} {ln}{pad} {side}")
+    out.append(bottom)
+    return "\n".join(out)
+
+
 # --------------------------------------------------------------------------- #
 # "Thinking" words — shown while the agent works (raccoon-flavoured + hacker)
 # --------------------------------------------------------------------------- #
@@ -190,6 +210,35 @@ THINKING_WORDS: list[str] = [
 # Braille spinner frames — smooth and monospace-safe; ASCII fallback for cp1252.
 SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _ASCII_SPINNER = "|/-\\"
+
+
+# Gradient endpoints for the live "thinking" word — the mascot's lavender warming
+# into a bright teal, so the word shimmers left-to-right like Claude Code's.
+_GRAD_START = (176, 165, 222)  # lavender (mascot body, brightened)
+_GRAD_END = (86, 204, 201)     # teal
+
+
+def gradient(text: str, start: tuple[int, int, int] = _GRAD_START,
+             end: tuple[int, int, int] = _GRAD_END, *, color: bool = True) -> str:
+    """Colour `text` char-by-char, interpolating 24-bit RGB from `start` to `end`.
+
+    Truecolor only (same assumption as the mascot banner); returns the text
+    unchanged when colour is off. Whitespace keeps its slot but isn't painted."""
+    if not color or not text:
+        return text
+    chars = list(text)
+    n = max(1, len(chars) - 1)
+    out: list[str] = []
+    for i, ch in enumerate(chars):
+        if ch == " ":
+            out.append(ch)
+            continue
+        t = i / n
+        r = int(round(start[0] + (end[0] - start[0]) * t))
+        g = int(round(start[1] + (end[1] - start[1]) * t))
+        b = int(round(start[2] + (end[2] - start[2]) * t))
+        out.append(f"\033[38;2;{r};{g};{b}m{ch}")
+    return "".join(out) + _ANSI["reset"]
 
 
 def thinking_word(i: int) -> str:
@@ -211,7 +260,9 @@ def thinking_line(i: int, *, color: bool = True) -> str:
     spin = spinner_frame(i, unicode=uni)
     word = thinking_word(i // 4)
     ell = "…" if _can_encode("…") else "..."
-    return paint(f"  {spin} {word}{ell}", "amber", color=color)
+    return (paint(f"  {spin} ", "amber", color=color)
+            + gradient(word, color=color)
+            + paint(ell, "grey", color=color))
 
 
 def running_line(i: int, label: str, *, color: bool = True) -> str:
@@ -220,6 +271,103 @@ def running_line(i: int, label: str, *, color: bool = True) -> str:
     spin = spinner_frame(i, unicode=uni)
     ell = "…" if _can_encode("…") else "..."
     return paint(f"  {spin} running {label}{ell}", "amber", color=color)
+
+
+def activity_line(i: int, phrase: str, *, color: bool = True) -> str:
+    """Live spinner line narrating an in-flight action in plain language:
+    '⠹ Scanning ports with nmap…' (see `action_phrase`)."""
+    uni = _can_encode(SPINNER_FRAMES)
+    spin = spinner_frame(i, unicode=uni)
+    ell = "…" if _can_encode("…") else "..."
+    return paint(f"  {spin} {phrase}{ell}", "amber", color=color)
+
+
+# Underlying CLI tool (from kali_run's `tool` arg, or a bare shell command's first
+# word) → the activity it represents, phrased so the agent narrates its intent
+# before the tool runs.
+_ACTIVITY_BY_TOOL = {
+    "nmap": "Scanning ports with nmap",
+    "masscan": "Scanning ports with masscan",
+    "rustscan": "Scanning ports with rustscan",
+    "gobuster": "Enumerating paths with gobuster",
+    "feroxbuster": "Enumerating paths with feroxbuster",
+    "dirb": "Enumerating paths with dirb",
+    "dirbuster": "Enumerating paths with dirbuster",
+    "ffuf": "Fuzzing endpoints with ffuf",
+    "wfuzz": "Fuzzing endpoints with wfuzz",
+    "nikto": "Scanning for web flaws with nikto",
+    "whatweb": "Fingerprinting the web stack",
+    "wpscan": "Scanning WordPress with wpscan",
+    "sqlmap": "Testing for SQL injection",
+    "hydra": "Brute-forcing credentials with hydra",
+    "medusa": "Brute-forcing credentials with medusa",
+    "john": "Cracking hashes with john",
+    "hashcat": "Cracking hashes with hashcat",
+    "enum4linux": "Enumerating SMB with enum4linux",
+    "smbclient": "Talking to SMB with smbclient",
+    "smbmap": "Mapping SMB shares",
+    "crackmapexec": "Sweeping hosts with crackmapexec",
+    "netexec": "Sweeping hosts with netexec",
+    "msfconsole": "Driving Metasploit",
+    "searchsploit": "Searching exploits with searchsploit",
+    "curl": "Fetching a URL with curl",
+    "wget": "Downloading with wget",
+    "dig": "Resolving DNS with dig",
+    "dnsrecon": "Enumerating DNS with dnsrecon",
+    "whois": "Looking up WHOIS",
+}
+
+# Named agent tools → their activity, phrased the same way.
+_ACTIVITY_BY_NAME = {
+    "web_search": "Searching the web",
+    "web_fetch": "Fetching a page",
+    "http_request": "Sending an HTTP request",
+    "cve_lookup": "Looking up CVEs",
+    "msf_search": "Searching Metasploit modules",
+    "kg_query": "Reviewing findings so far",
+    "kg_add": "Recording a finding",
+    "opplan_show": "Reviewing the plan",
+    "opplan_add": "Updating the plan",
+    "opplan_update": "Updating the plan",
+    "file_read": "Reading a file",
+    "file_write": "Writing a file",
+    "file_edit": "Editing a file",
+    "file_search": "Searching files",
+    "file_list": "Listing files",
+    "note": "Jotting a note",
+    "vuln_research": "Starting the vuln-research pipeline",
+    "create_tool": "Building a new tool",
+    "synthesize_skill": "Writing a new skill",
+    "delegate": "Handing off to a specialist",
+    "delegate_parallel": "Fanning out to specialists",
+}
+
+
+def action_phrase(name: str, args: "dict | None" = None) -> str:
+    """A short natural-language description of what a tool call is about to do —
+    'Scanning ports with nmap', 'Searching the web', 'Reading a file' — used to
+    narrate the agent's next step before the tool runs.
+
+    `kali_run` and `shell` resolve to the underlying command (nmap, gobuster, …);
+    everything else keys off the tool name, falling back to 'Running <name>'."""
+    args = args or {}
+    n = (name or "").strip()
+
+    if n == "kali_run":
+        tool = str(args.get("tool") or "").strip().lower()
+        base = tool.split()[0].replace("\\", "/").split("/")[-1] if tool else ""
+        return _ACTIVITY_BY_TOOL.get(base, f"Running {base}" if base else "Running a Kali tool")
+    if n == "shell":
+        cmd = str(args.get("cmd") or args.get("command") or "").strip()
+        first = cmd.split()[0].replace("\\", "/").split("/")[-1] if cmd else ""
+        low = first.lower()
+        if low in _ACTIVITY_BY_TOOL:
+            return _ACTIVITY_BY_TOOL[low]
+        return f"Running `{first}`" if first else "Running a shell command"
+
+    if n in _ACTIVITY_BY_NAME:
+        return _ACTIVITY_BY_NAME[n]
+    return f"Running {n.replace('_', ' ')}" if n else "Working"
 
 
 def format_duration(seconds: float) -> str:
@@ -264,12 +412,9 @@ def format_tokens(n: int) -> str:
 
 
 def user_bar(text: str, *, color: bool = True) -> str:
-    """The operator's message as a highlighted bar: '> …'."""
-    body = f"> {text}"
-    if not color:
-        return body
-    # Dark background bar with light text, spanning the line it's printed on.
-    return f"\033[48;5;237m\033[38;5;253m {body} \033[0m"
+    """The operator's message: a dim-grey '> …' line (Claude-Code style — quiet
+    prompt echo, no loud background bar)."""
+    return paint(f"> {text}", "grey", color=color)
 
 
 def agent_line(text: str, *, dot: str = "green", color: bool = True) -> str:
@@ -334,11 +479,14 @@ def shell_result_line(exit_code: int, *, empty: bool = False, color: bool = True
 
 
 def status_line(word: str, elapsed_s: float, tokens: int = 0, *, color: bool = True) -> str:
-    """The live bottom status: '● Hacking… (10s · ↑ 46.3k tokens)'."""
+    """The live bottom status, Claude-Code style:
+    '● Hacking… (10s · ↑ 46.3k tokens · ctrl-c to interrupt)' — dim, unobtrusive."""
     ell = "…" if _can_encode("…") else "..."
     up = "↑" if _can_encode("↑") else "^"
     parts = [format_duration(elapsed_s)]
     if tokens:
         parts.append(f"{up} {format_tokens(tokens)} tokens")
+    parts.append("ctrl-c to interrupt")
     meta = paint("(" + " · ".join(parts) + ")", "grey", color=color)
-    return f"  {_dot('amber', color)} {paint(word + ell, 'amber', color=color)} {meta}"
+    grad = gradient(word, color=color) + paint(ell, "grey", color=color)
+    return f"  {_dot('amber', color)} {grad} {meta}"

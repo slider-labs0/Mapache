@@ -924,6 +924,37 @@ def _routing(strategy):
     return engine
 
 
+def test_opsec_local_pin_falls_back_without_local_model():
+    """OPSEC wants to pin a sub-agent local, but with only cloud models installed
+    that must NOT crash on a missing Ollama model — it stays on the current model."""
+    from models.model_registry import (ModelRegistry, ModelProfile,
+                                        ModelCapabilities, Provider)
+    from models.routing_engine import RoutingEngine
+    from models.routed_model import RoutedModel
+
+    # Cloud-only: grok registered as GROK (is_local False), no local model.
+    reg = ModelRegistry()
+    reg.register(ModelProfile(id="grok-4", provider=Provider.GROK,
+                              capabilities=ModelCapabilities(supports_tools=True)))
+    engine = RoutingEngine(reg, primary_model_id="grok-4", local_only=False)
+    engine.set_available_models(["grok-4"])
+    assert engine.has_local_models() is False
+    rm = RoutedModel(engine, FakePool(), primary_model_id="grok-4")
+    assert rm.can_pin_local() is False
+    # local_variant returns self (no local-only clone that would fall back to qwen).
+    assert rm.local_variant() is rm
+
+    # With a local model present, pinning is possible.
+    local_engine = _routing(_ROUTING_SINGLE())
+    assert local_engine.has_local_models() is True
+    print("  PASS  opsec_local_pin_falls_back_without_local_model")
+
+
+def _ROUTING_SINGLE():
+    from models.routing_engine import RoutingStrategy
+    return RoutingStrategy.SINGLE
+
+
 async def test_routing_pipeline_picks_fast_executor():
     from models.model_registry import ModelRole
     from models.routing_engine import RoutingStrategy
@@ -3059,6 +3090,46 @@ def test_agent_color_routing():
     print("  PASS  agent_color_routing")
 
 
+def test_action_narration():
+    """The agent narrates its next step in plain language before a tool runs:
+    'Scanning ports with nmap', 'Searching the web', etc."""
+    from cli import theme
+    from cli.tui import OutputModel, TuiRenderer
+
+    # kali_run / shell resolve to the underlying command; the first token is
+    # taken BEFORE basename-ing so a URL's slashes don't fool it.
+    ap = theme.action_phrase
+    assert ap("kali_run", {"tool": "nmap", "args": "-sV x"}) == "Scanning ports with nmap"
+    assert ap("kali_run", {"tool": "gobuster"}) == "Enumerating paths with gobuster"
+    assert ap("kali_run", {"tool": "unheard_of"}) == "Running unheard_of"
+    assert ap("shell", {"cmd": "curl -s http://x/a/b"}) == "Fetching a URL with curl"
+    assert ap("shell", {"cmd": "/usr/bin/nmap -sV x"}) == "Scanning ports with nmap"
+    assert ap("shell", {"cmd": "python3 exploit.py"}) == "Running `python3`"
+    # Named agent tools key off the name; unknown tools degrade gracefully.
+    assert ap("web_search", {"query": "q"}) == "Searching the web"
+    assert ap("cve_lookup", {}) == "Looking up CVEs"
+    assert ap("file_read", {}) == "Reading a file"
+    assert ap("some_generated_tool", {}) == "Running some generated tool"
+    assert ap("", {}) == "Working"
+
+    # The spinner line carries the phrase (no "running" prefix).
+    line = theme.activity_line(0, "Scanning ports with nmap", color=False)
+    assert "Scanning ports with nmap" in line and "running" not in line
+
+    # In the TUI, a shell tool narrates then shows the command block; a non-shell
+    # tool folds the phrase into a single '● …' line (no redundant second bullet).
+    m = OutputModel()
+    tr = TuiRenderer(m)
+    tr.action("Scanning ports with nmap")
+    tr.shell_command("nmap -sV x", user="root", host="h", cwd="/")
+    tr.tool_call("Searching the web", "juice shop")
+    out = theme._visible(m.render())
+    assert "● Scanning ports with nmap" in out
+    assert "nmap -sV x" in out
+    assert "● Searching the web" in out and "juice shop" in out
+    print("  PASS  action_narration")
+
+
 def test_enhanced_input_completion():
     from cli import enhanced_input as ei
 
@@ -4288,6 +4359,7 @@ async def run_all():
     test_config_voice_section()
 
     print("\nModelRouting")
+    test_opsec_local_pin_falls_back_without_local_model()
     await test_routing_pipeline_picks_fast_executor()
     await test_routing_excludes_embedding_only_model()
     await test_routing_strategy_switch_changes_executor()

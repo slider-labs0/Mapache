@@ -30,3 +30,8 @@ include = [
 # Ship non-Python assets that live inside packages (e.g. the ANSI mascot).
 [tool.setuptools.package-data]
 cli = ["*.ans"]
+
+# The async tests use plain `async def` (no per-test @pytest.mark.asyncio), so run
+# pytest-asyncio in auto mode — a bare `pytest` then collects them without erroring.
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

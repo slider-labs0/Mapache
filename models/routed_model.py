@@ -143,14 +143,23 @@ class RoutedModel:
         sib._warned_cloud = self._warned_cloud  # share the once-per-cloud-model dedupe
         return sib
 
+    def can_pin_local(self) -> bool:
+        """Whether an OPSEC local-pin can actually be honored (an on-box model
+        exists). When False, pinning would crash on a missing Ollama model, so the
+        caller must stay on the current model instead."""
+        return self.routing.has_local_models()
+
     def local_variant(self) -> "RoutedModel":
         """A sibling that routes everything to local models (feature O).
 
         Shares this model's provider pool and registry but uses a local-only
         clone of the routing engine, so a sub-agent handed this variant keeps all
-        of its context on-box. The cloud-warning hook is preserved (it simply
-        won't fire, since no cloud model is reachable through the clone).
+        of its context on-box. If there is NO on-box model available, the pin
+        can't be honored — return self so the sub-agent stays on the current model
+        rather than crashing on a missing Ollama model (the caller warns).
         """
+        if not self.can_pin_local():
+            return self
         return RoutedModel(
             self.routing.local_clone(),
             self.pool,

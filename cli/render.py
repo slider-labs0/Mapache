@@ -131,6 +131,12 @@ class Renderer:
         except Exception:
             pass
 
+    def action(self, phrase: str) -> None:
+        """Narrate the agent's next step in plain language before a tool runs
+        (e.g. 'Scanning ports with nmap'). No-op in the line-based renderers —
+        the live spinner already carries the phrase there; the TUI overrides this
+        to commit a narration line above the tool block."""
+
     def step_line(self, text: str) -> None:
         """Print a completed-step line, clearing the live spinner first so the line
         settles above the resuming spinner. The text already carries its own ANSI,

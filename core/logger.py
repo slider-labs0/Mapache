@@ -129,10 +129,17 @@ def setup_logging(
         backup_count: Number of rotated files to keep.
     """
     global _initialized
+    root = logging.getLogger("mapache")
     if _initialized:
+        # Already configured — most likely by _auto_setup() at import time (INFO).
+        # An explicit later call (e.g. the CLI's WARNING) must still win, so apply
+        # the requested level to the existing console handler instead of no-op'ing.
+        target = getattr(logging, level.upper(), logging.INFO)
+        for h in root.handlers:
+            if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
+                h.setLevel(target)
         return
 
-    root = logging.getLogger("mapache")
     root.setLevel(logging.DEBUG)  # root captures all; handlers filter
 
     # Console handler

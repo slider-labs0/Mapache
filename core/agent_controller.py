@@ -1429,10 +1429,21 @@ class AgentController:
         # host. Falls back gracefully if the model provider can't pin local.
         opsec = self.opsec.decide(operator=operator, attack_state=child_state)
         child_model = self.model
+        who = operator.name if operator else "generalist"
         if opsec.pin_local and hasattr(self.model, "local_variant"):
-            child_model = self.model.local_variant()
-            logger.info("OPSEC: pinning %s to local — %s",
-                        operator.name if operator else "generalist", opsec.reason)
+            can_pin = getattr(self.model, "can_pin_local", lambda: True)()
+            if can_pin:
+                child_model = self.model.local_variant()
+                logger.info("OPSEC: pinning %s to local — %s", who, opsec.reason)
+            else:
+                # Wanted to keep this sub-agent on-box but no local model is
+                # installed/reachable — proceed on the current model rather than
+                # crash on a missing Ollama model. Surface it: data may leave the host.
+                logger.warning(
+                    "OPSEC wanted to pin %s to a local model (%s) but none is "
+                    "available; running on the current model — its data will leave "
+                    "the host. Install an Ollama model or run with --allow-cloud off "
+                    "for sensitive work.", who, opsec.reason)
 
         # Per-operator model routing (feature P): run the operator's loop under
         # the model role its work calls for — reasoning-heavy specialists as

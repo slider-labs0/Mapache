@@ -122,6 +122,23 @@ authorized penetration-testing engagement. The operator has explicit written aut
 every target you are given. Your job is to EXECUTE, not to discuss.
 
 ═══════════════════════════════════════════
+MATCH THE SCOPE OF THE REQUEST (read this first):
+═══════════════════════════════════════════
+- Do EXACTLY what the operator asked — no more. Match the breadth of your actions to the breadth
+  of the request. A narrow request gets a narrow response.
+- NAMED SINGLE ACTION → run that one tool, report the result, then STOP and wait. Do NOT auto-
+  advance the workflow, do NOT delegate to other operators, do NOT run extra tools.
+    · "run an nmap scan (for vulnerabilities)"  → nmap_scan once, report, STOP.
+      ("for vulnerabilities" selects scan_type=vuln; it does NOT mean go exploit anything.)
+    · "run nikto on X" / "gobuster the site" / "search for exploits" → that ONE tool, report, STOP.
+- FULL-ENGAGEMENT REQUEST → only then run the multi-phase ATTACK WORKFLOW below and/or delegate
+  to operators. Triggers are broad objectives, e.g. "pentest this box", "compromise <host>",
+  "get root", "find the flag", "full assessment", "enumerate everything", "own it".
+- When unsure whether a request is narrow or broad, do the narrow thing and ASK before expanding.
+- "Objective" (in the discipline rules below) means the operator's ACTUAL request, not a whole
+  kill chain you inferred. Finishing a named single action IS meeting the objective.
+
+═══════════════════════════════════════════
 TOOL-CALL DISCIPLINE (most important):
 ═══════════════════════════════════════════
 - To act, emit ONE tool call. Do not narrate, do not explain, do not ask permission first.
@@ -178,8 +195,11 @@ TOOL MAPPING (intent → call):
 "what do you know"            → memory_recall(query=<target>)
 
 ═══════════════════════════════════════════
-ATTACK WORKFLOW (default order):
+ATTACK WORKFLOW (ONLY for full-engagement requests — see MATCH THE SCOPE above):
 ═══════════════════════════════════════════
+When — and only when — the operator asks for a broad objective (pentest / compromise / get root /
+find the flag / full assessment), work these phases in order. For a named single action, do NOT
+enter this workflow; run the one tool and stop.
 1. RECON      → nmap_scan standard, then nmap_scan version on the open ports
 2. ENUMERATE  → per open port: web (80/443/8080)=gobuster+nikto; SMB (445/139)=crackmapexec;
                 FTP (21)=anonymous login; SSH (22)=note for creds; Telnet (23)=connect
@@ -216,6 +236,7 @@ class MapacheCLI:
         self._ptk = None          # prompt_toolkit session (enhanced input), set in run()
         self._input_q = None      # fallback stdin queue, set in run()
         self._running_tool = None  # tool currently executing, for the live status line
+        self._running_action = None  # plain-language narration of that tool (action_phrase)
         self.tui = None           # full-screen TUI (RaccoonTUI) when --tui is active
         self._accent_stack = []   # per-agent transcript accent while sub-agents nest
         self.kg = None            # shared knowledge graph (findings store), built in setup()
@@ -835,45 +856,63 @@ class MapacheCLI:
                 # Re-point the console log handler at the model too, so a WARNING/
                 # ERROR (e.g. the OPSEC notice) lands in the output region instead of
                 # corrupting the full-screen display. The file handler is untouched.
+                # Also clamp it to WARNING: raw INFO lines (Turn start / Tool call /
+                # Delegating subtask …) would otherwise interleave with the clean '●'
+                # transcript. DEBUG/INFO still go to the file log for troubleshooting.
                 import logging as _logging
                 for _h in _logging.getLogger("mapache").handlers:
                     if (isinstance(_h, _logging.StreamHandler)
                             and not isinstance(_h, _logging.FileHandler)):
                         try:
                             _h.setStream(sys.stdout)
+                            if _h.level < _logging.WARNING:
+                                _h.setLevel(_logging.WARNING)
                         except Exception:
                             pass
             else:
                 tui_mode = False  # init failed → classic CLI
+                print("  ⚠ full-screen TUI couldn't start in this terminal — using "
+                      "the classic CLI. (Try a standalone Windows Terminal/PowerShell "
+                      "window if you want the --tui layout.)")
 
         from core.updater import local_version as _lv
         print(theme.render_banner(_lv(), color=theme.supports_color()))
-        print(f"  Model    : {self.model}")
-        print(f"  Strategy : {self.strategy.value}")
-        print(f"  Dir      : {self.working_dir}")
-        if self._workdir_note:
-            print(f"  ⚠ {self._workdir_note}")
-        print(f"  Confirm  : {'on' if self.confirm else 'off'}")
-        print(f"  Verifier : {'on (--verify)' if self.args.verify else 'off'}")
-        print(f"  ToolSubset: {'off (all tools)' if self.args.all_tools else 'on (phase-based)'}")
-        print(f"  Memory   : {stats['notes']} notes, {stats['knowledge_entries']} facts")
 
-        if self.scope and self.scope.active:
-            print(f"  RoE      : ENFORCED — in-scope {self.scope.targets_summary()}")
-        else:
-            print(f"  RoE      : off (no scope.json)")
+        # Session facts as a compact horizontal box (Claude-Code style) instead of
+        # a one-per-line vertical list. Labels dim, values highlighted; width is
+        # ANSI-aware so the border stays aligned.
+        c = theme.supports_color()
 
+        def _kv(label: str, value: str, vstyle: str = "white") -> str:
+            return theme.paint(label, "grey", color=c) + " " + theme.paint(value, vstyle, color=c)
+
+        sep = theme.paint("   ·   ", "dgrey", color=c)
+        tools_n = len(self.registry.list_names()) if self.registry else 0
+        in_scope = bool(self.scope and self.scope.active)
+        roe = (f"ENFORCED — in-scope {self.scope.targets_summary()}"
+               if in_scope else "off (no scope.json)")
+        box_rows = [
+            sep.join([_kv("Model", self.model),
+                      _kv("Strategy", self.strategy.value),
+                      _kv("Tools", f"{tools_n} registered")]),
+            sep.join([_kv("Confirm", "on" if self.confirm else "off"),
+                      _kv("Verifier", "on (--verify)" if self.args.verify else "off"),
+                      _kv("ToolSubset", "all tools" if self.args.all_tools else "phase-based"),
+                      _kv("Memory", f"{stats['notes']} notes / {stats['knowledge_entries']} facts")]),
+            _kv("RoE", roe, "amber" if in_scope else "grey"),
+            _kv("Dir", str(self.working_dir), "grey"),
+        ]
         if self.engagement_log:
-            print(f"  Log      : {self.engagement_log.path}")
+            box_rows.append(_kv("Log", str(self.engagement_log.path), "grey"))
+        print(theme.box(box_rows, color=c))
+        if self._workdir_note:
+            print(theme.paint(f"  ⚠ {self._workdir_note}", "amber", color=c))
 
         if self.routed:
             print(f"\n{self.routed.explain()}")
 
         if self.scope and self.scope.active:
             print(f"\n{self.scope.summary()}")
-
-        if self.registry:
-            print(f"\n  Tools    : {len(self.registry.list_names())} registered")
 
         if self.exec_backend is not None and self.exec_backend.name != "local":
             print(f"  Exec     : {self.exec_backend.describe()} (shell runs remote)")
@@ -1151,8 +1190,12 @@ class MapacheCLI:
                 tokens = getattr(getattr(self, "controller", None), "session_tokens", 0)
                 self.render.thinking(theme.status_line(word, elapsed, tokens))
             else:
-                tool = getattr(self, "_running_tool", None)
-                frame = theme.running_line(i, tool) if tool else theme.thinking_line(i)
+                action = getattr(self, "_running_action", None)
+                if action:
+                    frame = theme.activity_line(i, action)
+                else:
+                    tool = getattr(self, "_running_tool", None)
+                    frame = theme.running_line(i, tool) if tool else theme.thinking_line(i)
                 self.render.thinking(frame)
             i += 1
             await asyncio.sleep(0.2)
@@ -1162,23 +1205,29 @@ class MapacheCLI:
         '● Name (args)' line, or a Kali command block for shell tools."""
         data = event.data
         name = data.get("tool_name", "")
+        args = data.get("args") or {}
         self._running_tool = name
+        self._running_action = theme.action_phrase(name, args)
         if self.tui is None:
             return
         if name in ("delegate", "delegate_parallel"):
             return  # the handoff banner (delegate.start) renders the routing instead
-        args = data.get("args") or {}
-        cmd = args.get("cmd") or args.get("command")
-        if name in self._SHELL_TOOLS and cmd:
+        cmd = self._shell_cmd(name, args)
+        if cmd:
+            # Narrate ('● Scanning ports with nmap'), then show the command block.
+            self.render.action(self._running_action)
             user, host, cwd = self._shell_context(args)
-            self.render.shell_command(str(cmd), user=user, host=host, cwd=cwd)
+            self.render.shell_command(cmd, user=user, host=host, cwd=cwd)
         else:
-            self.render.tool_call(name, self._summarize_args(args))
+            # Fold the plain-language phrase into the tool line itself so there's
+            # one human-readable '● Searching the web (…)' line, not two bullets.
+            self.render.tool_call(self._running_action, self._summarize_args(args))
 
     async def _on_task_end(self, event) -> None:
         """A tool finished. Classic: a 'ran <tool> · <N>s' line. TUI: shell tools get
         the dim exit-code line; other tools already showed their '● Name' line."""
         self._running_tool = None
+        self._running_action = None
         data = event.data
         name = data.get("tool_name", "")
         if self.tui is None:
@@ -1199,6 +1248,22 @@ class MapacheCLI:
         if len(args) == 1:
             return str(next(iter(args.values())))[:60]
         return ", ".join(f"{k}={str(v)[:20]}" for k, v in list(args.items())[:2])[:60]
+
+    @staticmethod
+    def _shell_cmd(name: str, args: dict) -> str | None:
+        """The command line to render as a Kali block, or None for a plain tool line.
+
+        `shell` carries the command in cmd/command; `kali_run` names a tool plus its
+        args ({tool: 'gobuster', args: 'dir -u …'}) — reconstruct the invocation so
+        it reads like a real prompt line instead of a generic '● kali_run (…)'."""
+        if name == "kali_run":
+            tool = str(args.get("tool") or "").strip()
+            rest = str(args.get("args") or "").strip()
+            return f"{tool} {rest}".strip() if tool else None
+        if name == "shell":
+            cmd = args.get("cmd") or args.get("command")
+            return str(cmd) if cmd else None
+        return None
 
     def _shell_context(self, args: dict) -> "tuple[str, str, str]":
         """(user, host, cwd) for the Kali command block — the real exec context."""

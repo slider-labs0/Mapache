@@ -106,7 +106,9 @@ class TuiRenderer(Renderer):
 
     def stream(self, text: str) -> None:
         if not self._streamed:
-            self.model.append(theme.agent_line("", dot=self.accent, color=True))  # "● "
+            # Agent prose gets a white dot (Claude-Code style); coloured dots are
+            # reserved for tool/action lines and specialist handoffs.
+            self.model.append(theme.agent_line("", dot="white", color=True))  # "● "
             self._streamed = True
         self.model.append(text)
 
@@ -114,7 +116,7 @@ class TuiRenderer(Renderer):
         if self._streamed:
             self.model.append("\n")
         elif content:
-            self.model.commit(theme.agent_line(content, dot=self.accent, color=True))
+            self.model.commit(theme.agent_line(content, dot="white", color=True))
         if error and error != "max_iterations":
             self.model.commit(theme.paint(f"  ✗ {error}", "amber", color=True))
         self.model.commit("")
@@ -126,6 +128,12 @@ class TuiRenderer(Renderer):
         self.model.commit("")
         self.model.commit(theme.user_bar(text, color=True))
         self.model.commit("")
+
+    def action(self, phrase: str) -> None:
+        """Narrate the next step ('● Scanning ports with nmap') above the tool
+        block, in the active agent's accent."""
+        self._break_stream()
+        self.model.commit(theme.agent_line(phrase, dot=self.accent, color=True))
 
     def tool_call(self, name: str, summary: str = "") -> None:
         self._break_stream()
@@ -353,9 +361,31 @@ class RaccoonTUI:
         await self._app.run_async()
 
 
+def _enable_windows_vt() -> None:
+    """Turn on ENABLE_VIRTUAL_TERMINAL_PROCESSING on the Windows stdout handle.
+
+    In the VS Code integrated terminal (a ConPTY), prompt_toolkit otherwise selects
+    its Win32 console output — which needs a classic console screen buffer and
+    raises NoConsoleScreenBufferError there. With VT enabled, prompt_toolkit picks
+    the VT-capable output and the full-screen app works. Best-effort + silent."""
+    import sys as _sys
+    if _sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        handle = k32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+        mode = ctypes.c_uint()
+        if k32.GetConsoleMode(handle, ctypes.byref(mode)):
+            k32.SetConsoleMode(handle, mode.value | 0x0004)  # VT processing
+    except Exception:
+        pass
+
+
 def build_tui(on_run, on_steer) -> Optional["RaccoonTUI"]:
     """Construct the TUI, or None if prompt_toolkit can't init a full-screen app
     here (mirrors enhanced_input.make_session's never-crash contract)."""
+    _enable_windows_vt()
     try:
         return RaccoonTUI(on_run, on_steer)
     except Exception:

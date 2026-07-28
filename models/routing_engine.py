@@ -116,6 +116,15 @@ class RoutingEngine:
             len(model_ids), len(self._chat_capable), self._chat_capable,
         )
 
+    def has_local_models(self) -> bool:
+        """Whether any chat-capable model is actually on-box (Ollama). If not, an
+        OPSEC local-pin can't be honored and must fall back rather than crash on a
+        missing Ollama model."""
+        def _is_local(model_id: str) -> bool:
+            profile = self.registry.get(model_id)
+            return profile is None or profile.is_local
+        return any(_is_local(m) for m in self._chat_capable)
+
     def local_clone(self) -> "RoutingEngine":
         """A local-only sibling of this engine (feature O — OPSEC pinning).
 
