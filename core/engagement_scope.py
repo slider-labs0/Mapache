@@ -173,6 +173,14 @@ class EngagementScope:
         return hosts
 
     def _in_scope(self, host: str) -> bool:
+        host = (host or "").strip().lower().rstrip(".")
+        # Strip a `host:port` suffix (e.g. a backfilled target like 127.0.0.1:37302):
+        # scope is about hosts, not ports. Only a single trailing numeric port — never
+        # touch bare IPv6, which legitimately contains many colons.
+        if host.count(":") == 1:
+            maybe_host, _, port = host.partition(":")
+            if port.isdigit():
+                host = maybe_host
         try:
             ip = ipaddress.ip_address(host)
             if self.allow_loopback and ip.is_loopback:
