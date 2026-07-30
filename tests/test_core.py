@@ -3275,6 +3275,29 @@ async def test_orchestrator_opplan_sequencing():
     print("  PASS  orchestrator_opplan_sequencing")
 
 
+async def test_orchestrator_exploration_ladder():
+    """When operators surface nothing (state never changes), the supervisor keeps
+    trying DIFFERENT specialists via the exploration ladder rather than stopping
+    after one — the P3 findings-gated-stall fix."""
+    from core.orchestrator import Supervisor, OperatorRouter, RoutingState
+
+    ctrl = _FakeSupervisorController(effects={})   # every operator is a no-op
+    st = ctrl.chain.attack_state
+    st.open_ports = ["80/tcp"]; st.services = {"80": "http"}
+    st.current_phase = "enumeration"
+    res = await Supervisor(ctrl, max_rounds=10).run("find the flag")
+    # It should have deployed several distinct specialists, not just web_operator.
+    assert len(set(res.operators_run)) >= 3, res.operators_run
+    assert "exploit_operator" in res.operators_run     # speculative escalation fired
+    assert res.solved is False
+
+    # And with exploration disabled it stops early (one operator on the stalled state).
+    res2 = await Supervisor(ctrl, router=OperatorRouter(explore=False),
+                            max_rounds=10).run("find the flag")
+    assert len(set(res2.operators_run)) <= 1
+    print("  PASS  orchestrator_exploration_ladder")
+
+
 def test_enhanced_input_completion():
     from cli import enhanced_input as ei
 

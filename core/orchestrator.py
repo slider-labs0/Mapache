@@ -152,10 +152,14 @@ class OperatorRouter:
     unless explicitly enabled."""
 
     def __init__(self, *, allow_remote: bool = False, allow_gated: bool = False,
-                 allow_deconfliction: bool = False) -> None:
+                 allow_deconfliction: bool = False, explore: bool = True) -> None:
         self.allow_remote = allow_remote
         self.allow_gated = allow_gated
         self.allow_deconfliction = allow_deconfliction
+        # Emit the low-priority exploration ladder (P3): keeps the supervisor trying
+        # different specialists when findings-driven routing stalls, instead of
+        # stopping after one operator. Disable for purely findings-driven routing.
+        self.explore = explore
 
     def _eligible(self, op) -> bool:
         if op is None:
@@ -218,6 +222,17 @@ class OperatorRouter:
         default = _PHASE_DEFAULT.get(state.phase)
         if default:
             consider(default, 3.0, f"phase default ({state.phase})")
+
+        # 5) Exploration ladder (P3) — low-priority speculative fallbacks so the
+        #    supervisor keeps trying DIFFERENT specialists when the findings-driven
+        #    routes are exhausted (a stalled operator surfaced nothing), rather than
+        #    stopping after one. Each is still capped by the per-state anti-loop and
+        #    the per-operator budget, so this can't spin.
+        if self.explore:
+            consider("web_operator", 2.6, "explore: enumerate the web surface")
+            consider("exploit_operator", 2.4, "explore: speculative exploitation")
+            consider("analyst", 2.2, "explore: analyze the state for a next step")
+            consider("recon_operator", 2.0, "explore: re-scan the target")
 
         return sorted(best.values(), key=lambda c: -c.score)
 
