@@ -82,7 +82,8 @@ Commands:
   /restore <name>        Restore an archived self-authored tool
   /purge <name>          Permanently delete an archived tool
   /models                Show model routing
-  /pipeline <strategy>   Set strategy: single|pipeline|auto|hybrid
+  /pipeline <strategy>   Set model strategy: single|pipeline|auto|hybrid
+  /swarm [on|off]        Toggle multi-agent supervisor (autonomous operator routing)
   /memory                Show memory stats
   /memory notes          List notes
   /memory search <q>     Search memory
@@ -237,6 +238,7 @@ class MapacheCLI:
         self._input_q = None      # fallback stdin queue, set in run()
         self._running_tool = None  # tool currently executing, for the live status line
         self._running_action = None  # plain-language narration of that tool (action_phrase)
+        self.swarm = False  # /swarm: autonomous multi-agent supervisor routing (feature P2)
         self.tui = None           # full-screen TUI (RaccoonTUI) when --tui is active
         self._accent_stack = []   # per-agent transcript accent while sub-agents nest
         self.kg = None            # shared knowledge graph (findings store), built in setup()
@@ -1057,6 +1059,32 @@ class MapacheCLI:
         # A "thinking" spinner + rotating raccoon-flavoured word runs until the
         # first token/output appears, in both input modes (it's a no-op off a TTY).
         ticker = asyncio.create_task(self._thinking_ticker())
+
+        # Multi-agent swarm mode (feature P2): the supervisor autonomously routes
+        # specialist operators instead of the single lead loop. Its delegate.start/
+        # end events drive the existing handoff banners + colour routing, so the
+        # operators are visible as they're deployed.
+        if self.swarm:
+            try:
+                from core.orchestrator import Supervisor
+                sres = await Supervisor(self.controller, session_id=self.session_id).run(
+                    user_input, session_id=self.session_id)
+                await self._stop_ticker(ticker, clear=True)
+                summary = (f"swarm complete — {sres.stop_reason}\n"
+                           f"        operators: {', '.join(sres.operators_run) or '(none)'}"
+                           f"  ·  rounds: {len(sres.rounds)}  ·  solved: {sres.solved}")
+                self.render.agent_result(summary, sres.operators_run,
+                                         len(sres.rounds), None)
+            except Exception as exc:
+                await self._stop_ticker(ticker, clear=True)
+                self.render.error(str(exc))
+                if self.args.debug:
+                    import traceback
+                    traceback.print_exc()
+            if turn_id and self.memory.session:
+                self.memory.session.end_turn(turn_id, "[swarm run]")
+            return
+
         first_output = {"seen": False}
 
         def _on_token(text: str) -> None:
@@ -1757,6 +1785,16 @@ class MapacheCLI:
                     print("  Options: single | pipeline | auto | hybrid\n")
             else:
                 print(f"  Current: {self.strategy.value}\n")
+
+        elif command == "/swarm":
+            if len(parts) > 1:
+                self.swarm = parts[1].lower() in ("on", "true", "1", "yes")
+            else:
+                self.swarm = not self.swarm
+            state = "ON" if self.swarm else "off"
+            print(f"  Multi-agent swarm: {state} — the supervisor autonomously routes "
+                  f"specialist operators (recon → web → exploit → post) based on "
+                  f"findings, instead of the single lead agent.\n")
 
         elif command == "/tools":
             if self.registry:

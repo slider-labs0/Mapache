@@ -3208,6 +3208,22 @@ async def test_orchestrator_anti_loop():
     print("  PASS  orchestrator_anti_loop")
 
 
+async def test_orchestrator_operator_budget():
+    """Per-operator budget caps a persistently-firing operator even when it keeps
+    changing state (so the per-state anti-loop wouldn't trip)."""
+    from core.orchestrator import Supervisor
+    # exploit_operator keeps finding new vulns (state changes each round) but never
+    # a flag — the per-state anti-loop never fires, so only the budget stops it.
+    ctrl = _FakeSupervisorController(
+        effects={"exploit_operator": lambda st: st.vulnerabilities.append("vuln")})
+    ctrl.chain.attack_state.vulnerabilities.append("seed")  # make exploit the top route
+    res = await Supervisor(ctrl, max_rounds=20, max_per_operator=3).run("go")
+    assert res.solved is False
+    assert res.operators_run.count("exploit_operator") == 3   # capped, not 20
+    assert "budget" in res.stop_reason
+    print("  PASS  orchestrator_operator_budget")
+
+
 def test_enhanced_input_completion():
     from cli import enhanced_input as ei
 

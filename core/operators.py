@@ -90,10 +90,11 @@ class Operator:
 # Tool subsets reference Mapache's *registered* tool names. shell + kali_run are
 # the workhorses (any installed CLI tool runs through them); create_tool lets an
 # operator author a missing wrapper. Sets are deliberately small.
-_RECON = {"nmap_scan", "web_fetch", "web_search", "shell", "searchsploit"}
-_WEB = {"kali_run", "web_fetch", "web_search", "burp_scan", "burp_proxy",
-        "searchsploit", "shell"}
-_EXPLOIT = {"msf_search", "msf_run", "msf_sessions", "searchsploit", "kali_run", "shell"}
+_RECON = {"nmap_scan", "web_fetch", "web_search", "http_request", "shell", "searchsploit"}
+_WEB = {"kali_run", "web_fetch", "web_search", "http_request", "burp_scan",
+        "burp_proxy", "searchsploit", "shell"}
+_EXPLOIT = {"msf_search", "msf_run", "msf_sessions", "searchsploit", "http_request",
+            "kali_run", "shell"}
 _POST = {"shell", "kali_run", "john_crack", "john_identify", "msf_sessions", "file_read"}
 _ANALYSIS = {"shell", "kali_run", "file_read", "file_list", "file_search",
              "searchsploit", "web_search", "create_tool"}

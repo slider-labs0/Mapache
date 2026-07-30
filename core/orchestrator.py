@@ -256,10 +256,15 @@ class Supervisor:
     """
 
     def __init__(self, controller: Any, router: Optional[OperatorRouter] = None, *,
-                 max_rounds: int = 12, session_id: str = "supervisor") -> None:
+                 max_rounds: int = 12, max_per_operator: int = 4,
+                 session_id: str = "supervisor") -> None:
         self.controller = controller
         self.router = router or OperatorRouter()
         self.max_rounds = max_rounds
+        # Cap how many times any single operator may be dispatched in a run, so a
+        # persistently-firing trigger can't monopolise the budget (global backstop
+        # on top of the per-state anti-loop).
+        self.max_per_operator = max_per_operator
         self.session_id = session_id
 
     async def _emit(self, kind: str, data: dict) -> None:
@@ -275,6 +280,7 @@ class Supervisor:
         sid = session_id or self.session_id
         rounds: list[SupervisorRound] = []
         tried: set[tuple[str, str]] = set()   # (operator, state-signature) — anti-loop
+        op_counts: dict[str, int] = {}        # per-operator dispatch budget
         stop = "round budget exhausted"
 
         for i in range(self.max_rounds):
@@ -289,13 +295,18 @@ class Supervisor:
                 break
 
             sig = state.signature()
-            pick = next((c for c in candidates if (c.operator, sig) not in tried), None)
+            # Pick the top candidate that is new for this state AND under its budget.
+            pick = next((c for c in candidates
+                         if (c.operator, sig) not in tried
+                         and op_counts.get(c.operator, 0) < self.max_per_operator),
+                        None)
             if pick is None:
-                # Every candidate has already been tried against this exact state and
-                # it hasn't changed — re-running any of them would just loop.
-                stop = "no new route (state unchanged after all candidates)"
+                # Either the state is unchanged and every candidate was already tried,
+                # or the actionable operators have hit their per-operator budget.
+                stop = "no new route (state unchanged / operator budgets spent)"
                 break
             tried.add((pick.operator, sig))
+            op_counts[pick.operator] = op_counts.get(pick.operator, 0) + 1
 
             await self._emit("supervisor.route", {
                 "round": i, "operator": pick.operator, "reason": pick.reason,

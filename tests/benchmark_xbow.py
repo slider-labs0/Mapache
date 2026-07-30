@@ -347,7 +347,8 @@ def build_provider(model: str, base_url: str):
 
 
 async def run_agent(port: int, meta: dict, flag: str, provider, *, max_iters: int,
-                    log_path: Path, session_id: str) -> tuple[bool, object, str]:
+                    log_path: Path, session_id: str, strategy: str = "single",
+                    supervisor_rounds: int = 10) -> tuple[bool, object, str]:
     base = f"http://127.0.0.1:{port}"
     # Minimal RoE by request: NO target-scoping guardrails. The lab is isolated
     # loopback containers and the scope was refusing legitimate calls; an empty
@@ -391,8 +392,29 @@ async def run_agent(port: int, meta: dict, flag: str, provider, *, max_iters: in
         base=base, name=meta.get("name", session_id),
         description=meta.get("description", "(none)"),
         tags=", ".join(meta.get("tags", []) or []) or "(none)")
-    result = await controller.run(objective, session_id=session_id)
 
+    if strategy == "swarm":
+        # Autonomous multi-agent routing (feature: supervisor). Seed the shared
+        # blackboard with the known web target so the router starts at enumeration
+        # (web_operator) rather than reconnaissance/nmap on a single known port.
+        import types
+        from core.orchestrator import Supervisor
+        st = controller.chain.attack_state
+        st.target = "127.0.0.1"
+        st.open_ports = [f"{port}/tcp"]
+        st.services = {str(port): "http"}
+        st.current_phase = "enumeration"
+        sres = await Supervisor(controller, max_rounds=supervisor_rounds,
+                                session_id=session_id).run(objective, session_id=session_id)
+        content = (f"[swarm: {sres.stop_reason}] operators: "
+                   f"{', '.join(sres.operators_run) or '(none)'}")
+        result = types.SimpleNamespace(content=content, iterations=len(sres.rounds),
+                                       tool_calls_made=sres.operators_run,
+                                       error=None, session_id=session_id)
+        haystack = content + "\n" + "\n".join(seen_output)
+        return (flag.lower() in haystack.lower() or sres.solved), result, haystack
+
+    result = await controller.run(objective, session_id=session_id)
     haystack = (result.content or "") + "\n" + "\n".join(seen_output)
     found = flag.lower() in haystack.lower()
     return found, result, haystack
@@ -413,7 +435,8 @@ def select_benchmarks(repo: Path, only: str, limit: int) -> list[str]:
 
 async def run_one(repo: Path, bid: str, provider, prov_label: str, *,
                   max_iters: int, build_timeout: int, up_timeout: int,
-                  run_timeout: int, log_dir: Path, preflight: bool = False) -> dict:
+                  run_timeout: int, log_dir: Path, preflight: bool = False,
+                  strategy: str = "single", supervisor_rounds: int = 10) -> dict:
     bench_dir = repo / "benchmarks" / bid
     project = f"xben_{bid.lower().replace('-', '_')}"
     flag = expected_flag(bid)
@@ -431,10 +454,12 @@ async def run_one(repo: Path, bid: str, provider, prov_label: str, *,
             # Buildability check only — prove the target is reachable, no agent spend.
             rec.update(status="reachable", detail=f"port {port}")
         else:
-            print(f"  target http://127.0.0.1:{port}  — running agent (max_iters={max_iters})")
+            print(f"  target http://127.0.0.1:{port}  — running agent "
+                  f"(strategy={strategy}, max_iters={max_iters})")
             found, result, _ = await asyncio.wait_for(
                 run_agent(port, meta, flag, provider, max_iters=max_iters,
-                          log_path=log_dir / f"{bid}.jsonl", session_id=bid),
+                          log_path=log_dir / f"{bid}.jsonl", session_id=bid,
+                          strategy=strategy, supervisor_rounds=supervisor_rounds),
                 timeout=run_timeout)
             rec.update(status="ok", solved=bool(found),
                        iterations=getattr(result, "iterations", 0),
@@ -510,7 +535,8 @@ async def main_async(args) -> int:
         results.append(await run_one(
             repo, bid, provider, prov_label, max_iters=args.max_iters,
             build_timeout=args.build_timeout, up_timeout=args.up_timeout,
-            run_timeout=args.run_timeout, log_dir=log_dir, preflight=args.preflight))
+            run_timeout=args.run_timeout, log_dir=log_dir, preflight=args.preflight,
+            strategy=args.strategy, supervisor_rounds=args.supervisor_rounds))
         (log_dir / summary_name).write_text(
             json.dumps({"model": args.model, "preflight": args.preflight,
                         "results": results}, indent=2), encoding="utf-8")
@@ -534,6 +560,11 @@ def main() -> None:
     ap.add_argument("--preflight", action="store_true",
                     help="build + start + probe every benchmark and report which are "
                          "reachable vs unbuildable — NO agent runs, no model spend")
+    ap.add_argument("--strategy", default="single", choices=["single", "swarm"],
+                    help="single = one generalist agent; swarm = the autonomous "
+                         "multi-agent supervisor routing specialist operators")
+    ap.add_argument("--supervisor-rounds", type=int, default=10,
+                    help="max routing rounds per benchmark in swarm strategy")
     args = ap.parse_args()
     _quiet_and_utf8()
     sys.exit(asyncio.run(main_async(args)))
