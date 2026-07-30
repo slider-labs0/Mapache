@@ -398,14 +398,16 @@ async def run_agent(port: int, meta: dict, flag: str, provider, *, max_iters: in
         # blackboard with the known web target so the router starts at enumeration
         # (web_operator) rather than reconnaissance/nmap on a single known port.
         import types
-        from core.orchestrator import Supervisor
+        from core.orchestrator import Supervisor, make_model_planner
         st = controller.chain.attack_state
         st.target = "127.0.0.1"
         st.open_ports = [f"{port}/tcp"]
         st.services = {str(port): "http"}
         st.current_phase = "enumeration"
-        sres = await Supervisor(controller, max_rounds=supervisor_rounds,
-                                session_id=session_id).run(objective, session_id=session_id)
+        sres = await Supervisor(
+            controller, max_rounds=supervisor_rounds, session_id=session_id,
+            planner=make_model_planner(controller),
+        ).run(objective, session_id=session_id)
         content = (f"[swarm: {sres.stop_reason}] operators: "
                    f"{', '.join(sres.operators_run) or '(none)'}")
         result = types.SimpleNamespace(content=content, iterations=len(sres.rounds),

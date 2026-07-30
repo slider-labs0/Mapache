@@ -29,11 +29,12 @@ multi-agent lift.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 
-from core.operators import get_operator, suggest_operators
+from core.operators import all_operators, get_operator, suggest_operators
 
 logger = logging.getLogger(__name__)
 
@@ -245,6 +246,10 @@ class SupervisorResult:
         return [r.operator for r in self.rounds]
 
 
+# A tier-2 planner: (objective, state, roster) -> (operator, subtask) or None.
+Planner = Callable[[str, "RoutingState", list], Awaitable[Optional[tuple[str, str]]]]
+
+
 class Supervisor:
     """Autonomous routing loop over the existing operator specialists.
 
@@ -257,6 +262,7 @@ class Supervisor:
 
     def __init__(self, controller: Any, router: Optional[OperatorRouter] = None, *,
                  max_rounds: int = 12, max_per_operator: int = 4,
+                 planner: Optional["Planner"] = None, opplan: Any = None,
                  session_id: str = "supervisor") -> None:
         self.controller = controller
         self.router = router or OperatorRouter()
@@ -265,7 +271,23 @@ class Supervisor:
         # persistently-firing trigger can't monopolise the budget (global backstop
         # on top of the per-state anti-loop).
         self.max_per_operator = max_per_operator
+        # Tier-2 routing brain (P1): an async callable that, when the deterministic
+        # router runs dry, picks the next (operator, subtask) from the state + roster.
+        # See `make_model_planner`. Optional — omitted keeps routing purely rule-based.
+        self.planner = planner
+        # Optional OPPLAN (P1): when set, a pending objective that names an owning
+        # operator is routed first (plan-driven), and its status is folded back.
+        self.opplan = opplan
         self.session_id = session_id
+
+    def _usable(self, name: Optional[str], sig: str, tried: set, op_counts: dict) -> bool:
+        """An operator is dispatchable if it's eligible, new for this exact state,
+        and still under its per-operator budget."""
+        if not name:
+            return False
+        return (self.router._eligible(get_operator(name))
+                and (name, sig) not in tried
+                and op_counts.get(name, 0) < self.max_per_operator)
 
     async def _emit(self, kind: str, data: dict) -> None:
         bus = getattr(self.controller, "bus", None)
@@ -288,46 +310,116 @@ class Supervisor:
             if state.has_flag:
                 stop = "objective met (flag found)"
                 break
-
-            candidates = self.router.select(state)
-            if not candidates:
-                stop = "no route candidates for current state"
-                break
-
             sig = state.signature()
-            # Pick the top candidate that is new for this state AND under its budget.
-            pick = next((c for c in candidates
-                         if (c.operator, sig) not in tried
-                         and op_counts.get(c.operator, 0) < self.max_per_operator),
-                        None)
-            if pick is None:
-                # Either the state is unchanged and every candidate was already tried,
-                # or the actionable operators have hit their per-operator budget.
-                stop = "no new route (state unchanged / operator budgets spent)"
-                break
-            tried.add((pick.operator, sig))
-            op_counts[pick.operator] = op_counts.get(pick.operator, 0) + 1
 
+            # Choose the next operator, in precedence order:
+            #   1) plan-driven — a pending OPPLAN objective that names an owner,
+            #   2) deterministic router (triggers/phase/findings),
+            #   3) LLM supervisor fallback when the rules run dry.
+            operator = subtask = reason = None
+            plan_obj = None
+
+            if self.opplan is not None:
+                try:
+                    obj = self.opplan.next_pending()
+                except Exception:
+                    obj = None
+                owner = getattr(obj, "operator", None) if obj is not None else None
+                if owner and self._usable(owner, sig, tried, op_counts):
+                    operator, subtask, plan_obj = owner, getattr(obj, "text", ""), obj
+                    reason = f"OPPLAN objective #{getattr(obj, 'id', '?')}"
+                    try:
+                        self.opplan.update(obj.id, status="in_progress")
+                    except Exception:
+                        pass
+
+            if operator is None:
+                for c in self.router.select(state):
+                    if self._usable(c.operator, sig, tried, op_counts):
+                        operator, subtask, reason = c.operator, c.subtask, c.reason
+                        break
+
+            if operator is None and self.planner is not None:
+                try:
+                    choice = await self.planner(objective, state, all_operators())
+                except Exception as exc:
+                    logger.warning("Supervisor planner failed: %s", exc)
+                    choice = None
+                if choice and self._usable(choice[0], sig, tried, op_counts):
+                    operator = choice[0]
+                    subtask = choice[1] or f"Advance the objective as the {operator}."
+                    reason = "LLM supervisor"
+
+            if operator is None:
+                stop = "no route (plan + deterministic + LLM exhausted)"
+                break
+
+            tried.add((operator, sig))
+            op_counts[operator] = op_counts.get(operator, 0) + 1
             await self._emit("supervisor.route", {
-                "round": i, "operator": pick.operator, "reason": pick.reason,
-                "subtask": pick.subtask,
+                "round": i, "operator": operator, "reason": reason, "subtask": subtask,
             })
-            logger.info("Supervisor round %d → %s (%s)", i, pick.operator, pick.reason)
+            logger.info("Supervisor round %d → %s (%s)", i, operator, reason)
 
             full_task = (f"Engagement objective: {objective}\n\n"
-                         f"Your focused task: {pick.subtask}")
+                         f"Your focused task: {subtask}")
             try:
                 result = await self.controller._spawn_and_run(
-                    full_task, pick.operator, sid, f"sup{i}", target=state.target)
+                    full_task, operator, sid, f"sup{i}", target=state.target)
             except Exception as exc:  # a failed operator shouldn't kill the loop
                 result = f"[operator error] {exc}"
-                logger.warning("Supervisor operator %s failed: %s", pick.operator, exc)
+                logger.warning("Supervisor operator %s failed: %s", operator, exc)
 
-            rounds.append(SupervisorRound(
-                index=i, operator=pick.operator, subtask=pick.subtask,
-                reason=pick.reason, result=str(result)[:4000]))
+            rounds.append(SupervisorRound(index=i, operator=operator, subtask=subtask,
+                                          reason=reason, result=str(result)[:4000]))
+
+            # Fold OPPLAN status: a plan objective is 'passed' once its operator moves
+            # the state forward, or 'blocked' once it's exhausted its budget with none.
+            if plan_obj is not None and self.opplan is not None:
+                try:
+                    advanced = RoutingState.snapshot(self.controller).signature() != sig
+                    if advanced:
+                        self.opplan.update(plan_obj.id, status="passed",
+                                           note=f"{operator} advanced the state")
+                    elif op_counts[operator] >= self.max_per_operator:
+                        self.opplan.update(plan_obj.id, status="blocked",
+                                           note=f"{operator} made no progress within budget")
+                except Exception:
+                    pass
 
         final = RoutingState.snapshot(self.controller)
         await self._emit("supervisor.done", {"rounds": len(rounds),
                                              "solved": final.has_flag, "stop": stop})
         return SupervisorResult(rounds=rounds, stop_reason=stop, solved=final.has_flag)
+
+
+def make_model_planner(controller: Any) -> Planner:
+    """A tier-2 planner backed by the controller's model: given the current state and
+    the operator roster, it returns the next (operator, subtask) as JSON, or None if
+    nothing useful remains. Best-effort — any model or parse error yields None, so the
+    supervisor falls back cleanly to 'no route' rather than crashing."""
+    async def planner(objective: str, state: "RoutingState", ops: list):
+        roster = "\n".join(f"- {o.name} ({o.phase}): {o.description}" for o in ops)
+        summary = (f"target={state.target} phase={state.phase} "
+                   f"ports={state.open_ports} services={list(state.services.values())} "
+                   f"vulns={len(state.vulnerabilities)} creds={len(state.credentials)} "
+                   f"flags={len(state.flags)}")
+        prompt = (
+            "You are the SUPERVISOR routing specialist sub-agents in an AUTHORIZED "
+            "penetration test. Choose the single best operator to deploy next.\n\n"
+            f"OBJECTIVE: {objective}\nCURRENT STATE: {summary}\n\n"
+            f"OPERATORS:\n{roster}\n\n"
+            'Reply ONLY as JSON: {"operator": "<name or null>", '
+            '"subtask": "<one focused sentence>"}. Use null if no operator can help.')
+        try:
+            resp = await controller.model.chat(
+                messages=[{"role": "user", "content": prompt}], json_mode=True)
+            content = getattr(resp, "content", resp)
+            data = json.loads(content) if isinstance(content, str) else (content or {})
+            name = (data or {}).get("operator")
+            if not name or str(name).strip().lower() in ("null", "none", ""):
+                return None
+            return (str(name).strip(), str((data or {}).get("subtask") or "").strip())
+        except Exception:
+            return None
+    return planner

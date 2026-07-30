@@ -3203,7 +3203,7 @@ async def test_orchestrator_anti_loop():
     ctrl = _FakeSupervisorController(effects={})  # every operator is a no-op
     res = await Supervisor(ctrl, max_rounds=8).run("go")
     assert res.solved is False
-    assert "no new route" in res.stop_reason
+    assert "no route" in res.stop_reason
     assert len(res.rounds) < 8   # stopped early, didn't spin
     print("  PASS  orchestrator_anti_loop")
 
@@ -3220,8 +3220,59 @@ async def test_orchestrator_operator_budget():
     res = await Supervisor(ctrl, max_rounds=20, max_per_operator=3).run("go")
     assert res.solved is False
     assert res.operators_run.count("exploit_operator") == 3   # capped, not 20
-    assert "budget" in res.stop_reason
+    assert "no route" in res.stop_reason                       # stopped, didn't spin to 20
     print("  PASS  orchestrator_operator_budget")
+
+
+async def test_orchestrator_llm_fallback():
+    """When the deterministic router runs dry, the tier-2 LLM planner picks the
+    next operator."""
+    from core.orchestrator import Supervisor, OperatorRouter
+
+    class _EmptyRouter(OperatorRouter):
+        def select(self, state):
+            return []   # force the fallback path
+
+    calls = {"n": 0}
+    async def fake_planner(objective, state, roster):
+        calls["n"] += 1
+        return ("exploit_operator", "exploit the confirmed vulnerability")
+
+    ctrl = _FakeSupervisorController(
+        effects={"exploit_operator": lambda st: st.flags.append("FLAG{via-llm}")})
+    res = await Supervisor(ctrl, router=_EmptyRouter(), planner=fake_planner,
+                           max_rounds=5).run("get the flag")
+    assert calls["n"] >= 1                       # planner was consulted
+    assert res.operators_run == ["exploit_operator"]
+    assert res.solved is True
+    print("  PASS  orchestrator_llm_fallback")
+
+
+async def test_orchestrator_opplan_sequencing():
+    """A pending OPPLAN objective that names an owner is routed first, and its
+    status is folded back to passed once the operator advances the state."""
+    import types
+    from core.orchestrator import Supervisor
+
+    objs = [types.SimpleNamespace(id=1, text="enumerate the web app",
+                                  operator="web_operator", status="pending", note="")]
+
+    class _FakeOpplan:
+        def next_pending(self):
+            return next((o for o in objs if o.status == "pending"), None)
+        def update(self, ref, *, status=None, note=None):
+            for o in objs:
+                if o.id == ref:
+                    if status:
+                        o.status = status
+                    if note:
+                        o.note = note
+
+    ctrl = _FakeSupervisorController()   # web adds a vuln (advances state), exploit → flag
+    res = await Supervisor(ctrl, opplan=_FakeOpplan(), max_rounds=6).run("own it")
+    assert res.operators_run[0] == "web_operator"   # plan-driven route ran first
+    assert objs[0].status == "passed"               # folded back after progress
+    print("  PASS  orchestrator_opplan_sequencing")
 
 
 def test_enhanced_input_completion():

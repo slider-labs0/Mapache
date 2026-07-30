@@ -1066,9 +1066,12 @@ class MapacheCLI:
         # operators are visible as they're deployed.
         if self.swarm:
             try:
-                from core.orchestrator import Supervisor
-                sres = await Supervisor(self.controller, session_id=self.session_id).run(
-                    user_input, session_id=self.session_id)
+                from core.orchestrator import Supervisor, make_model_planner
+                sres = await Supervisor(
+                    self.controller, session_id=self.session_id,
+                    planner=make_model_planner(self.controller),
+                    opplan=self.opplan,
+                ).run(user_input, session_id=self.session_id)
                 await self._stop_ticker(ticker, clear=True)
                 summary = (f"swarm complete — {sres.stop_reason}\n"
                            f"        operators: {', '.join(sres.operators_run) or '(none)'}"
