@@ -3130,6 +3130,84 @@ def test_action_narration():
     print("  PASS  action_narration")
 
 
+class _FakeChain:
+    def __init__(self, state):
+        self.attack_state = state
+
+
+class _FakeSupervisorController:
+    """Model-free stand-in for AgentController: a shared AttackState plus a
+    _spawn_and_run that simulates what each operator would discover, so the
+    Supervisor's routing can be tested without a provider or Docker."""
+    def __init__(self, effects=None):
+        from core.conversation_chain import AttackState
+        self.chain = _FakeChain(AttackState())
+        self.knowledge_graph = None
+        self.bus = None
+        self.calls = []
+        # operator -> callable(state) applying its simulated discovery
+        self.effects = effects if effects is not None else self._default_effects()
+
+    def _default_effects(self):
+        def recon(st):
+            st.open_ports.append("80/tcp"); st.services["80"] = "http"
+            st.current_phase = "enumeration"
+        def web(st):
+            st.vulnerabilities.append("SQLi in /login"); st.current_phase = "exploitation"
+        def exploit(st):
+            st.flags.append("FLAG{pwned}"); st.current_phase = "post"
+        return {"recon_operator": recon, "web_operator": web, "exploit_operator": exploit}
+
+    async def _spawn_and_run(self, task, operator, session_id, suffix, target=None):
+        self.calls.append(operator)
+        fx = self.effects.get(operator)
+        if fx:
+            fx(self.chain.attack_state)
+        return f"{operator} completed"
+
+
+async def test_orchestrator_supervisor_routing():
+    """The Supervisor autonomously routes recon → web → exploit off the shared
+    state and stops when a flag appears, reusing the controller's delegation."""
+    from core.orchestrator import Supervisor, OperatorRouter, RoutingState
+
+    r = OperatorRouter()
+    ctrl = _FakeSupervisorController()
+
+    # Router picks recon first on an empty state; web on a discovered http service;
+    # exploit once a vulnerability is known.
+    assert r.select(RoutingState.snapshot(ctrl))[0].operator == "recon_operator"
+    s_http = RoutingState(target="t", phase="enumeration",
+                          open_ports=["80/tcp"], services={"80": "http"})
+    assert "web_operator" in {c.operator for c in r.select(s_http)}
+    s_vuln = RoutingState(target="t", phase="exploitation", vulnerabilities=["x"])
+    assert any(c.operator == "exploit_operator" for c in r.select(s_vuln))
+
+    # Full loop drives the kill chain to a flag.
+    res = await Supervisor(ctrl, max_rounds=8).run("retrieve the flag")
+    assert res.solved is True
+    assert res.operators_run[:3] == ["recon_operator", "web_operator", "exploit_operator"]
+    assert "flag found" in res.stop_reason
+
+    # Eligibility: remote/gated operators are skipped unless explicitly enabled.
+    from core.operators import get_operator
+    assert not OperatorRouter()._eligible(get_operator("iot_operator"))      # requires_remote
+    assert OperatorRouter(allow_remote=True)._eligible(get_operator("iot_operator"))
+    print("  PASS  orchestrator_supervisor_routing")
+
+
+async def test_orchestrator_anti_loop():
+    """An operator that changes nothing must not loop the full budget — the
+    supervisor detects the unchanged state and stops."""
+    from core.orchestrator import Supervisor
+    ctrl = _FakeSupervisorController(effects={})  # every operator is a no-op
+    res = await Supervisor(ctrl, max_rounds=8).run("go")
+    assert res.solved is False
+    assert "no new route" in res.stop_reason
+    assert len(res.rounds) < 8   # stopped early, didn't spin
+    print("  PASS  orchestrator_anti_loop")
+
+
 def test_enhanced_input_completion():
     from cli import enhanced_input as ei
 
