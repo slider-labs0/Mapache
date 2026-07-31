@@ -3331,6 +3331,55 @@ async def test_orchestrator_exploration_ladder():
     print("  PASS  orchestrator_exploration_ladder")
 
 
+async def test_web_session_persists_login():
+    """A login via http_request must authenticate the NEXT call — the persistent
+    cookie-jar fix for the auth/IDOR failure cluster. Without it, each call built a
+    fresh client and the session cookie was lost."""
+    import httpx
+    import browser.scraping_tools as st
+    from browser.scraping_tools import HttpRequestTool, WebSession
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login":
+            return httpx.Response(200, headers={"set-cookie": "sid=secret; Path=/"},
+                                  text="logged in")
+        # Protected page: only readable with the session cookie.
+        cookie = request.headers.get("cookie", "")
+        if "sid=secret" in cookie:
+            return httpx.Response(200, text="FLAG{authed}")
+        return httpx.Response(401, text="unauthorized")
+
+    transport = httpx.MockTransport(handler)
+    orig = st.HttpClient
+    st.HttpClient = lambda *a, **k: orig(*a, **{**k, "transport": transport})
+    try:
+        sess = WebSession()
+        tool = HttpRequestTool(session=sess)
+        await tool.execute(url="http://target/login", method="POST",
+                           data={"user": "x", "password": "y"})
+        assert "sid" in sess.cookie_names()                      # cookie was captured
+        res = await tool.execute(url="http://target/me")         # separate call
+        assert "FLAG{authed}" in res.output                      # login persisted!
+        assert "401" not in res.output.split("Body")[0]
+
+        # Control: a fresh session (no shared jar) is unauthenticated.
+        res_new = await HttpRequestTool(session=WebSession()).execute(url="http://target/me")
+        assert "unauthorized" in res_new.output
+    finally:
+        st.HttpClient = orig
+    print("  PASS  web_session_persists_login")
+
+
+async def test_web_tools_share_session():
+    """web_fetch and http_request share one WebSession so a login on either is seen
+    by the other; with no session each tool gets its own."""
+    from browser.scraping_tools import WebFetchTool, HttpRequestTool, WebSession
+    sess = WebSession()
+    assert WebFetchTool(session=sess).session is HttpRequestTool(session=sess).session
+    assert WebFetchTool().session is not WebFetchTool().session   # default: isolated
+    print("  PASS  web_tools_share_session")
+
+
 def test_enhanced_input_completion():
     from cli import enhanced_input as ei
 

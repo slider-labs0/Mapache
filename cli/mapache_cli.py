@@ -539,9 +539,12 @@ class MapacheCLI:
             # Recon
             self.registry.register(NmapTool(egress=self.egress))
 
-            # Browser — HTTP tools route through the egress proxy/Tor when active.
-            self.registry.register(WebFetchTool(egress=self.egress))
-            self.registry.register(HttpRequestTool(egress=self.egress))
+            # Browser — HTTP tools route through the egress proxy/Tor when active,
+            # and share one persistent cookie jar so a login carries across calls.
+            from browser.scraping_tools import WebSession
+            web_session = WebSession()
+            self.registry.register(WebFetchTool(egress=self.egress, session=web_session))
+            self.registry.register(HttpRequestTool(egress=self.egress, session=web_session))
             self.registry.register(WebSearchTool())
             self.registry.register(TorFetchTool())
             self.registry.register(EgressCheckTool(egress=self.egress))

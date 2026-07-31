@@ -109,6 +109,8 @@ class HttpClient:
         headers: Optional[dict[str, str]] = None,
         verify_ssl: bool = True,
         follow_redirects: bool = True,
+        cookies: Optional[Any] = None,
+        transport: Optional[Any] = None,
     ) -> None:
         if not HAS_HTTPX:
             raise ImportError("httpx is required: pip install httpx[socks]")
@@ -129,6 +131,15 @@ class HttpClient:
 
         if proxy:
             client_kwargs["proxy"] = proxy
+        # A shared cookie jar (httpx.Cookies) lets one HttpClient's Set-Cookie carry
+        # into the next request even though a fresh client is built per tool call —
+        # so a login authenticates subsequent calls. httpx.Cookies(jar) shares the
+        # same underlying jar, and responses update it in place, so the caller's jar
+        # accumulates cookies across clients.
+        if cookies is not None:
+            client_kwargs["cookies"] = cookies
+        if transport is not None:  # test hook: inject an httpx.MockTransport
+            client_kwargs["transport"] = transport
 
         self._client = httpx.AsyncClient(**client_kwargs)
 
@@ -273,6 +284,12 @@ class HttpClient:
             if resp.success:
                 return resp.text.strip()
         return "unknown"
+
+    @property
+    def cookies(self) -> Any:
+        """The underlying client's cookie jar (holds any Set-Cookie from responses),
+        so a caller can round-trip it back into a persistent session."""
+        return self._client.cookies
 
     async def close(self) -> None:
         await self._client.aclose()

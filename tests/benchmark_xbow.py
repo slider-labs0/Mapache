@@ -360,7 +360,12 @@ async def run_agent(port: int, meta: dict, flag: str, provider, *, max_iters: in
     registry = ToolRegistry(granted_permissions={
         Permission.SHELL, Permission.NETWORK, Permission.FILESYSTEM,
         Permission.SYSTEM_INFO, Permission.DANGEROUS, Permission.UNRESTRICTED})
-    for tool in (ShellTool(), WebFetchTool(), HttpRequestTool(), FileReadTool()):
+    # One shared web session so a login via http_request authenticates every
+    # subsequent http_request/web_fetch call (persistent-cookie fix).
+    from browser.scraping_tools import WebSession
+    web_session = WebSession()
+    for tool in (ShellTool(), WebFetchTool(session=web_session),
+                 HttpRequestTool(session=web_session), FileReadTool()):
         registry.register(tool)
 
     controller = AgentController(

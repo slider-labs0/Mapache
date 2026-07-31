@@ -81,6 +81,52 @@ def format_response(response: HttpResponse, max_content: int = 6000) -> str:
 
 
 # ------------------------------------------------------------------ #
+# Persistent session
+# ------------------------------------------------------------------ #
+
+class WebSession:
+    """A web session shared across web-tool calls: one persistent cookie jar so a
+    login on one request authenticates the next.
+
+    The web tools build a fresh HttpClient per call, so without this a Set-Cookie
+    from a login was thrown away and the very next request was unauthenticated —
+    the root cause of the auth / IDOR / privilege-escalation failures. Share one
+    WebSession between the web tools (e.g. web_fetch + http_request) and the login
+    state carries across every call. httpx scopes cookies by domain, so a single
+    session is safe even when the agent touches several hosts."""
+
+    def __init__(self) -> None:
+        try:
+            import httpx
+            self.cookies: Any = httpx.Cookies()
+        except Exception:
+            self.cookies = None
+        # Optional sticky headers (e.g. a bearer token the agent chooses to pin).
+        self.headers: dict[str, str] = {}
+
+    def cookie_names(self) -> list[str]:
+        if not self.cookies:
+            return []
+        return sorted({c.name for c in self.cookies.jar})
+
+    def absorb(self, client_cookies: Any) -> None:
+        """Merge a client's post-response cookies back into the persistent jar.
+
+        httpx (0.28) COPIES a passed jar into the client rather than sharing it, so
+        a response's Set-Cookie lands in the client's throwaway jar, not ours. We
+        therefore round-trip: seed each HttpClient from this jar, then absorb the
+        client's jar back here after the request — so login state survives across
+        the fresh client built for every tool call."""
+        if self.cookies is None or client_cookies is None:
+            return
+        try:
+            for cookie in client_cookies.jar:
+                self.cookies.jar.set_cookie(cookie)
+        except Exception:
+            pass
+
+
+# ------------------------------------------------------------------ #
 # Tools
 # ------------------------------------------------------------------ #
 
@@ -116,11 +162,14 @@ class WebFetchTool(BaseTool):
     timeout = 30
     tags = ["browser", "web", "fetch"]
 
-    def __init__(self, egress: Any = None, **kwargs: Any) -> None:
+    def __init__(self, egress: Any = None, session: "Optional[WebSession]" = None,
+                 **kwargs: Any) -> None:
         super().__init__(**kwargs)
         # Egress/OPSEC (EgressProfile): when active, HTTP requests exit through the
         # configured proxy/Tor so the target sees that IP, not the operator's.
         self.egress = egress
+        # Persistent cookie jar shared with the other web tools (see WebSession).
+        self.session = session or WebSession()
 
     def _proxy(self) -> Any:
         return self.egress.httpx_proxy() if self.egress is not None else None
@@ -135,8 +184,10 @@ class WebFetchTool(BaseTool):
         if not url.startswith(("http://", "https://")):
             return ToolResult.fail(f"Invalid URL: must start with http:// or https://")
 
-        async with HttpClient(timeout=25.0, proxy=self._proxy()) as client:
-            response = await client.get(url)
+        async with HttpClient(timeout=25.0, proxy=self._proxy(),
+                              cookies=self.session.cookies) as client:
+            response = await client.get(url, extra_headers=self.session.headers or None)
+            self.session.absorb(client.cookies)  # persist any Set-Cookie
 
         if not response.success and response.error:
             return ToolResult.fail(response.error)
@@ -198,11 +249,15 @@ class HttpRequestTool(BaseTool):
     _KEY_HEADERS = ("content-type", "set-cookie", "location", "www-authenticate",
                     "server", "x-powered-by")
 
-    def __init__(self, egress: Any = None, **kwargs: Any) -> None:
+    def __init__(self, egress: Any = None, session: "Optional[WebSession]" = None,
+                 **kwargs: Any) -> None:
         super().__init__(**kwargs)
         # Egress/OPSEC: route the request through the configured proxy/Tor so the
         # target's web logs show that IP, not the operator's.
         self.egress = egress
+        # Persistent cookie jar shared with the other web tools (see WebSession) —
+        # a login here authenticates every later http_request/web_fetch call.
+        self.session = session or WebSession()
 
     def _proxy(self) -> Any:
         return self.egress.httpx_proxy() if self.egress is not None else None
@@ -222,11 +277,16 @@ class HttpRequestTool(BaseTool):
         if not url.startswith(("http://", "https://")):
             return ToolResult.fail("Invalid URL: must start with http:// or https://")
 
-        async with HttpClient(timeout=25.0, proxy=self._proxy()) as client:
+        # Merge any sticky session headers under the caller's explicit ones.
+        req_headers = {**self.session.headers, **(headers or {})} or None
+
+        async with HttpClient(timeout=25.0, proxy=self._proxy(),
+                              cookies=self.session.cookies) as client:
             response = await client.request(
                 method, url, params=params, data=data, json=json_body,
-                content=body, extra_headers=headers,
+                content=body, extra_headers=req_headers,
             )
+            self.session.absorb(client.cookies)  # persist any Set-Cookie
 
         if response.error and response.status_code == 0:
             return ToolResult.fail(response.error)
@@ -237,6 +297,11 @@ class HttpRequestTool(BaseTool):
             if h in {k.lower() for k in response.headers}:
                 val = next(v for k, v in response.headers.items() if k.lower() == h)
                 lines.append(f"{h}: {val}")
+        # Surface the live session so the model knows its login persists and it does
+        # NOT need to re-authenticate or manually replay cookies on the next call.
+        held = self.session.cookie_names()
+        if held:
+            lines.append(f"Session cookies (auto-sent on your next request): {', '.join(held)}")
         text = response.text or ""
         truncated = text[:max_length]
         lines.append(f"\n--- Body ({len(text)} bytes) ---\n{truncated}")
