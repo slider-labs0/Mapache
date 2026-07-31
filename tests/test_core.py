@@ -596,6 +596,50 @@ async def test_agent_fabrication_enforcement():
     print("  PASS  agent_fabrication_enforcement")
 
 
+async def test_agent_middleware_hooks():
+    """The middleware layer runs at turn_start/iteration_start/turn_end and can
+    inject a steering message and stop the turn — the composable-loop foundation."""
+    from core.middleware import AgentMiddleware
+
+    events = []
+
+    class Recorder(AgentMiddleware):
+        name = "recorder"
+        async def on_turn_start(self, ctx):
+            events.append("start")
+        async def on_iteration_start(self, ctx):
+            events.append(f"iter{ctx.iteration}")
+            if ctx.iteration == 1:
+                ctx.inject.append("STEER-INJECTED")
+            if ctx.iteration >= 2:
+                ctx.stop = True
+                ctx.stop_reason = "policy_stop"
+                ctx.stop_message = "halted by middleware"
+        async def on_turn_end(self, ctx, response):
+            events.append("end")
+
+    model = MockModel()
+    for _ in range(5):
+        model.queue({"message": {"content": "", "tool_calls": [
+            {"function": {"name": "shell", "arguments": {"cmd": "x"}}}]}})
+    controller = AgentController(model_provider=model, mode=AgentMode.AGENT)
+    controller.add_middleware(Recorder())
+    controller.register_tool(ToolSchema(
+        name="shell", description="s",
+        parameters={"type": "object", "properties": {"cmd": {"type": "string"}}, "required": ["cmd"]}))
+    await controller.start()
+
+    res = await controller.run("go", session_id="mw-test")
+
+    assert res.error == "policy_stop" and res.iterations == 2   # middleware stopped it
+    assert res.content == "halted by middleware"
+    assert events[0] == "start" and events[-1] == "end"          # turn_start/end bracket
+    # the injected message reached the model's context on the first step
+    assert any("STEER-INJECTED" in str(m.get("content", ""))
+               for m in model.calls[0]["messages"])
+    print("  PASS  agent_middleware_hooks")
+
+
 async def test_agent_plan_dispatches_and_seeds_todos():
     model = MockModel()
     # A plan must dispatch its first_tool AND seed the persistent task list,

@@ -24,6 +24,7 @@ from .context_builder import ContextBuilder, Message, ToolSchema
 from .conversation_chain import AttackState, ConversationChain
 from .engagement_scope import EngagementScope
 from .event_bus import Event, EventBus
+from .middleware import LoopContext, MiddlewareChain
 from .operators import get_operator, operator_names
 from .opsec_routing import OpsecPolicy
 from .skills_playbook import relevant_skills
@@ -239,6 +240,9 @@ class AgentController:
         # Cumulative model token usage this session (fed by provider `usage`),
         # surfaced live in the CLI status line.
         self.session_tokens = 0
+        # Composable loop middleware (budget, HITL, vaccine, tracing, …). Empty by
+        # default; register via add_middleware(). See core/middleware.py.
+        self._middleware = MiddlewareChain()
 
         # Wire subsystems
         self.executor.set_model_caller(self._call_model_raw)
@@ -492,11 +496,29 @@ class AgentController:
         active = self.chain.active_tool_names(self.context.available_tools)
         self.context.set_active_tools(active)
 
+    def add_middleware(self, mw: Any) -> None:
+        """Register a loop middleware (budget, HITL, vaccine, tracing, …)."""
+        self._middleware.add(mw)
+
     async def _agent_loop(
         self,
         user_input: str,
         session_id: str,
         on_token: Optional[Callable[[str], None]] = None,
+    ) -> AgentResponse:
+        """Wrap the core loop with the middleware turn_start/turn_end slots."""
+        ctx = LoopContext(controller=self, session_id=session_id, user_input=user_input)
+        await self._middleware.turn_start(ctx)
+        response = await self._agent_loop_core(user_input, session_id, on_token, ctx)
+        await self._middleware.turn_end(ctx, response)
+        return response
+
+    async def _agent_loop_core(
+        self,
+        user_input: str,
+        session_id: str,
+        on_token: Optional[Callable[[str], None]],
+        ctx: LoopContext,
     ) -> AgentResponse:
         tools_used: list[str] = []
         iteration = 0
@@ -514,6 +536,22 @@ class AgentController:
 
         while iteration < self.MAX_ITERATIONS:
             iteration += 1
+
+            # Middleware slot: budget checks, HITL gates, and message injection run
+            # here at the top of every step. A middleware may end the turn (ctx.stop)
+            # or queue user messages (ctx.inject) to steer the next model call.
+            if self._middleware:
+                ctx.iteration = iteration
+                await self._middleware.iteration_start(ctx)
+                for msg in ctx.inject:
+                    self.context.add_user_message(msg)
+                ctx.inject.clear()
+                if ctx.stop:
+                    return AgentResponse(
+                        content=ctx.stop_message or "Turn ended by a loop policy.",
+                        session_id=session_id, tool_calls_made=tools_used,
+                        iterations=iteration, error=ctx.stop_reason or "stopped")
+
             self._refresh_active_tools()
 
             # Pull in any operator steering queued since the last step, so the
