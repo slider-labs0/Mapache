@@ -564,6 +564,38 @@ async def test_agent_stall_abort():
     print(f"  PASS  agent_stall_abort (stopped at {response.iterations} iters)")
 
 
+async def test_agent_fabrication_enforcement():
+    """A final answer with a flag that never appeared in tool output is rejected:
+    the model is sent back to obtain the real one (bounded), and only accepted with
+    an UNVERIFIED caveat once the re-asks are spent. A verified flag passes clean."""
+    # (a) persistent fabrication → re-asked MAX times, then accepted UNVERIFIED.
+    model = MockModel()
+    for _ in range(AgentController.MAX_FABRICATION_REASKS + 3):
+        model.queue({"message": {"content": "The flag is FLAG{made_up_1234}"}})
+    events = []
+    controller = AgentController(model_provider=model, mode=AgentMode.AGENT,
+                                 enable_verifier=False)
+    controller.bus.subscribe("agent.fabrication_flagged", lambda e: events.append(e.data))
+    await controller.start()
+
+    resp = await controller.run("get the flag", session_id="fab-a")
+    reasks = [e for e in events if e.get("action") == "reask"]
+    assert len(reasks) == AgentController.MAX_FABRICATION_REASKS, len(reasks)
+    assert resp.iterations == AgentController.MAX_FABRICATION_REASKS + 1
+    assert "UNVERIFIED" in resp.content        # never stands as a trusted result
+
+    # (b) a flag that DID appear in tool output (attack_state.flags) is accepted clean.
+    model2 = MockModel([{"message": {"content": "Done — the flag is FLAG{real_one}"}}])
+    controller2 = AgentController(model_provider=model2, mode=AgentMode.AGENT,
+                                  enable_verifier=False)
+    await controller2.start()
+    controller2.chain.attack_state.flags.append("FLAG{real_one}")
+    resp2 = await controller2.run("get it", session_id="fab-b")
+    assert "UNVERIFIED" not in resp2.content
+    assert "FLAG{real_one}" in resp2.content
+    print("  PASS  agent_fabrication_enforcement")
+
+
 async def test_agent_plan_dispatches_and_seeds_todos():
     model = MockModel()
     # A plan must dispatch its first_tool AND seed the persistent task list,

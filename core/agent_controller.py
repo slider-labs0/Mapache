@@ -125,6 +125,10 @@ class AgentController:
     STALL_NUDGE_STEPS = 4
     STALL_ABORT_DUP = 4
     STALL_ABORT_NOPROG = 8
+    # When the final answer contains a flag that never appeared in tool output
+    # (a fabrication), send the model back to actually obtain it this many times
+    # before accepting the answer with an UNVERIFIED caveat.
+    MAX_FABRICATION_REASKS = 2
 
     def __init__(
         self,
@@ -498,6 +502,7 @@ class AgentController:
         iteration = 0
         verify_retries_left = self.verify_max_retries
         reasks_left = self.MAX_REASKS
+        fabrication_reasks_left = self.MAX_FABRICATION_REASKS
         # Signatures of tool calls already run this turn, mapped to their
         # result, so an identical repeated call is short-circuited instead of
         # re-run (breaks the "fetch the same URL 5 times" loop).
@@ -709,8 +714,31 @@ class AgentController:
                     )
                     continue
 
-            # Anti-fabrication guard (execute-then-answer): don't let a made-up
-            # flag/credential stand as a verified result.
+            # Anti-fabrication ENFORCEMENT: if the final answer reports a flag that
+            # never appeared in tool output, don't accept it — send the model back to
+            # actually obtain it (bounded), instead of ending on a hallucination.
+            unverified = self._unverified_flags(content)
+            if unverified and fabrication_reasks_left > 0:
+                fabrication_reasks_left -= 1
+                logger.info("Fabrication re-ask: %s (%d left)",
+                            unverified, fabrication_reasks_left)
+                await self.bus.emit(
+                    "agent.fabrication_flagged",
+                    {"tokens": unverified, "action": "reask", "session_id": session_id},
+                    source="controller", session_id=session_id,
+                )
+                self.context.add_user_message(
+                    f"You reported the flag {', '.join(unverified)}, but it NEVER appeared "
+                    "in any tool output this session — that is a fabricated/guessed flag "
+                    "and is not acceptable. Do NOT invent, guess, or reformat a flag. Go "
+                    "back to the target and ACTUALLY obtain the real flag by completing "
+                    "the exploit; only report a flag string that a tool literally returned. "
+                    "Continue working now — take the next concrete action."
+                )
+                continue
+
+            # Guard (last resort): if re-asks are spent and a made-up flag remains,
+            # annotate it UNVERIFIED so it never stands as a trusted result.
             content = await self._guard_fabricated_flags(content, session_id)
 
             return AgentResponse(
@@ -1656,6 +1684,17 @@ class AgentController:
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("sub-agent backend teardown failed: %s", exc)
 
+    def _unverified_flags(self, content: str) -> list[str]:
+        """Flag tokens in `content` that never appeared in this session's tool output
+        (attack_state.flags) — i.e. fabricated/guessed rather than actually captured."""
+        if not content:
+            return []
+        found = list(dict.fromkeys(self.chain._FLAG_BRACE_RE.findall(content)))
+        if not found:
+            return []
+        verified = set(self.chain.attack_state.flags)
+        return [t for t in found if t not in verified]
+
     async def _guard_fabricated_flags(self, content: str, session_id: str) -> str:
         """Execute-then-answer guard: a FLAG/CTF token in the final answer is only
         trustworthy if it actually appeared in this session's tool output (captured
@@ -1663,13 +1702,7 @@ class AgentController:
         turning a confident hallucination into a visible caveat. This matters most
         with delegation, where the lead reports second-hand sub-agent findings and
         is prone to papering over a miss with a plausible-looking token."""
-        if not content:
-            return content
-        found = list(dict.fromkeys(self.chain._FLAG_BRACE_RE.findall(content)))
-        if not found:
-            return content
-        verified = set(self.chain.attack_state.flags)
-        unverified = [t for t in found if t not in verified]
+        unverified = self._unverified_flags(content)
         if not unverified:
             return content
         logger.warning("Fabrication guard: %d unverified flag token(s) in answer: %s",
