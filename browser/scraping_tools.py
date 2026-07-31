@@ -81,6 +81,76 @@ def format_response(response: HttpResponse, max_content: int = 6000) -> str:
 
 
 # ------------------------------------------------------------------ #
+# Attack-surface recon (grounding: read the real app before acting)
+# ------------------------------------------------------------------ #
+
+def _extract_forms(html: str) -> list[dict]:
+    """Forms with their REAL action/method and input field names — so the agent
+    submits the actual field names (not a guessed 'username'/'password') and posts
+    to the real endpoint instead of an invented one."""
+    forms = []
+    for m in re.finditer(r"<form\b([^>]*)>(.*?)</form>", html, re.IGNORECASE | re.DOTALL):
+        attrs, body = m.group(1), m.group(2)
+        action = re.search(r'action\s*=\s*["\']([^"\']*)["\']', attrs, re.IGNORECASE)
+        method = re.search(r'method\s*=\s*["\']([^"\']*)["\']', attrs, re.IGNORECASE)
+        fields = re.findall(
+            r'<(?:input|textarea|select)\b[^>]*\bname\s*=\s*["\']([^"\']+)["\']',
+            body, re.IGNORECASE)
+        forms.append({
+            "action": action.group(1) if action else "",
+            "method": (method.group(1) if method else "GET").upper(),
+            "fields": list(dict.fromkeys(fields)),  # de-dup, keep order
+        })
+    return forms
+
+
+def _extract_comments(html: str) -> list[str]:
+    """HTML comments — CTF apps routinely leak hints, paths, or creds in them."""
+    out = []
+    for c in re.findall(r"<!--(.*?)-->", html, re.DOTALL):
+        c = " ".join(c.split())
+        if c:
+            out.append(c)
+    return out
+
+
+_ENDPOINT_HINTS = ("/api", "/rest", "/graphql", "/admin", "/user", "/account",
+                   "/login", "/logout", "/profile", "/upload", "/v1", "/v2", "/debug")
+
+
+def _extract_endpoints(html: str) -> list[str]:
+    """Path-like strings the page references (in scripts, links, actions) that look
+    like real endpoints — the true routes, instead of ones the model invents."""
+    eps: set[str] = set()
+    for m in re.finditer(r'["\'](/[A-Za-z0-9_\-./?=&]{2,})["\']', html):
+        p = m.group(1)
+        if any(h in p.lower() for h in _ENDPOINT_HINTS) or p.endswith(
+                (".php", ".json", ".do", ".jsp", ".aspx")):
+            eps.add(p.split("?")[0] if len(p) > 60 else p)
+    return sorted(eps)[:25]
+
+
+def format_attack_surface(html: str, base_url: str = "") -> str:
+    """A compact recon block: forms (with real field names), referenced endpoints,
+    and HTML comments — so the agent grounds its actions in the actual app instead
+    of blind-guessing routes and parameters (the observed failure mode)."""
+    forms = _extract_forms(html)
+    endpoints = _extract_endpoints(html)
+    comments = _extract_comments(html)
+    lines: list[str] = []
+    if forms:
+        lines.append("Forms:")
+        for f in forms[:6]:
+            lines.append(f"  {f['method']} {f['action'] or '(self)'} — fields: "
+                         f"{', '.join(f['fields']) or '(none)'}")
+    if endpoints:
+        lines.append("Referenced endpoints: " + ", ".join(endpoints))
+    if comments:
+        lines.append("HTML comments: " + " | ".join(c[:140] for c in comments[:5]))
+    return "\n".join(lines)
+
+
+# ------------------------------------------------------------------ #
 # Persistent session
 # ------------------------------------------------------------------ #
 
@@ -193,6 +263,13 @@ class WebFetchTool(BaseTool):
             return ToolResult.fail(response.error)
 
         output = format_response(response, max_content=max_length)
+
+        # Recon grounding: surface the real attack surface (forms + field names,
+        # referenced endpoints, comments) so the agent acts on what's actually there.
+        if response.is_html:
+            surface = format_attack_surface(response.text, url)
+            if surface:
+                output += f"\n\n--- Attack surface (recon) ---\n{surface}"
 
         if extract_links:
             links = response.extract_links(url)[:20]
@@ -307,6 +384,15 @@ class HttpRequestTool(BaseTool):
         lines.append(f"\n--- Body ({len(text)} bytes) ---\n{truncated}")
         if len(text) > max_length:
             lines.append("[... body truncated]")
+
+        # Recon grounding: if the response is HTML, add the parsed attack surface.
+        ctype = next((v for k, v in response.headers.items()
+                      if k.lower() == "content-type"), "")
+        low = text.lower()
+        if "html" in ctype.lower() or "<form" in low or "<html" in low:
+            surface = format_attack_surface(text, url)
+            if surface:
+                lines.append(f"\n--- Attack surface (recon) ---\n{surface}")
 
         return ToolResult.ok(
             "\n".join(lines),

@@ -3380,6 +3380,55 @@ async def test_web_tools_share_session():
     print("  PASS  web_tools_share_session")
 
 
+def test_recon_attack_surface_extraction():
+    """The web tools surface the REAL attack surface — form actions + field names,
+    referenced endpoints, and comments — so the agent stops guessing routes/params."""
+    from browser.scraping_tools import (format_attack_surface, _extract_forms,
+                                        _extract_endpoints, _extract_comments)
+    html = (
+        '<html><!-- admin backup at /admin/backup.php -->'
+        '<form action="/rest/user/login" method="post">'
+        '<input name="email"><input name="password" type="password"></form>'
+        '<script>fetch("/api/v1/users/1"); var u="/api/profile";</script>'
+        '<a href="/dashboard?user_id=10032">go</a></html>')
+
+    forms = _extract_forms(html)
+    assert forms[0]["action"] == "/rest/user/login" and forms[0]["method"] == "POST"
+    assert forms[0]["fields"] == ["email", "password"]     # REAL field names, not guessed
+
+    eps = _extract_endpoints(html)
+    assert "/rest/user/login" in eps and "/api/v1/users/1" in eps and "/api/profile" in eps
+
+    assert any("backup.php" in c for c in _extract_comments(html))   # leaked hint
+
+    block = format_attack_surface(html)
+    assert "email, password" in block and "/rest/user/login" in block
+    print("  PASS  recon_attack_surface_extraction")
+
+
+async def test_web_fetch_surfaces_attack_surface():
+    """web_fetch appends the parsed attack surface for HTML responses."""
+    import httpx
+    import browser.scraping_tools as st
+    from browser.scraping_tools import WebFetchTool
+
+    html = ('<html><form action="/login" method="post">'
+            '<input name="user"><input name="pw"></form></html>')
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "text/html"}, text=html)
+
+    orig = st.HttpClient
+    st.HttpClient = lambda *a, **k: orig(*a, **{**k, "transport": httpx.MockTransport(handler)})
+    try:
+        res = await WebFetchTool().execute(url="http://target/")
+        assert "Attack surface" in res.output
+        assert "/login" in res.output and "user, pw" in res.output
+    finally:
+        st.HttpClient = orig
+    print("  PASS  web_fetch_surfaces_attack_surface")
+
+
 def test_enhanced_input_completion():
     from cli import enhanced_input as ei
 

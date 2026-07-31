@@ -134,9 +134,13 @@ _add(Operator(
     prefer_local=False,  # web enumeration over the target's public surface — cloud OK
     description="Web application attacks — content discovery, vuln scanning, exploitation.",
     tools=_WEB, triggers={"80", "443", "8080", "8000", "http", "https"},
-    expertise="directory/content brute force (gobuster/ffuf), nikto/burp vuln scanning, "
-              "parameter and auth testing, common web classes (injection, IDOR, SSRF, "
-              "file upload, deserialization), and searchsploit on the exact stack+version.",
+    expertise="RECON FIRST: before guessing endpoints or credentials, web_fetch the "
+              "target and READ its 'Attack surface' (real form actions + field names, "
+              "referenced endpoints, HTML comments) — act on what the app actually "
+              "exposes, never on invented routes/params. Then: directory/content brute "
+              "force (gobuster/ffuf), nikto/burp vuln scanning, parameter and auth "
+              "testing, common web classes (injection, IDOR, SSRF, file upload, "
+              "deserialization), and searchsploit on the exact stack+version.",
 ))
 _add(Operator(
     name="exploit_operator", title="Exploit Operator", phase="exploitation",
