@@ -115,6 +115,16 @@ class AgentController:
     MAX_DELEGATION_DEPTH = 1
     # Max concurrent operators a single delegate_parallel call may fan out to.
     MAX_FANOUT = 6
+    # Stall detection: weak models spin on duplicate/no-progress tool calls, burning
+    # the whole iteration budget (observed: 101 dup calls on one benchmark; 10/12 dup
+    # on another). After STALL_NUDGE_STEPS tool steps with no new finding, inject a
+    # course-correct nudge. Abort the turn on ABORT_DUP consecutive ALL-duplicate
+    # steps (unambiguous spam — a capable model doing real work won't trip this), or
+    # ABORT_NOPROG steps with no discovery at all (bounded backstop; the nudge fires
+    # first so real multi-step work gets a chance).
+    STALL_NUDGE_STEPS = 4
+    STALL_ABORT_DUP = 4
+    STALL_ABORT_NOPROG = 8
 
     def __init__(
         self,
@@ -492,6 +502,10 @@ class AgentController:
         # result, so an identical repeated call is short-circuited instead of
         # re-run (breaks the "fetch the same URL 5 times" loop).
         self._seen_calls: dict[str, str] = {}
+        # Stall detection (see STALL_* constants): consecutive all-duplicate steps
+        # and consecutive steps that discovered nothing new.
+        dup_streak = 0
+        noprog_streak = 0
 
         while iteration < self.MAX_ITERATIONS:
             iteration += 1
@@ -594,7 +608,50 @@ class AgentController:
                 calls = parsed.get("calls") or [
                     {"tool": parsed["tool"], "args": parsed.get("args", {})}
                 ]
-                await self._execute_tool_calls(calls, session_id, tools_used)
+                before = self._finding_snapshot()
+                dispatched, duplicates = await self._execute_tool_calls(
+                    calls, session_id, tools_used)
+                found_new = self._finding_snapshot() != before
+
+                # Update stall streaks. A step that discovers something resets both.
+                if found_new:
+                    dup_streak = noprog_streak = 0
+                else:
+                    noprog_streak += 1
+                    dup_streak = dup_streak + 1 if (dispatched == 0 and duplicates) else 0
+
+                stalled = (dup_streak >= self.STALL_ABORT_DUP
+                           or noprog_streak >= self.STALL_ABORT_NOPROG)
+                if stalled:
+                    reason = ("repeating identical tool calls" if dup_streak >= self.STALL_ABORT_DUP
+                              else f"no new findings in {noprog_streak} steps")
+                    logger.warning("Turn aborted — stalled (%s)", reason)
+                    await self.bus.emit(
+                        "agent.stall",
+                        {"action": "abort", "reason": reason, "dup_streak": dup_streak,
+                         "noprog_streak": noprog_streak, "session_id": session_id},
+                        source="controller", session_id=session_id,
+                    )
+                    content = await self._guard_fabricated_flags(
+                        "Stopped without completing the objective — the agent stalled "
+                        f"({reason}). No further progress was being made.", session_id)
+                    return AgentResponse(
+                        content=content, session_id=session_id,
+                        tool_calls_made=tools_used, iterations=iteration, error="stalled")
+
+                # Softer intervention: one course-correct nudge when progress dries up,
+                # giving the model a chance to change tack before the abort backstop.
+                if noprog_streak == self.STALL_NUDGE_STEPS or dup_streak == self.STALL_ABORT_DUP - 1:
+                    await self.bus.emit(
+                        "agent.stall", {"action": "nudge", "noprog_streak": noprog_streak,
+                                        "session_id": session_id},
+                        source="controller", session_id=session_id)
+                    self.context.add_user_message(
+                        "You have taken several steps without discovering anything new and "
+                        "may be repeating yourself. STOP and rethink: what have you actually "
+                        "learned, and what CONCRETELY DIFFERENT approach, endpoint, parameter, "
+                        "or technique have you NOT yet tried? Take that new action now, or if "
+                        "you truly cannot progress, give your final answer.")
                 continue
 
             content = parsed.get("content") or parsed.get("text", "")
@@ -1128,9 +1185,12 @@ class AgentController:
         calls: list[dict[str, Any]],
         session_id: str,
         tools_used: list[str],
-    ) -> None:
+    ) -> "tuple[int, int]":
         """
         Run one or more tool calls the model issued in a single turn.
+
+        Returns (dispatched, duplicates): how many calls were actually run vs.
+        short-circuited as exact repeats — the loop uses this for stall detection.
 
         Dangerous-op confirmation is handled sequentially up front (it may
         prompt the user). The actual dispatches then run concurrently — the
@@ -1144,6 +1204,7 @@ class AgentController:
             seen = self._seen_calls = {}
 
         approved: list[tuple[str, str, dict[str, Any]]] = []  # (id, name, args)
+        duplicates = 0
         for call in calls:
             tool_name = call["tool"]
             tool_args = self._apply_arg_fallbacks(tool_name, call.get("args", {}))
@@ -1201,6 +1262,7 @@ class AgentController:
             # re-dispatched. Hand back the prior result with a nudge to move on.
             sig = self._call_signature(tool_name, tool_args)
             if sig in seen:
+                duplicates += 1
                 logger.info("Duplicate tool call suppressed: %s", tool_name)
                 self.context.add_tool_result(
                     tool_call_id, tool_name,
@@ -1228,7 +1290,7 @@ class AgentController:
             approved.append((tool_call_id, tool_name, tool_args))
 
         if not approved:
-            return
+            return (0, duplicates)
 
         # Announce each tool starting so the UI can show a live "running X…" line.
         for call_id, name, args in approved:
@@ -1276,6 +1338,8 @@ class AgentController:
                 source="controller",
                 session_id=session_id,
             )
+
+        return (len(approved), duplicates)
 
     def _finding_snapshot(self) -> tuple[set, set, set, set]:
         st = self.chain.attack_state

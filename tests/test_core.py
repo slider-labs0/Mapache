@@ -517,6 +517,10 @@ async def test_agent_max_iterations():
         }})
 
     controller = AgentController(model_provider=model)
+    # Disable stall detection here so this exercises the max-iterations backstop
+    # specifically (identical repeated calls would otherwise abort as a stall).
+    controller.STALL_ABORT_DUP = controller.STALL_ABORT_NOPROG = 10 ** 9
+    controller.STALL_NUDGE_STEPS = 10 ** 9
     controller.register_tool(ToolSchema(
         name="shell",
         description="Shell",
@@ -529,6 +533,35 @@ async def test_agent_max_iterations():
     assert response.error == "max_iterations"
     assert response.iterations == AgentController.MAX_ITERATIONS
     print(f"  PASS  agent_max_iterations (hit limit at {response.iterations})")
+
+
+async def test_agent_stall_abort():
+    """A model that spams the same tool call is cut off early as a stall, instead
+    of grinding to max_iterations (the duplicate-spam pathology every model showed
+    on the benchmarks)."""
+    model = MockModel()
+    for _ in range(AgentController.MAX_ITERATIONS + 2):
+        model.queue({"message": {
+            "content": "",
+            "tool_calls": [{"function": {"name": "shell", "arguments": {"cmd": "same"}}}]
+        }})
+
+    stalls = []
+    controller = AgentController(model_provider=model)
+    controller.bus.subscribe("agent.stall", lambda e: stalls.append(e.data))
+    controller.register_tool(ToolSchema(
+        name="shell", description="Shell",
+        parameters={"type": "object", "properties": {"cmd": {"type": "string"}}, "required": ["cmd"]},
+    ))
+    await controller.start()
+
+    response = await controller.run("spam", session_id="stall-test")
+
+    assert response.error == "stalled", response.error
+    assert response.iterations < AgentController.MAX_ITERATIONS  # aborted early
+    assert response.iterations <= AgentController.STALL_ABORT_DUP + 2
+    assert any(s.get("action") == "abort" for s in stalls)   # emitted the stall event
+    print(f"  PASS  agent_stall_abort (stopped at {response.iterations} iters)")
 
 
 async def test_agent_plan_dispatches_and_seeds_todos():
