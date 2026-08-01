@@ -455,6 +455,34 @@ def test_skills_playbook_ad_matching():
     print("  PASS  skills_playbook_ad_matching")
 
 
+def test_skills_playbook_domain_matching():
+    """The multi-domain playbooks (cloud, binary, mobile, SE) fire on their own
+    keyword/state signals and stay silent otherwise — Mapache isn't web-only."""
+    from core.skills_playbook import (relevant_skills, CLOUD_ATTACK_SKILL,
+                                      BINARY_PWN_SKILL, MOBILE_ATTACK_SKILL,
+                                      SOCIAL_ENGINEERING_SKILL)
+    from core.conversation_chain import AttackState
+
+    empty = AttackState()
+    # Cloud: keyword or a metadata-IP target.
+    assert CLOUD_ATTACK_SKILL.body in relevant_skills(empty, "dump the S3 bucket and assume-role")
+    st_imds = AttackState(); st_imds.target = "http://169.254.169.254/"
+    assert CLOUD_ATTACK_SKILL.body in relevant_skills(st_imds, "read metadata")
+    assert CLOUD_ATTACK_SKILL.body not in relevant_skills(empty, "find an XSS on the login page")
+
+    # Binary/pwn, mobile, social engineering: keyword-driven.
+    assert BINARY_PWN_SKILL.body in relevant_skills(empty, "ret2libc ROP chain with pwntools")
+    assert MOBILE_ATTACK_SKILL.body in relevant_skills(empty, "decompile the apk with jadx and hook frida")
+    assert SOCIAL_ENGINEERING_SKILL.body in relevant_skills(empty, "run a gophish campaign with evilginx")
+
+    # A plain network target pulls none of these domain playbooks.
+    st_net = AttackState(); st_net.open_ports = ["445", "139"]
+    dom = {CLOUD_ATTACK_SKILL.body, BINARY_PWN_SKILL.body, MOBILE_ATTACK_SKILL.body,
+           SOCIAL_ENGINEERING_SKILL.body}
+    assert not (dom & set(relevant_skills(st_net, "get a shell")))
+    print("  PASS  skills_playbook_domain_matching")
+
+
 async def test_web_skill_injected_into_context():
     # The web playbook must actually reach the model's system prompt on a
     # web-shaped turn (just-in-time grounding).
@@ -5088,6 +5116,7 @@ async def run_all():
     test_skills_playbook_network_matching()
     test_skills_playbook_credential_matching()
     test_skills_playbook_ad_matching()
+    test_skills_playbook_domain_matching()
     await test_web_skill_injected_into_context()
     await test_agent_verifier_retry()
     await test_agent_verifier_off_by_default()
