@@ -354,6 +354,12 @@ class MapacheCLI:
             scope_path = os.path.join(self.working_dir, scope_path)
         self.scope = load_scope(scope_path)
 
+        # File-authored skills (feature #6): SKILL.md playbooks dropped into
+        # <workspace>/skills/ or ~/.mapache/skills/ are parsed and registered into
+        # the just-in-time injection set, alongside the built-in playbooks. No-op
+        # when the dirs are absent.
+        self._load_file_skills()
+
         # Provider-aware pool: builds Ollama or OpenAI-compatible per model id.
         pool = ModelPool(base_url=self.ollama_url, config=self.config)
         primary_prov = self.config.provider_for_model(self.model)
@@ -746,6 +752,22 @@ class MapacheCLI:
             bits.append("on phase change")
         print(f"  🧑 HITL checkpoints: {' + '.join(bits) or 'on phase change'} "
               "([Enter]=approve · 'q'=stop · type guidance to steer)", flush=True)
+
+    def _load_file_skills(self) -> None:
+        """Load SKILL.md playbooks from the workspace and the global config dir into
+        the just-in-time injection set (feature #6). Global first, then workspace, so
+        a workspace skill can override a global one of the same name."""
+        from core.skill_format import load_skill_dir
+        dirs = [
+            os.path.join(os.path.expanduser("~"), ".mapache", "skills"),
+            os.path.join(self.working_dir, "skills"),
+        ]
+        loaded = []
+        for d in dirs:
+            loaded += load_skill_dir(d)
+        if loaded:
+            print(f"  📓 Loaded {len(loaded)} SKILL.md playbook(s): "
+                  f"{', '.join(s.name for s in loaded)}", flush=True)
 
     async def _hitl_prompt(self, ctx, reason: str):
         """Console HITL callback: pause, show the checkpoint, read one operator line.

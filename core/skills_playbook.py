@@ -281,11 +281,38 @@ AD_ATTACK_SKILL = Skill(
 SKILLS: list[Skill] = [WEB_ATTACK_SKILL, NETWORK_ATTACK_SKILL, CREDENTIAL_ATTACK_SKILL,
                        AD_ATTACK_SKILL]
 
+# File-authored skills (SKILL.md, loaded via core/skill_format.py) register here, so
+# an operator can drop a Markdown playbook into a skills/ dir and have it injected the
+# same way as the built-ins — no code change. Kept separate so a reload can replace
+# just the file-authored set without disturbing the built-ins.
+_REGISTERED_SKILLS: list[Skill] = []
+
+
+def register_skill(skill: Skill) -> None:
+    """Add a skill to the injectable set (replacing any with the same name)."""
+    global _REGISTERED_SKILLS
+    _REGISTERED_SKILLS = [s for s in _REGISTERED_SKILLS if s.name != skill.name]
+    _REGISTERED_SKILLS.append(skill)
+
+
+def clear_registered_skills() -> None:
+    """Drop all file-authored skills (used by a reload / by tests)."""
+    _REGISTERED_SKILLS.clear()
+
+
+def registered_skills() -> list[Skill]:
+    return list(_REGISTERED_SKILLS)
+
+
+def all_skills() -> list[Skill]:
+    """Built-in skills followed by file-authored ones."""
+    return SKILLS + _REGISTERED_SKILLS
+
 
 def relevant_skills(state: Any, user_input: str = "") -> list[str]:
     """Bodies of the skills whose predicate matches the current state/request."""
     out: list[str] = []
-    for skill in SKILLS:
+    for skill in all_skills():
         try:
             if skill.matches(state, user_input):
                 out.append(skill.body)

@@ -3697,6 +3697,67 @@ async def test_scoped_bus_tags():
     print("  PASS  scoped_bus_tags")
 
 
+def test_skill_md_format():
+    """SKILL.md round-trips through parse/format, its predicate is built from the
+    frontmatter triggers, and a directory of them loads into the injection set."""
+    import os
+    import tempfile
+    import types
+    from core.skill_format import (parse_skill_md, format_skill_md, spec_to_skill,
+                                    load_skill_dir, TEMPLATE)
+    from core import skills_playbook as sp
+
+    md = ("---\n"
+          "name: lfi_probe\n"
+          "description: LFI / path traversal\n"
+          "when_to_use: When a param takes a path\n"
+          "ports: [80, 443, 8080]\n"
+          "keywords: [lfi, traversal, file=]\n"
+          "target_scheme: [http, https]\n"
+          "phase: exploitation\n"
+          "tools: [http_request]\n"
+          "---\n"
+          "ACTIVE PLAYBOOK — try ../../etc/passwd and %2e%2e%2f encodings.")
+
+    spec = parse_skill_md(md)
+    assert spec.name == "lfi_probe"
+    assert spec.ports == ["80", "443", "8080"]
+    assert spec.keywords == ["lfi", "traversal", "file="]
+    assert spec.target_scheme == ["http", "https"]
+    assert "etc/passwd" in spec.body
+
+    # Round-trip: format then re-parse yields an equivalent spec.
+    spec2 = parse_skill_md(format_skill_md(spec))
+    assert (spec2.name, spec2.ports, spec2.keywords, spec2.target_scheme, spec2.body) == \
+           (spec.name, spec.ports, spec.keywords, spec.target_scheme, spec.body)
+    assert parse_skill_md(TEMPLATE).name == "my_skill"      # the authoring template parses
+
+    # Predicate built from frontmatter: port OR scheme OR keyword triggers it.
+    skill = spec_to_skill(spec)
+    assert skill.matches(types.SimpleNamespace(open_ports=["8080/tcp"], target=""), "")
+    assert skill.matches(types.SimpleNamespace(open_ports=[], target=""), "try an LFI now")
+    assert skill.matches(types.SimpleNamespace(open_ports=[], target="https://x/"), "")
+    assert not skill.matches(types.SimpleNamespace(open_ports=[], target=""), "unrelated")
+
+    # load_skill_dir registers into the injectable set; relevant_skills picks it up,
+    # and a file with no frontmatter/name is skipped.
+    sp.clear_registered_skills()
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "lfi.md"), "w", encoding="utf-8") as f:
+                f.write(md)
+            with open(os.path.join(d, "bad.md"), "w", encoding="utf-8") as f:
+                f.write("no frontmatter, no name")
+            loaded = load_skill_dir(d)
+        assert [s.name for s in loaded] == ["lfi_probe"]    # bad.md skipped
+        # 'lfi' triggers only the file skill (no built-in matches it), isolating it.
+        bodies = sp.relevant_skills(types.SimpleNamespace(open_ports=[], target=""), "lfi")
+        assert len(bodies) == 1 and "etc/passwd" in bodies[0]
+    finally:
+        sp.clear_registered_skills()                        # don't leak into other tests
+    print("  PASS  skill_md_format")
+
+
 async def test_web_session_persists_login():
     """A login via http_request must authenticate the NEXT call — the persistent
     cookie-jar fix for the auth/IDOR failure cluster. Without it, each call built a
@@ -4951,6 +5012,7 @@ async def run_all():
     await test_orchestrator_exploration_ladder()
     await test_orchestrator_fanout()
     await test_scoped_bus_tags()
+    test_skill_md_format()
 
     print("\nAutomated reporting (feature L)")
     test_report_builder()
