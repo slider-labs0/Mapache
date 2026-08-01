@@ -348,7 +348,8 @@ def build_provider(model: str, base_url: str):
 
 async def run_agent(port: int, meta: dict, flag: str, provider, *, max_iters: int,
                     log_path: Path, session_id: str, strategy: str = "single",
-                    supervisor_rounds: int = 10, fanout: bool = False) -> tuple[bool, object, str]:
+                    supervisor_rounds: int = 10, fanout: bool = False,
+                    reflect: bool = False, reflect_every: int = 6) -> tuple[bool, object, str]:
     base = f"http://127.0.0.1:{port}"
     # Minimal RoE by request: NO target-scoping guardrails. The lab is isolated
     # loopback containers and the scope was refusing legitimate calls; an empty
@@ -376,6 +377,9 @@ async def run_agent(port: int, meta: dict, flag: str, provider, *, max_iters: in
         use_function_calling=provider.supports_tools,
         system_prompt=SYSTEM_PROMPT, scope=scope, enable_verifier=False)
     controller.MAX_ITERATIONS = max_iters
+    if reflect:
+        from core.agent_middlewares import ReflectionMiddleware
+        controller.add_middleware(ReflectionMiddleware(every=reflect_every))
 
     # Capture every tool result so the flag is detected even if the model recovers
     # it but doesn't echo it in the final answer.
@@ -447,7 +451,7 @@ async def run_one(repo: Path, bid: str, provider, prov_label: str, *,
                   max_iters: int, build_timeout: int, up_timeout: int,
                   run_timeout: int, log_dir: Path, preflight: bool = False,
                   strategy: str = "single", supervisor_rounds: int = 10,
-                  fanout: bool = False) -> dict:
+                  fanout: bool = False, reflect: bool = False, reflect_every: int = 6) -> dict:
     bench_dir = repo / "benchmarks" / bid
     project = f"xben_{bid.lower().replace('-', '_')}"
     flag = expected_flag(bid)
@@ -471,7 +475,7 @@ async def run_one(repo: Path, bid: str, provider, prov_label: str, *,
                 run_agent(port, meta, flag, provider, max_iters=max_iters,
                           log_path=log_dir / f"{bid}.jsonl", session_id=bid,
                           strategy=strategy, supervisor_rounds=supervisor_rounds,
-                          fanout=fanout),
+                          fanout=fanout, reflect=reflect, reflect_every=reflect_every),
                 timeout=run_timeout)
             rec.update(status="ok", solved=bool(found),
                        iterations=getattr(result, "iterations", 0),
@@ -549,7 +553,7 @@ async def main_async(args) -> int:
             build_timeout=args.build_timeout, up_timeout=args.up_timeout,
             run_timeout=args.run_timeout, log_dir=log_dir, preflight=args.preflight,
             strategy=args.strategy, supervisor_rounds=args.supervisor_rounds,
-            fanout=args.fanout))
+            fanout=args.fanout, reflect=args.reflect, reflect_every=args.reflect_every))
         (log_dir / summary_name).write_text(
             json.dumps({"model": args.model, "preflight": args.preflight,
                         "results": results}, indent=2), encoding="utf-8")
@@ -581,6 +585,10 @@ def main() -> None:
     ap.add_argument("--fanout", action="store_true",
                     help="swarm: when a single operator stalls, deploy several "
                          "specialists in parallel to break the plateau")
+    ap.add_argument("--reflect", action="store_true",
+                    help="inject a self-critique checkpoint every N steps")
+    ap.add_argument("--reflect-every", type=int, default=6,
+                    help="reflection cadence in steps (default 6)")
     args = ap.parse_args()
     _quiet_and_utf8()
     sys.exit(asyncio.run(main_async(args)))

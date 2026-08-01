@@ -12,6 +12,9 @@ from the framework so the framework stays dependency-free.
   - VaccineMiddleware — defensive follow-up: when the engagement confirms a new
     vulnerability, generate a detection signature + remediation ("vaccine") and
     record it (Decepticon-parity: blue-cell / offensive-vaccine loop).
+  - ReflectionMiddleware — every N steps, inject a structured self-critique and name
+    the current tactical stage, so the agent reasons about what it has learned and
+    picks the highest-value next action instead of drifting (frontier-loop parity).
 """
 
 from __future__ import annotations
@@ -362,3 +365,65 @@ def make_model_vaccine_generator(controller: Any) -> VaccineGenerator:
             notes=str(parsed.get("notes", "")).strip())
 
     return _gen
+
+
+class ReflectionMiddleware(AgentMiddleware):
+    """Periodic self-critique + tactical staging (frontier-loop parity).
+
+    Frontier agent loops don't just react step to step — every so often they stop to
+    reflect: what have I actually learned, what's my current hypothesis, and what is the
+    highest-value thing I haven't tried? This middleware injects exactly that prompt
+    every `every` iterations, and names the current TACTICAL STAGE derived from live
+    state (recon → find a primitive → exploit → extract), so the agent drives a
+    kill-chain instead of drifting. It costs no extra model call — the reflection rides
+    on the next call as a steering message.
+    """
+
+    name = "reflection"
+
+    def __init__(self, every: int = 6) -> None:
+        self.every = int(every or 0)
+        self._last = 0
+
+    @staticmethod
+    def _stage(state: Any) -> str:
+        """The tactical kill-chain stage implied by the current findings."""
+        if state is None:
+            return "reconnaissance — map the target"
+        flags = getattr(state, "flags", None) or []
+        creds = getattr(state, "credentials", None) or []
+        vulns = getattr(state, "vulnerabilities", None) or []
+        ports = getattr(state, "open_ports", None) or []
+        if flags:
+            return "extraction — you have the objective in hand; verify and report it"
+        if creds:
+            return "escalation — use the access/credentials you have to reach the objective"
+        if vulns:
+            return "exploitation — turn a confirmed weakness into access or the objective"
+        if ports:
+            return "find a primitive — enumerate the surface for an exploitable weakness"
+        return "reconnaissance — map the target's ports, services, and entry points"
+
+    async def on_iteration_start(self, ctx: LoopContext) -> None:
+        it = ctx.iteration
+        if self.every <= 0 or it < self.every or (it - self._last) < self.every:
+            return
+        self._last = it
+        stage = self._stage(ctx.attack_state)
+        ctx.inject.append(
+            "CHECKPOINT — reflect before your next action. In three short lines state: "
+            "(1) CONFIRMED — the concrete facts you have actually verified from tool "
+            "output; (2) HYPOTHESIS — your current best theory for reaching the "
+            "objective; (3) NEXT — the single highest-value action you have NOT yet "
+            f"tried. Your tactical stage looks like: {stage}. Then take that NEXT "
+            "action — do not repeat anything already tried, and do not restate the plan "
+            "without acting on it.")
+        bus = getattr(ctx.controller, "bus", None)
+        if bus is not None:
+            try:
+                await bus.emit("agent.reflection",
+                               {"iteration": it, "stage": stage,
+                                "session_id": ctx.session_id},
+                               source="reflection", session_id=ctx.session_id)
+            except Exception:
+                pass

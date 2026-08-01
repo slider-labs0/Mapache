@@ -263,6 +263,9 @@ class MapacheConfig:
     # Enforced by VaccineMiddleware — each confirmed vuln yields a detection +
     # remediation "vaccine" written to <workspace>/vaccines/.
     vaccine: dict[str, Any] = field(default_factory=dict)
+    # Periodic self-critique (optional): {"enabled": bool, "every": int}. Enforced by
+    # ReflectionMiddleware — injects a reflect-and-refocus checkpoint every N steps.
+    reflection: dict[str, Any] = field(default_factory=dict)
     # Paths the config was assembled from, for diagnostics.
     sources: list[str] = field(default_factory=list)
 
@@ -300,6 +303,7 @@ class MapacheConfig:
             budget=dict(data.get("budget") or {}),
             hitl=dict(data.get("hitl") or {}),
             vaccine=dict(data.get("vaccine") or {}),
+            reflection=dict(data.get("reflection") or {}),
             sources=list(data.get("_sources") or []),
         )
 
@@ -366,6 +370,7 @@ class MapacheConfig:
             "budget": dict(self.budget),
             "hitl": dict(self.hitl),
             "vaccine": dict(self.vaccine),
+            "reflection": dict(self.reflection),
         }
 
     def redacted(self) -> dict[str, Any]:

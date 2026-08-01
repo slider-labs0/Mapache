@@ -801,6 +801,42 @@ async def test_vaccine_middleware():
     print("  PASS  vaccine_middleware")
 
 
+async def test_reflection_middleware():
+    """ReflectionMiddleware injects a self-critique on the right cadence and names the
+    tactical stage derived from live findings."""
+    import types
+    from core.middleware import LoopContext
+    from core.agent_middlewares import ReflectionMiddleware
+    from core.event_bus import EventBus
+
+    S = types.SimpleNamespace
+    mw = ReflectionMiddleware(every=3)
+    assert "reconnaissance" in mw._stage(S(open_ports=[], vulnerabilities=[], credentials=[], flags=[]))
+    assert "find a primitive" in mw._stage(S(open_ports=["80"], vulnerabilities=[], credentials=[], flags=[]))
+    assert "exploitation" in mw._stage(S(open_ports=["80"], vulnerabilities=["sqli"], credentials=[], flags=[]))
+    assert "escalation" in mw._stage(S(open_ports=[], vulnerabilities=[], credentials=["a:b"], flags=[]))
+    assert "extraction" in mw._stage(S(open_ports=[], vulnerabilities=[], credentials=[], flags=["FLAG{x}"]))
+
+    bus = EventBus(); events: list = []
+    async def cap(e):
+        events.append(e.data)
+    bus.subscribe("agent.reflection", cap)
+    st = S(open_ports=["80"], vulnerabilities=[], credentials=[], flags=[], current_phase="enumeration")
+    ctrl = S(bus=bus, chain=S(attack_state=st))
+    ctx = LoopContext(controller=ctrl, session_id="s", user_input="x")
+    fired = []
+    for it in range(1, 7):
+        ctx.iteration = it
+        ctx.inject.clear()
+        await mw.on_iteration_start(ctx)
+        if ctx.inject:
+            assert "CHECKPOINT" in ctx.inject[0]
+            fired.append(it)
+    assert fired == [3, 6]                # every-3 cadence, first step never gates early
+    assert len(events) == 2 and events[0]["stage"]
+    print("  PASS  reflection_middleware")
+
+
 async def test_agent_plan_dispatches_and_seeds_todos():
     model = MockModel()
     # A plan must dispatch its first_tool AND seed the persistent task list,
@@ -5027,6 +5063,7 @@ async def run_all():
     await test_budget_middleware()
     await test_hitl_middleware()
     await test_vaccine_middleware()
+    await test_reflection_middleware()
     test_progress_ledger_unit()
     await test_progress_ledger_records_dead_ends()
     await test_agent_grounding_nudge()

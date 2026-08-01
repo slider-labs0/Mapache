@@ -522,6 +522,9 @@ class MapacheCLI:
         # "vaccine" for each confirmed vuln. Inert unless configured (config.vaccine
         # or --vaccine).
         self._wire_vaccine()
+        # Periodic self-critique (optional): inject a reflect-and-refocus checkpoint
+        # every N steps. Inert unless configured (config.reflection or --reflect).
+        self._wire_reflection()
         # Live status: a spinner shows "running <tool>…" while a tool executes,
         # then a "ran <tool> · <N>s" line settles above it. Replaces the raw
         # agent_controller INFO logs (silenced on the console; still in the file).
@@ -842,6 +845,26 @@ class MapacheCLI:
             sink=self._vaccine_sink, per_step_cap=cap))
         print("  💉 Vaccine loop: on — a detection+remediation is generated for each "
               "confirmed vuln (→ vaccines/)", flush=True)
+
+    def _wire_reflection(self) -> None:
+        """Register a ReflectionMiddleware when periodic self-critique is enabled.
+
+        Sources (CLI overrides config): --reflect / --reflect-every N beat
+        config.reflection = {"enabled": bool, "every": int}. Inert when not enabled.
+        """
+        if self.controller is None:
+            return
+        spec = dict(getattr(self.config, "reflection", None) or {})
+        every = getattr(self.args, "reflect_every", None)
+        if every is None:
+            every = spec.get("every", 6)
+        every = int(every or 6)
+        enabled = getattr(self.args, "reflect", False) or spec.get("enabled")
+        if not enabled:
+            return
+        from core.agent_middlewares import ReflectionMiddleware
+        self.controller.add_middleware(ReflectionMiddleware(every=every))
+        print(f"  🧭 Reflection: self-critique checkpoint every {every} steps", flush=True)
 
     async def _vaccine_sink(self, ctx, vaccine) -> None:
         """Persist a generated vaccine to <workspace>/vaccines/ and announce it."""
@@ -2189,6 +2212,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vaccine", action="store_true",
                         help="Defensive follow-up: generate a detection+remediation "
                              "'vaccine' for each confirmed vulnerability (→ vaccines/)")
+    parser.add_argument("--reflect", action="store_true",
+                        help="Inject a reflect-and-refocus self-critique every N steps "
+                             "(confirmed facts → hypothesis → highest-value next action)")
+    parser.add_argument("--reflect-every", type=int, default=None, metavar="N",
+                        help="Reflection cadence in steps (implies --reflect; default 6)")
     parser.add_argument("--fanout", action="store_true",
                         help="Swarm (/swarm): when a single operator stalls, deploy "
                              "several specialists in parallel to break the plateau")
