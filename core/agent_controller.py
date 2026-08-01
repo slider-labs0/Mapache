@@ -26,6 +26,7 @@ from .engagement_scope import EngagementScope
 from .event_bus import Event, EventBus, ScopedBus
 from .middleware import LoopContext, MiddlewareChain
 from .progress_ledger import ProgressLedger, action_label
+from .flag_verifier import FlagVerifier
 from .operators import get_operator, operator_names
 from .opsec_routing import OpsecPolicy
 from .skills_playbook import relevant_skills
@@ -166,6 +167,7 @@ class AgentController:
         persona_provider: Optional[Callable[[], str]] = None,
         profile_provider: Optional[Callable[[], str]] = None,
         opplan_provider: Optional[Callable[[], str]] = None,
+        flag_format: Optional[str] = None,
         subagent_backend_factory: Optional[Callable[["SubAgentContext"], Any]] = None,
         knowledge_graph: Optional[Any] = None,
     ) -> None:
@@ -188,6 +190,11 @@ class AgentController:
         # so it drives objectives through pending→in_progress→passed|blocked. Not
         # propagated to sub-agents (they get their one focused objective).
         self.opplan_provider = opplan_provider
+        # Candidate-flag verifier: knows the engagement's expected flag FORMAT so a
+        # grounded-but-wrong-format token is caught, and a custom-format flag (not the
+        # generic FLAG{…}) is recognised. Generic flag shapes when no format is set.
+        self._flag_format = flag_format
+        self._flag_verifier = FlagVerifier(flag_format)
         self.persona_provider = persona_provider
         # Agent-maintained user profile (feature F). Called each turn for a
         # compact summary of durable user facts, injected alongside the attack
@@ -547,6 +554,8 @@ class AgentController:
         # recognised as a blind probe. Persists across steps within the turn.
         self._grounding_seen = ""
         self._ungrounded_streak = 0
+        # Raw (case-preserving) tool-output corpus for flag verification.
+        self._tool_corpus = ""
         # Stall detection (see STALL_* constants): consecutive all-duplicate steps
         # and consecutive steps that discovered nothing new.
         dup_streak = 0
@@ -1447,6 +1456,7 @@ class AgentController:
             # Grow the grounding corpus so future calls can be checked against what
             # responses actually contained (capped so it can't grow unbounded).
             self._grounding_seen = (self._grounding_seen + " " + tool_output.lower())[-20000:]
+            self._tool_corpus = (self._tool_corpus + "\n" + tool_output)[-40000:]
             self.context.add_tool_result(
                 tool_call_id=tool_call_id,
                 tool_name=tool_name,
@@ -1821,10 +1831,17 @@ class AgentController:
         if not content:
             return []
         found = list(dict.fromkeys(self.chain._FLAG_BRACE_RE.findall(content)))
-        if not found:
-            return []
         verified = set(self.chain.attack_state.flags)
-        return [t for t in found if t not in verified]
+        unverified = [t for t in found if t not in verified]
+        # Format-aware pass: only when the engagement declares an expected flag format.
+        # Catches a custom-format flag the brace regex misses, and a grounded token whose
+        # format is wrong (plausible-but-wrong success). Keyed on the raw tool corpus.
+        if self._flag_format:
+            corpus = getattr(self, "_tool_corpus", "") or ""
+            for v in self._flag_verifier.verify_all(content, corpus):
+                if not v.verified and v.candidate not in unverified:
+                    unverified.append(v.candidate)
+        return unverified
 
     async def _guard_fabricated_flags(self, content: str, session_id: str) -> str:
         """Execute-then-answer guard: a FLAG/CTF token in the final answer is only

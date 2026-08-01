@@ -266,6 +266,9 @@ class MapacheConfig:
     # Periodic self-critique (optional): {"enabled": bool, "every": int}. Enforced by
     # ReflectionMiddleware — injects a reflect-and-refocus checkpoint every N steps.
     reflection: dict[str, Any] = field(default_factory=dict)
+    # Expected flag format (optional regex): the candidate-flag verifier uses it to
+    # catch a grounded-but-wrong-format token and recognise custom (non-FLAG{}) flags.
+    flag_format: str = ""
     # Paths the config was assembled from, for diagnostics.
     sources: list[str] = field(default_factory=list)
 
@@ -304,6 +307,7 @@ class MapacheConfig:
             hitl=dict(data.get("hitl") or {}),
             vaccine=dict(data.get("vaccine") or {}),
             reflection=dict(data.get("reflection") or {}),
+            flag_format=str(data.get("flag_format") or ""),
             sources=list(data.get("_sources") or []),
         )
 
@@ -371,6 +375,7 @@ class MapacheConfig:
             "hitl": dict(self.hitl),
             "vaccine": dict(self.vaccine),
             "reflection": dict(self.reflection),
+            "flag_format": self.flag_format,
         }
 
     def redacted(self) -> dict[str, Any]:

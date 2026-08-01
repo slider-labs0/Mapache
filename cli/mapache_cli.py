@@ -508,6 +508,9 @@ class MapacheCLI:
             persona_provider=lambda: load_soul(self.working_dir),
             # User profile (feature F): inject durable user facts each turn.
             profile_provider=lambda: self.user_profile.summary(),
+            # Candidate-flag verifier: expected flag format from --flag-format / config.
+            flag_format=(getattr(self.args, "flag_format", None)
+                         or getattr(self.config, "flag_format", "") or None),
         )
         self._wire_scope_notifier()
         # Engagement budget (optional): a token/time cap that stops the loop
@@ -2238,6 +2241,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--attempts", type=int, default=1, metavar="N",
                         help="Self-consistency: if the objective isn't reached, retry "
                              "with a fresh approach up to N times (stops on first solve)")
+    parser.add_argument("--flag-format", default=None, metavar="REGEX",
+                        help="Expected flag format (regex) — the verifier flags a "
+                             "captured token that doesn't match it as unverified")
     parser.add_argument("--fanout", action="store_true",
                         help="Swarm (/swarm): when a single operator stalls, deploy "
                              "several specialists in parallel to break the plateau")

@@ -1217,6 +1217,51 @@ async def test_agent_duplicate_call_guard():
     print("  PASS  agent_duplicate_call_guard")
 
 
+def test_flag_verifier():
+    """FlagVerifier grounds candidates in tool output AND validates format: a wrong
+    format or an ungrounded token is not verified; a custom format is recognised."""
+    from core.flag_verifier import FlagVerifier
+
+    # No expected format → generic braced flags, grounded against the corpus.
+    v = FlagVerifier()
+    corpus = "the response contained FLAG{real_one} in the body"
+    assert v.verify("FLAG{real_one}", corpus).verified
+    assert not v.verify("FLAG{made_up}", corpus).verified          # not grounded
+    assert v.candidates("here is FLAG{a} and FLAG{b}") == ["FLAG{a}", "FLAG{b}"]
+
+    # Custom format (HTB-style hex) → recognised, and a wrong-format grounded token fails.
+    vf = FlagVerifier(expected_pattern=r"HTB\{[0-9a-f]{6}\}")
+    corp2 = "leaked HTB{abc123} and also the string notaflag here"
+    good = vf.verify("HTB{abc123}", corp2)
+    assert good.verified and good.well_formed and good.grounded
+    bad = vf.verify("notaflag", corp2)                              # grounded, wrong format
+    assert bad.grounded and not bad.well_formed and not bad.verified
+    print("  PASS  flag_verifier")
+
+
+async def test_agent_flag_format_guard():
+    """With a flag_format set, the guard flags a token that was 'captured' (in
+    attack_state.flags) but does NOT match the expected format — the format-aware
+    extension the brace-only guard misses."""
+    controller = AgentController(model_provider=MockModel(), mode=AgentMode.AGENT,
+                                 flag_format=r"CTF\{[a-z]+\}")
+    await controller.start()
+
+    # A wrong-format token the flag extractor grabbed anyway; grounded in output.
+    controller.chain.attack_state.flags.append("CTF{ABC123}")
+    controller._tool_corpus = "the page said CTF{ABC123}"
+    out = await controller._guard_fabricated_flags(
+        "Done — the flag is CTF{ABC123}", session_id="ff")
+    assert "UNVERIFIED" in out and "CTF{ABC123}" in out   # wrong format, despite 'captured'
+
+    # A correctly-formatted, grounded, captured flag passes clean.
+    controller.chain.attack_state.flags.append("CTF{abc}")
+    controller._tool_corpus = "response body: CTF{abc}"
+    ok = await controller._guard_fabricated_flags("Done — CTF{abc}", session_id="ff")
+    assert "UNVERIFIED" not in ok
+    print("  PASS  agent_flag_format_guard")
+
+
 async def test_agent_grounding_nudge():
     """Repeated web calls to invented paths (never seen in any response) trip the
     response-grounded-acting nudge — the guard against blind endpoint spraying."""
@@ -5140,6 +5185,8 @@ async def run_all():
     test_progress_ledger_unit()
     await test_progress_ledger_records_dead_ends()
     await test_agent_grounding_nudge()
+    test_flag_verifier()
+    await test_agent_flag_format_guard()
 
     print("\nSelf-authored tools (feature A)")
     await test_generated_tool_roundtrip()
