@@ -3633,6 +3633,70 @@ async def test_orchestrator_exploration_ladder():
     print("  PASS  orchestrator_exploration_ladder")
 
 
+async def test_orchestrator_fanout():
+    """When a single operator stalls (leaves the state unchanged), the fan-out
+    supervisor deploys several DISTINCT specialists together in one parallel round
+    instead of trying one more; off by default."""
+    from core.orchestrator import Supervisor
+    from core.event_bus import EventBus
+
+    def make_ctrl():
+        c = _FakeSupervisorController(effects={})     # every operator is a no-op
+        st = c.chain.attack_state
+        st.open_ports = ["80/tcp"]; st.services = {"80": "http"}
+        st.current_phase = "enumeration"
+        c.bus = EventBus()
+        return c
+
+    # With fanout on: a supervisor.fanout event fires deploying >=2 operators, and
+    # the round records several dispatches under one round index.
+    ctrl = make_ctrl()
+    fan_events: list = []
+    async def on_fan(e):
+        fan_events.append(e.data["operators"])
+    ctrl.bus.subscribe("supervisor.fanout", on_fan)
+    res = await Supervisor(ctrl, fanout=True, max_rounds=6).run("go")
+    assert fan_events and len(fan_events[0]) >= 2, fan_events
+    idxs = [r.index for r in res.rounds]
+    assert any(idxs.count(x) >= 2 for x in set(idxs)), idxs   # a parallel round
+    assert len(set(res.operators_run)) >= 3                   # distinct specialists
+
+    # Off by default: no fan-out even on the same stalled state.
+    ctrl2 = make_ctrl()
+    fan2: list = []
+    async def on_fan2(e):
+        fan2.append(e.data["operators"])
+    ctrl2.bus.subscribe("supervisor.fanout", on_fan2)
+    await Supervisor(ctrl2, fanout=False, max_rounds=6).run("go")
+    assert fan2 == []
+    print("  PASS  orchestrator_fanout")
+
+
+async def test_scoped_bus_tags():
+    """ScopedBus stamps an _agent tag onto every emitted event and forwards it to the
+    real bus (so a sub-agent's full trace is attributable); a deeper scope wins and
+    subscribe/history delegate through — Decepticon-parity #7."""
+    from core.event_bus import EventBus, ScopedBus
+
+    bus = EventBus()
+    seen: list = []
+    async def cap(e):
+        seen.append(e.data)
+    bus.subscribe("x", cap)
+
+    child = ScopedBus(bus, {"operator": "web_operator", "depth": 1})
+    await child.emit("x", {"k": 1})
+    assert seen[-1]["k"] == 1                                  # payload preserved
+    assert seen[-1]["_agent"]["operator"] == "web_operator"   # tagged
+    assert bus.get_history(topic="x")                          # forwarded + recorded
+
+    # A grandchild scope's identity wins as the event bubbles up through the parent.
+    grand = ScopedBus(child, {"operator": "exploit_operator", "depth": 2})
+    await grand.emit("x", {})
+    assert seen[-1]["_agent"]["depth"] == 2
+    print("  PASS  scoped_bus_tags")
+
+
 async def test_web_session_persists_login():
     """A login via http_request must authenticate the NEXT call — the persistent
     cookie-jar fix for the auth/IDOR failure cluster. Without it, each call built a
@@ -4877,6 +4941,16 @@ async def run_all():
     await test_subagent_gets_own_backend_and_teardown()
     await test_subagent_receives_mission_context()
     await test_fabrication_guard_flags_unverified()
+
+    print("\nAutonomous multi-agent supervisor (orchestrator)")
+    await test_orchestrator_supervisor_routing()
+    await test_orchestrator_anti_loop()
+    await test_orchestrator_operator_budget()
+    await test_orchestrator_llm_fallback()
+    await test_orchestrator_opplan_sequencing()
+    await test_orchestrator_exploration_ladder()
+    await test_orchestrator_fanout()
+    await test_scoped_bus_tags()
 
     print("\nAutomated reporting (feature L)")
     test_report_builder()

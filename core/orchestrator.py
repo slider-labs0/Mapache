@@ -29,6 +29,7 @@ multi-agent lift.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
@@ -278,6 +279,7 @@ class Supervisor:
     def __init__(self, controller: Any, router: Optional[OperatorRouter] = None, *,
                  max_rounds: int = 12, max_per_operator: int = 4,
                  planner: Optional["Planner"] = None, opplan: Any = None,
+                 fanout: bool = False, fanout_width: int = 3, fanout_after: int = 1,
                  session_id: str = "supervisor") -> None:
         self.controller = controller
         self.router = router or OperatorRouter()
@@ -286,6 +288,14 @@ class Supervisor:
         # persistently-firing trigger can't monopolise the budget (global backstop
         # on top of the per-state anti-loop).
         self.max_per_operator = max_per_operator
+        # Parallel operator fan-out (#5): when a single operator has stalled (its
+        # round left the state signature unchanged) for `fanout_after` rounds, deploy
+        # the top `fanout_width` DISTINCT usable specialists CONCURRENTLY to break the
+        # plateau, then re-route on the merged findings — instead of trying one more
+        # single operator. Off by default (single-dispatch behaviour preserved).
+        self.fanout = fanout
+        self.fanout_width = max(2, int(fanout_width or 2))
+        self.fanout_after = max(1, int(fanout_after or 1))
         # Tier-2 routing brain (P1): an async callable that, when the deterministic
         # router runs dry, picks the next (operator, subtask) from the state + roster.
         # See `make_model_planner`. Optional — omitted keeps routing purely rule-based.
@@ -313,11 +323,39 @@ class Supervisor:
         except Exception:
             pass
 
+    async def _spawn_safe(self, task: str, operator: str, sid: str, suffix: str,
+                          target: Optional[str]) -> str:
+        """Dispatch one operator, converting a failure into a result string so a
+        crashing operator never takes down the (possibly parallel) round."""
+        try:
+            return str(await self.controller._spawn_and_run(
+                task, operator, sid, suffix, target=target))
+        except Exception as exc:
+            logger.warning("Supervisor operator %s failed: %s", operator, exc)
+            return f"[operator error] {exc}"
+
+    def _fanout_picks(self, state: "RoutingState", sig: str, tried: set,
+                      op_counts: dict) -> list["RouteCandidate"]:
+        """Top-N DISTINCT usable operators to deploy concurrently on a stall."""
+        picked: list[RouteCandidate] = []
+        seen: set[str] = set()
+        for c in self.router.select(state):
+            if c.operator in seen:
+                continue
+            if not self._usable(c.operator, sig, tried, op_counts):
+                continue
+            seen.add(c.operator)
+            picked.append(c)
+            if len(picked) >= self.fanout_width:
+                break
+        return picked
+
     async def run(self, objective: str, session_id: Optional[str] = None) -> SupervisorResult:
         sid = session_id or self.session_id
         rounds: list[SupervisorRound] = []
         tried: set[tuple[str, str]] = set()   # (operator, state-signature) — anti-loop
         op_counts: dict[str, int] = {}        # per-operator dispatch budget
+        stall_streak = 0                      # consecutive rounds with no state change
         stop = "round budget exhausted"
 
         for i in range(self.max_rounds):
@@ -326,6 +364,35 @@ class Supervisor:
                 stop = "objective met (flag found)"
                 break
             sig = state.signature()
+
+            # Parallel fan-out (#5): a single operator has stalled — deploy several
+            # distinct specialists at once to break the plateau, then re-route on the
+            # merged findings. Takes precedence over another single dispatch.
+            if self.fanout and stall_streak >= self.fanout_after:
+                picks = self._fanout_picks(state, sig, tried, op_counts)
+                if len(picks) >= 2:
+                    for c in picks:
+                        tried.add((c.operator, sig))
+                        op_counts[c.operator] = op_counts.get(c.operator, 0) + 1
+                    names = [c.operator for c in picks]
+                    await self._emit("supervisor.fanout", {
+                        "round": i, "operators": names,
+                        "reason": f"stall x{stall_streak} — parallel fan-out"})
+                    logger.info("Supervisor round %d → FAN-OUT %s", i, names)
+                    results = await asyncio.gather(*(
+                        self._spawn_safe(
+                            f"Engagement objective: {objective}\n\n"
+                            f"Your focused task: {c.subtask}",
+                            c.operator, sid, f"fan{i}_{j}", state.target)
+                        for j, c in enumerate(picks)))
+                    for c, res in zip(picks, results):
+                        rounds.append(SupervisorRound(
+                            index=i, operator=c.operator, subtask=c.subtask,
+                            reason=f"fan-out: {c.reason}", result=str(res)[:4000]))
+                    new_sig = RoutingState.snapshot(self.controller).signature()
+                    stall_streak = 0 if new_sig != sig else stall_streak + 1
+                    continue
+                # Too few candidates to fan out → fall through to single dispatch.
 
             # Choose the next operator, in precedence order:
             #   1) plan-driven — a pending OPPLAN objective that names an owner,
@@ -378,21 +445,21 @@ class Supervisor:
 
             full_task = (f"Engagement objective: {objective}\n\n"
                          f"Your focused task: {subtask}")
-            try:
-                result = await self.controller._spawn_and_run(
-                    full_task, operator, sid, f"sup{i}", target=state.target)
-            except Exception as exc:  # a failed operator shouldn't kill the loop
-                result = f"[operator error] {exc}"
-                logger.warning("Supervisor operator %s failed: %s", operator, exc)
+            result = await self._spawn_safe(full_task, operator, sid, f"sup{i}",
+                                            state.target)
 
             rounds.append(SupervisorRound(index=i, operator=operator, subtask=subtask,
                                           reason=reason, result=str(result)[:4000]))
+
+            # Track whether this operator advanced the state, for both the stall/fan-out
+            # trigger and the OPPLAN status fold below.
+            advanced = RoutingState.snapshot(self.controller).signature() != sig
+            stall_streak = 0 if advanced else stall_streak + 1
 
             # Fold OPPLAN status: a plan objective is 'passed' once its operator moves
             # the state forward, or 'blocked' once it's exhausted its budget with none.
             if plan_obj is not None and self.opplan is not None:
                 try:
-                    advanced = RoutingState.snapshot(self.controller).signature() != sig
                     if advanced:
                         self.opplan.update(plan_obj.id, status="passed",
                                            note=f"{operator} advanced the state")

@@ -223,3 +223,47 @@ class EventBus:
         self._history.append(event)
         if len(self._history) > self._max_history:
             self._history = self._history[-self._max_history :]
+
+
+class ScopedBus:
+    """A bus proxy that stamps ambient delegation tags onto every emitted event's
+    data, then forwards to the underlying bus.
+
+    A delegated sub-agent shares the lead's bus, so its tool calls, findings, and
+    reasks already flow through the same stream — but nothing marks them as the
+    sub-agent's. Wrapping the child's bus in a ScopedBus injects an `_agent` tag
+    ({"operator", "depth", "suffix", …}) into each event so consumers (e.g. the CLI)
+    can attribute and nest the sub-agent's full trace instead of seeing only the
+    delegate start/end banners (Decepticon-parity #7: full sub-agent trace streaming).
+
+    Subscription, history, and everything else delegate to the wrapped bus, so the
+    event stream is unchanged apart from the added tag. A deeper scope's tag wins
+    (set once, never overwritten), so a grandchild keeps its own identity even as
+    the event bubbles up through its parent's ScopedBus."""
+
+    def __init__(self, bus: Any, tags: dict[str, Any]) -> None:
+        self._bus = bus
+        self._tags = dict(tags or {})
+
+    def __getattr__(self, name: str) -> Any:
+        # Everything not overridden here (subscribe/unsubscribe/get_history/…) is the
+        # real bus's — so consumers and nested scopes behave identically.
+        return getattr(self._bus, name)
+
+    def _stamp(self, data: dict[str, Any] | None) -> dict[str, Any]:
+        merged = dict(data or {})
+        merged.setdefault("_agent", self._tags)   # deepest scope wins
+        return merged
+
+    async def emit(self, topic: str, data: dict[str, Any] | None = None,
+                   source: str | None = None, session_id: str | None = None) -> Event:
+        return await self._bus.emit(topic, self._stamp(data),
+                                    source=source, session_id=session_id)
+
+    async def emit_and_wait(self, topic: str, data: dict[str, Any] | None = None,
+                            source: str | None = None, session_id: str | None = None,
+                            response_topic: str | None = None,
+                            timeout: float = 30.0) -> Event:
+        return await self._bus.emit_and_wait(
+            topic, self._stamp(data), source=source, session_id=session_id,
+            response_topic=response_topic, timeout=timeout)

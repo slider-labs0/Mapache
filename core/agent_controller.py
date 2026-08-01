@@ -23,7 +23,7 @@ from uuid import uuid4
 from .context_builder import ContextBuilder, Message, ToolSchema
 from .conversation_chain import AttackState, ConversationChain
 from .engagement_scope import EngagementScope
-from .event_bus import Event, EventBus
+from .event_bus import Event, EventBus, ScopedBus
 from .middleware import LoopContext, MiddlewareChain
 from .progress_ledger import ProgressLedger, action_label
 from .operators import get_operator, operator_names
@@ -1651,8 +1651,13 @@ class AgentController:
             shared_state=child_state,
             allow_state_reset=False,
             # Share the event bus so the child's tool calls, findings, and RoE
-            # refusals land in the same engagement log (feature K) as the lead's.
-            bus=self.bus,
+            # refusals land in the same engagement log (feature K) as the lead's —
+            # wrapped in a ScopedBus that tags each event with this sub-agent's
+            # identity/depth, so the UI can attribute and stream its full trace
+            # (not just the delegate start/end banners).
+            bus=ScopedBus(self.bus, {
+                "operator": who, "depth": self.delegation_depth + 1,
+                "suffix": suffix, "target": child_state.target}),
             # Children inherit the OPSEC policy so deeper delegations stay pinned.
             opsec_policy=self.opsec,
             # Share the durable findings store: a fresh-context specialist queries

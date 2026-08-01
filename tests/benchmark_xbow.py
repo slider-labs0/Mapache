@@ -348,7 +348,7 @@ def build_provider(model: str, base_url: str):
 
 async def run_agent(port: int, meta: dict, flag: str, provider, *, max_iters: int,
                     log_path: Path, session_id: str, strategy: str = "single",
-                    supervisor_rounds: int = 10) -> tuple[bool, object, str]:
+                    supervisor_rounds: int = 10, fanout: bool = False) -> tuple[bool, object, str]:
     base = f"http://127.0.0.1:{port}"
     # Minimal RoE by request: NO target-scoping guardrails. The lab is isolated
     # loopback containers and the scope was refusing legitimate calls; an empty
@@ -411,7 +411,7 @@ async def run_agent(port: int, meta: dict, flag: str, provider, *, max_iters: in
         st.current_phase = "enumeration"
         sres = await Supervisor(
             controller, max_rounds=supervisor_rounds, session_id=session_id,
-            planner=make_model_planner(controller),
+            planner=make_model_planner(controller), fanout=fanout,
         ).run(objective, session_id=session_id)
         content = (f"[swarm: {sres.stop_reason}] operators: "
                    f"{', '.join(sres.operators_run) or '(none)'}")
@@ -443,7 +443,8 @@ def select_benchmarks(repo: Path, only: str, limit: int) -> list[str]:
 async def run_one(repo: Path, bid: str, provider, prov_label: str, *,
                   max_iters: int, build_timeout: int, up_timeout: int,
                   run_timeout: int, log_dir: Path, preflight: bool = False,
-                  strategy: str = "single", supervisor_rounds: int = 10) -> dict:
+                  strategy: str = "single", supervisor_rounds: int = 10,
+                  fanout: bool = False) -> dict:
     bench_dir = repo / "benchmarks" / bid
     project = f"xben_{bid.lower().replace('-', '_')}"
     flag = expected_flag(bid)
@@ -466,7 +467,8 @@ async def run_one(repo: Path, bid: str, provider, prov_label: str, *,
             found, result, _ = await asyncio.wait_for(
                 run_agent(port, meta, flag, provider, max_iters=max_iters,
                           log_path=log_dir / f"{bid}.jsonl", session_id=bid,
-                          strategy=strategy, supervisor_rounds=supervisor_rounds),
+                          strategy=strategy, supervisor_rounds=supervisor_rounds,
+                          fanout=fanout),
                 timeout=run_timeout)
             rec.update(status="ok", solved=bool(found),
                        iterations=getattr(result, "iterations", 0),
@@ -543,7 +545,8 @@ async def main_async(args) -> int:
             repo, bid, provider, prov_label, max_iters=args.max_iters,
             build_timeout=args.build_timeout, up_timeout=args.up_timeout,
             run_timeout=args.run_timeout, log_dir=log_dir, preflight=args.preflight,
-            strategy=args.strategy, supervisor_rounds=args.supervisor_rounds))
+            strategy=args.strategy, supervisor_rounds=args.supervisor_rounds,
+            fanout=args.fanout))
         (log_dir / summary_name).write_text(
             json.dumps({"model": args.model, "preflight": args.preflight,
                         "results": results}, indent=2), encoding="utf-8")
@@ -572,6 +575,9 @@ def main() -> None:
                          "multi-agent supervisor routing specialist operators")
     ap.add_argument("--supervisor-rounds", type=int, default=10,
                     help="max routing rounds per benchmark in swarm strategy")
+    ap.add_argument("--fanout", action="store_true",
+                    help="swarm: when a single operator stalls, deploy several "
+                         "specialists in parallel to break the plateau")
     args = ap.parse_args()
     _quiet_and_utf8()
     sys.exit(asyncio.run(main_async(args)))

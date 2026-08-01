@@ -1220,6 +1220,7 @@ class MapacheCLI:
                     self.controller, session_id=self.session_id,
                     planner=make_model_planner(self.controller),
                     opplan=self.opplan,
+                    fanout=getattr(self.args, "fanout", False),
                 ).run(user_input, session_id=self.session_id)
                 await self._stop_ticker(ticker, clear=True)
                 summary = (f"swarm complete — {sres.stop_reason}\n"
@@ -1380,12 +1381,33 @@ class MapacheCLI:
             i += 1
             await asyncio.sleep(0.2)
 
+    @staticmethod
+    def _agent_trace_prefix(data: dict) -> "str | None":
+        """Indent + label for a delegated sub-agent's event, or None for the lead.
+
+        Sub-agent events carry an `_agent` tag (operator/depth) stamped by the
+        ScopedBus, so the lead can stream the sub-agent's full ReAct trace nested
+        under it instead of seeing only the delegate start/end banners."""
+        agent = (data or {}).get("_agent")
+        if not agent:
+            return None
+        op = agent.get("operator") or "sub-agent"
+        depth = max(1, int(agent.get("depth") or 1))
+        return f"{'   ' * depth}⤷ [{op}] "
+
     async def _on_task_start(self, event) -> None:
         """A tool began. Classic: the spinner shows 'running <tool>…'. TUI: commit a
         '● Name (args)' line, or a Kali command block for shell tools."""
         data = event.data
         name = data.get("tool_name", "")
         args = data.get("args") or {}
+        # Delegated sub-agent step: stream it as an attributed, indented line and
+        # return — never clobber the lead's live spinner state with a child's tool.
+        prefix = self._agent_trace_prefix(data)
+        if prefix is not None:
+            if name not in ("delegate", "delegate_parallel"):
+                print(f"\n{prefix}{theme.action_phrase(name, args)}", flush=True)
+            return
         self._running_tool = name
         self._running_action = theme.action_phrase(name, args)
         if self.tui is None:
@@ -1406,10 +1428,18 @@ class MapacheCLI:
     async def _on_task_end(self, event) -> None:
         """A tool finished. Classic: a 'ran <tool> · <N>s' line. TUI: shell tools get
         the dim exit-code line; other tools already showed their '● Name' line."""
-        self._running_tool = None
-        self._running_action = None
         data = event.data
         name = data.get("tool_name", "")
+        # Delegated sub-agent step: close its attributed line; don't touch the lead's
+        # spinner state (that belongs to the lead's own in-flight tool, if any).
+        prefix = self._agent_trace_prefix(data)
+        if prefix is not None:
+            secs = (data.get("duration_ms") or 0.0) / 1000.0
+            mark = "✗" if data.get("error") else "✓"
+            print(f"{prefix}{mark} {name} · {secs:.1f}s", flush=True)
+            return
+        self._running_tool = None
+        self._running_action = None
         if self.tui is None:
             self.render.step_line(theme.step_done_line(
                 name, (data.get("duration_ms") or 0.0) / 1000.0,
@@ -2118,6 +2148,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vaccine", action="store_true",
                         help="Defensive follow-up: generate a detection+remediation "
                              "'vaccine' for each confirmed vulnerability (→ vaccines/)")
+    parser.add_argument("--fanout", action="store_true",
+                        help="Swarm (/swarm): when a single operator stalls, deploy "
+                             "several specialists in parallel to break the plateau")
     parser.add_argument("--no-tools", action="store_true")
     parser.add_argument("--all-tools", action="store_true",
                         help="Disable phase-based tool subsetting and expose all "
