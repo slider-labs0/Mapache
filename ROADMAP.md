@@ -503,6 +503,41 @@ Specialist sub-agents coordinated by a lead over a shared blackboard.
 
 ---
 
+## Q. Decepticon-parity convergence  ← in progress (2026-07 → 2026-08)
+A second wave toward Decepticon parity: a durable knowledge graph, an operations
+plan, a vuln-research pipeline, an autonomous supervisor, and a composable
+middleware architecture around the loop. The 1–7 items are the user-set build
+order (middleware → budget → HITL → vaccine → fan-out → skill.md → trace-streaming).
+
+- [x] **Knowledge graph + OPPLAN + vuln-research pipeline** (`core/knowledge_graph.py`,
+      `core/opplan.py`, staged operators + `VulnResearchTool`). Disk-persisted findings
+      store inherited by sub-agents; an orchestration-facing plan injected to the lead.
+- [x] **Autonomous supervisor** (`core/orchestrator.py`): `RoutingState` → `OperatorRouter`
+      → `Supervisor` deploys/routes specialists from state (deterministic + LLM + OPPLAN
+      tiers, exploration ladder). CLI `/swarm`, `benchmark_xbow --strategy swarm`.
+- [x] **1. Composable loop middleware** (`core/middleware.py`): `AgentMiddleware` /
+      `LoopContext` / `MiddlewareChain` run at turn_start / iteration_start / turn_end.
+- [x] **2. Budget enforcement** (`BudgetMiddleware`): engagement token/wall-clock cap
+      with a graceful stop. `config.budget` + `--budget-tokens` / `--budget-seconds`.
+- [x] **3. Formal HITL slot** (`HITLMiddleware`): loop-level approve / deny / steer at
+      every-N and phase-change checkpoints. `config.hitl` + `--hitl` / `--hitl-every`.
+- [x] **4. Vaccine loop** (`VaccineMiddleware`): each confirmed vuln yields a
+      detection+remediation artifact → KG note + `<workspace>/vaccines/`. `--vaccine`.
+- [x] **5. Parallel operator fan-out**: on a supervisor stall, deploy the top-N distinct
+      operators concurrently (`Supervisor(fanout=…)`, emits `supervisor.fanout`). `--fanout`.
+      Live-verified on grok-4 / XBEN-001 (2026-08-01): 1 solo op → 3 parallel on stall.
+- [ ] **6. SKILL.md formatter** — Decepticon skill-package frontmatter / authoring. NEXT.
+- [x] **7. Full sub-agent trace streaming** (`ScopedBus`): tags every delegated event with
+      operator/depth so the CLI streams the sub-agent's attributed `⤷ [op]` trace, not just
+      the delegate start/end banners.
+- [x] **Progress ledger** (`core/progress_ledger.py`, from the XBOW loop plan): persists
+      dead-end actions across turns and injects a "do NOT repeat" block each step.
+- Touchpoints: `core/middleware.py`, `core/agent_middlewares.py`, `core/progress_ledger.py`,
+  `core/orchestrator.py`, `core/event_bus.py`, `core/knowledge_graph.py`, `core/opplan.py`,
+  `core/agent_controller.py`, `cli/mapache_cli.py`. Tests in `tests/test_core.py` (suite 154).
+
+---
+
 ## Suggested ordering (dependencies)
 
 1. **C (setup)** + **G (providers)** — providers need key storage; do together.
