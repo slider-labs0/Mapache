@@ -1,8 +1,10 @@
 # Mapache — Phase Status
 
-> Offensive-security AI agent. Local-model (Ollama) ReAct loop with phase-aware
-> attack-state tracking, a 33-tool offensive toolchain, persistent memory, and
-> Telegram/Discord operation.
+> Full-spectrum offensive-security AI agent (web, network, cloud, AD, binary, mobile,
+> social engineering). Local-model (Ollama) or cloud ReAct loop with phase-aware
+> attack-state tracking, composable loop middleware, an autonomous multi-agent
+> supervisor, a ~50-tool offensive toolchain, persistent + cross-engagement memory,
+> and Telegram/Discord operation.
 
 This document reflects the **current** architecture after the execution-path
 consolidation (see "Architecture note" below). It is the source of truth — if
@@ -163,21 +165,49 @@ cli/mapache_cli.py         ← --verify flag, routes the check to the VERIFIER r
 
 ---
 
-## Current tool count: 33
+## ✅ Post-Phase-8 — Differentiators, Decepticon parity & the agent-loop upgrade
 
-```
-shell, file_read, file_write, file_edit, file_list, file_search,
-nmap_scan, web_fetch, web_search, tor_fetch,
-msf_search, msf_run, msf_sessions,
-burp_scan, burp_proxy,
-john_crack, john_identify,
-kali_list, kali_run, searchsploit,
-memory_recall, memory_save, memory_note_create,
-memory_note_search, memory_note_list,
-memory_target_store, memory_target_get,
-moltbook_register, moltbook_status, moltbook_post,
-moltbook_feed, moltbook_comment, moltbook_search
-```
+Everything past Phase 8 (2026-06 → 2026-08). This is a digest; **`ROADMAP.md`
+sections J–S carry the per-item detail, touchpoints, and tests.** All on branch
+`feature/agent-loop-upgrades`; the core unit suite (`tests/test_core.py`) is at **168
+passing**.
+
+**Differentiators J–P (shipped 2026-06):** Rules-of-Engagement guardrails (J), an
+auditable engagement log (K), automated reporting/deliverables (L), exploit/CVE
+grounding (M), skill synthesis from proven chains (N), hybrid OPSEC routing — pin
+sensitive work to a local model (O), and multi-agent engagement orchestration —
+operator specialists over a shared blackboard (P).
+
+**Q — Decepticon-parity convergence (2026-07 → 08):** disk-persisted knowledge graph
++ OPPLAN + a vuln-research pipeline; an autonomous **supervisor/router**
+(`core/orchestrator.py`) that deploys specialists from state; and the user-ordered
+**1–7 middleware sequence** — composable loop middleware (`core/middleware.py`), budget
+enforcement, a formal HITL slot, the offensive-vaccine loop, parallel operator fan-out,
+the SKILL.md formatter, and full sub-agent trace streaming (`ScopedBus`) — plus a
+persistent progress ledger.
+
+**R — Frontier-loop capability upgrades (2026-08):** a real **headless-browser tool**
+(Playwright; JS/SPA rendering — live-verified), **response-grounded acting** (nudge off
+blind endpoint spraying), disciplined **sqlmap + ffuf** wrappers, a **reflection +
+tactical-staging** middleware, and **multi-attempt / self-consistency** solving
+(`--attempts`).
+
+**S — Full-spectrum coverage + cross-engagement learning (2026-08):** built-in
+just-in-time playbooks now span web, network, credential, AD, **cloud**, **binary-pwn**,
+**mobile**, and **social-engineering** (Mapache is no longer web-only); a **format-aware
+candidate-flag verifier**; and a **cross-engagement learning store** that biases routing
+toward what won on similar targets before.
+
+---
+
+## Current tool count: ~50 registered + core meta-tools
+
+Beyond the Phase-1–6 base (shell/file*/nmap/web*/msf*/burp*/john*/kali*/searchsploit/
+memory*), the offensive toolchain now includes **browser** (headless Chromium),
+**sqlmap**, **fuzz** (ffuf), plus the meta-tools **create_tool**, **delegate** /
+**delegate_parallel**, **kg_query** / **kg_add**, **opplan_add/update/show**,
+**cve_lookup**, **synthesize_skill**, and **vuln_research**. Operators drive
+domain-specific CLIs (aws/kubectl/frida/ghidra/jadx/gophish) through `shell`/`kali_run`.
 
 ---
 
@@ -398,15 +428,30 @@ Note: `--strategy` is live (per-role routing). `--no-verifier` is still inert
 
 ## What's left
 
+The feature roadmap (A–S) is essentially complete. What remains is **proof and
+breadth**, not core subsystems:
+
 ```
+PROOF (the dominant open item)
+   [ ] Solve-rate LIFT measurement — the whole loop/capability wave is UNMEASURED.
+       Needs a capable PAID model + enough benchmarks: baseline vs
+       `benchmark_xbow.py --strategy swarm --fanout --reflect --attempts N`.
+       (grok-4 ~12% too weak; the $2–3 budget so far is insufficient for signal.)
+   [ ] Live validation of the non-web domains (cloud / binary-pwn / mobile / AD)
+       against real targets — the playbooks + operators are built and unit-tested
+       but exercised only on web so far. Browser tool IS live-verified; sqlmap/ffuf
+       still need live runs.
+
+SMALL DEFERRED (ROADMAP)
+   [ ] G 🟡 — end-to-end verification against a real OpenRouter/Nous key.
+   [ ] Generated-tool startup loader (verify manifests/checksums at boot).
+   [ ] CLI fully consumes MapacheConfig (replace scattered args.*) + a config command.
+   [ ] Per-target execution backend; RAG over the vector store; ExploitDB feed.
+
 Phase 9 🟡  Voice + Hardware + Mobile
-   [x] Voice I/O — voice/voice_io.py (2026-06-28): TTSProvider/STTProvider
-       behind a null default; optional pyttsx3 TTS + faster-whisper/whisper STT
-       (constructed only when importable); make_tts/make_stt/voice_from_config;
-       VoiceManager wired into the CLI (--voice, /voice on|off, /say, speaks
-       responses) + config.voice block. Tests: 2 (offline, null path).
-   [ ] Hardware — arduino_controller / wifi_camera_controller. DEFERRED: needs
-       a physical board/camera to build+verify meaningfully (no device in-env).
-   [ ] Mobile — ios_api_bridge. DEFERRED: Telegram/Discord already cover remote
-       operation; an iOS bridge needs the app/endpoint to verify.
+   [x] Voice I/O — voice/voice_io.py (2026-06-28): TTS/STT behind a null default;
+       optional pyttsx3 + faster-whisper; VoiceManager + --voice/--say + config.voice.
+   [ ] Hardware — arduino_controller / wifi_camera_controller. DEFERRED: needs a
+       physical board/camera to verify (no device in-env).
+   [ ] Mobile — ios_api_bridge. DEFERRED: Telegram/Discord already cover remote op.
 ```
