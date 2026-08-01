@@ -576,6 +576,32 @@ model"). Ordered by leverage; 1–5 shipped 2026-08-01.
 
 ---
 
+## S. Full-spectrum coverage + cross-engagement learning  ← 2026-08
+Making Mapache a true multi-domain operator, not a web agent, and one that improves
+over time.
+
+- [x] **Multi-domain playbooks** (`core/skills_playbook.py`): built-in just-in-time
+      playbooks now span web, network service, credential, AD, **cloud** (IMDS/bucket/
+      IAM/k8s), **binary-pwn** (checksec→pwntools ROP), **mobile** (apktool/jadx/frida),
+      and **social-engineering** (deconfliction-gated GoPhish/evilginx). The 22 domain
+      operators were already tool-backed (they drive aws/kubectl/frida/ghidra/gophish via
+      shell/kali_run); this gives them the injected method web already had.
+- [x] **Candidate-flag verifier** (`core/flag_verifier.py`): format-aware — a candidate
+      is verified only when grounded in tool output AND matching the expected format;
+      catches a captured-but-wrong-format token and recognises custom (non-FLAG{})
+      formats. `--flag-format` / config.flag_format.
+- [x] **Cross-engagement learning** (`core/learning_store.py`): records outcomes by
+      target fingerprint; biases the OperatorRouter toward operators that won on similar
+      targets and injects a "prior wins" hint. Persisted; wired into benchmark (swarm)
+      + CLI (record at session end, inject via profile provider).
+- [ ] **Still open:** live validation of the non-web domains against real targets;
+      richer outcome→technique extraction; sqlmap/ffuf live runs.
+- Touchpoints: `core/skills_playbook.py`, `core/flag_verifier.py`,
+  `core/learning_store.py`, `core/orchestrator.py`, `core/agent_controller.py`,
+  `cli/mapache_cli.py`, `tests/benchmark_xbow.py`. Tests in `tests/test_core.py` (suite 168).
+
+---
+
 ## Suggested ordering (dependencies)
 
 1. **C (setup)** + **G (providers)** — providers need key storage; do together.
