@@ -3939,6 +3939,7 @@ async def test_browser_tool():
         assert res is not None            # Playwright present: returns a ToolResult, no raise
     else:
         assert not res.success and "playwright" in (res.error or "").lower()
+    await t.aclose()                      # close the browser cleanly (no GC-at-shutdown noise)
     print("  PASS  browser_tool")
 
 
