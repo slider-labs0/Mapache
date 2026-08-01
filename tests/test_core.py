@@ -640,6 +640,107 @@ async def test_agent_middleware_hooks():
     print("  PASS  agent_middleware_hooks")
 
 
+async def test_budget_middleware():
+    """BudgetMiddleware stops the engagement on a token or time cap — cleanly via
+    ctx.stop, both as a unit and through the real loop."""
+    import types
+    from core.middleware import LoopContext
+    from core.agent_middlewares import BudgetMiddleware
+
+    # Unit: token cap.
+    ctrl = types.SimpleNamespace(session_tokens=0, bus=None)
+    mw = BudgetMiddleware(max_tokens=1000)
+    ctx = LoopContext(controller=ctrl, session_id="s", user_input="x")
+    await mw.on_turn_start(ctx)
+    await mw.on_iteration_start(ctx)
+    assert not ctx.stop                      # under budget
+    ctrl.session_tokens = 1500
+    await mw.on_iteration_start(ctx)
+    assert ctx.stop and ctx.stop_reason == "budget_exceeded"
+
+    # Integration: a zero-second budget ends the real loop at the first step.
+    model = MockModel()
+    for _ in range(5):
+        model.queue({"message": {"content": "", "tool_calls": [
+            {"function": {"name": "shell", "arguments": {"cmd": "x"}}}]}})
+    controller = AgentController(model_provider=model, mode=AgentMode.AGENT)
+    controller.add_middleware(BudgetMiddleware(max_seconds=0))
+    controller.register_tool(ToolSchema(
+        name="shell", description="s",
+        parameters={"type": "object", "properties": {"cmd": {"type": "string"}}, "required": ["cmd"]}))
+    await controller.start()
+    res = await controller.run("go", session_id="budget-test")
+    assert res.error == "budget_exceeded" and res.iterations == 1
+    print("  PASS  budget_middleware")
+
+
+async def test_hitl_middleware():
+    """HITLMiddleware gates the loop at checkpoints (every-N and phase change),
+    honouring approve / deny / steer — as a unit and through the real loop."""
+    import types
+    from core.middleware import LoopContext
+    from core.agent_middlewares import HITLMiddleware, HITLDecision
+
+    # Decision constructors.
+    assert HITLDecision.approve().action == "approve"
+    assert HITLDecision.deny("x").action == "deny" and HITLDecision.deny("x").message == "x"
+    assert HITLDecision.steer("go").action == "steer"
+
+    # Unit: drive the hook directly with a fake context.
+    calls: list[str] = []
+    responses: list = []
+
+    async def cb(ctx, reason):
+        calls.append(reason)
+        return responses.pop(0)
+
+    st = types.SimpleNamespace(current_phase="recon")
+    ctrl = types.SimpleNamespace(chain=types.SimpleNamespace(attack_state=st), bus=None)
+    ctx = LoopContext(controller=ctrl, session_id="s", user_input="x")
+    mw = HITLMiddleware(cb, every=2, on_phase_change=True)
+
+    ctx.iteration = 1; await mw.on_iteration_start(ctx)          # primes, no gate
+    ctx.iteration = 2; await mw.on_iteration_start(ctx)          # 1 step < every, no gate
+    assert not calls and not ctx.stop
+    responses.append(HITLDecision.approve())
+    ctx.iteration = 3; await mw.on_iteration_start(ctx)          # 2 steps → gate, approve
+    assert calls == ["2 steps since last review"] and not ctx.stop
+    # Phase change gates even before `every` elapses; deny stops the turn.
+    st.current_phase = "exploitation"
+    responses.append(HITLDecision.deny("halt"))
+    ctx.iteration = 4; await mw.on_iteration_start(ctx)
+    assert ctx.stop and ctx.stop_reason == "hitl_denied" and ctx.stop_message == "halt"
+    assert calls[-1] == "phase → exploitation"
+
+    # Steer injects a message rather than stopping.
+    async def steer_cb(ctx, reason):
+        return HITLDecision.steer("focus on /admin")
+
+    ctx2 = LoopContext(controller=ctrl, session_id="s", user_input="x")
+    mw2 = HITLMiddleware(steer_cb, every=1, on_phase_change=False)
+    ctx2.iteration = 1; await mw2.on_iteration_start(ctx2)       # prime
+    ctx2.iteration = 2; await mw2.on_iteration_start(ctx2)       # gate → steer
+    assert ctx2.inject == ["focus on /admin"] and not ctx2.stop
+
+    # Integration: deny through the real loop ends it with error='hitl_denied'.
+    async def deny_cb(ctx, reason):
+        return HITLDecision.deny("operator stop")
+
+    model = MockModel()
+    for c in ("a", "b", "c"):
+        model.queue({"message": {"content": "", "tool_calls": [
+            {"function": {"name": "shell", "arguments": {"cmd": c}}}]}})
+    controller = AgentController(model_provider=model, mode=AgentMode.AGENT)
+    controller.add_middleware(HITLMiddleware(deny_cb, every=1, on_phase_change=False))
+    controller.register_tool(ToolSchema(
+        name="shell", description="s",
+        parameters={"type": "object", "properties": {"cmd": {"type": "string"}}, "required": ["cmd"]}))
+    await controller.start()
+    res = await controller.run("go", session_id="hitl-test")
+    assert res.error == "hitl_denied" and res.iterations == 2
+    print("  PASS  hitl_middleware")
+
+
 async def test_agent_plan_dispatches_and_seeds_todos():
     model = MockModel()
     # A plan must dispatch its first_tool AND seed the persistent task list,
@@ -948,6 +1049,71 @@ async def test_agent_duplicate_call_guard():
     assert dispatcher.hits == 1, dispatcher.hits  # only the first identical call ran
     assert response.content == "Virtual Machine"
     print("  PASS  agent_duplicate_call_guard")
+
+
+def test_progress_ledger_unit():
+    """ProgressLedger tracks distinct actions, keeps a dead-end list, promotes an
+    action out of it when it later pays off, and renders a compact block."""
+    from core.progress_ledger import ProgressLedger, action_label
+
+    # Labels prefer a salient arg and include the HTTP method when present.
+    assert action_label("http_request", {"method": "get", "url": "/admin"}) == \
+        "http_request GET /admin"
+    assert action_label("shell", {"cmd": "nmap -p- 10.0.0.5"}) == "shell nmap -p- 10.0.0.5"
+    assert action_label("noargs", {}) == "noargs"
+
+    led = ProgressLedger()
+    assert led.render() == ""                              # empty until something runs
+    led.record("http|/admin", "http_request /admin", found_new=False)
+    led.record("http|/admin", "http_request /admin", found_new=False)  # same sig, no dup
+    led.record("http|/login", "http_request /login", found_new=False)
+    assert led.total == 2 and led.is_dead_end("http|/admin")
+    block = led.render()
+    assert "Dead ends" in block and "/admin" in block and "/login" in block
+    assert "2 distinct actions tried, 0 productive" in block
+
+    # A later win promotes /login out of the dead-end list.
+    led.record("http|/login", "http_request /login", found_new=True)
+    assert not led.is_dead_end("http|/login")
+    block = led.render()
+    assert "/login" not in block.split("productive")[0] or "1 productive" in block
+    assert "2 distinct actions tried, 1 productive" in block
+    print("  PASS  progress_ledger_unit")
+
+
+async def test_progress_ledger_records_dead_ends():
+    """A fruitless tool step is recorded as a dead end on the controller's ledger,
+    which then renders it so later turns see 'do not repeat' guidance."""
+    class DeadStub:
+        async def dispatch(self, name, args, session_id):
+            return "404 Not Found"          # nothing a finding-extractor can latch onto
+
+    class OneCallModel:
+        supports_tools = False
+        def __init__(self):
+            self.n = 0
+        async def chat(self, messages, tools=None, json_mode=False, stream=False):
+            self.n += 1
+            if self.n == 1:
+                return json.dumps({"type": "tool_call", "tool": "web_fetch",
+                                   "args": {"url": "http://t/secret"}})
+            return json.dumps({"type": "response", "content": "no luck"})
+
+    controller = AgentController(
+        model_provider=OneCallModel(), tool_dispatcher=DeadStub(),
+        mode=AgentMode.AGENT, use_function_calling=False)
+    controller.register_tool(ToolSchema(
+        name="web_fetch", description="fetch a url",
+        parameters={"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}))
+    await controller.start()
+    await controller.run("try /secret", session_id="ledger-test")
+
+    led = controller._progress_ledger
+    assert led.total == 1 and led.is_dead_end(controller._call_signature(
+        "web_fetch", {"url": "http://t/secret"}))
+    block = led.render()
+    assert "Dead ends" in block and "/secret" in block
+    print("  PASS  progress_ledger_records_dead_ends")
 
 
 async def test_agent_tool_events_carry_timing():
@@ -4590,6 +4756,11 @@ async def run_all():
     await test_mcp_client()
     await test_agent_duplicate_call_guard()
     await test_agent_tool_events_carry_timing()
+    await test_agent_middleware_hooks()
+    await test_budget_middleware()
+    await test_hitl_middleware()
+    test_progress_ledger_unit()
+    await test_progress_ledger_records_dead_ends()
 
     print("\nSelf-authored tools (feature A)")
     await test_generated_tool_roundtrip()

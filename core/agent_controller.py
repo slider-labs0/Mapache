@@ -25,6 +25,7 @@ from .conversation_chain import AttackState, ConversationChain
 from .engagement_scope import EngagementScope
 from .event_bus import Event, EventBus
 from .middleware import LoopContext, MiddlewareChain
+from .progress_ledger import ProgressLedger, action_label
 from .operators import get_operator, operator_names
 from .opsec_routing import OpsecPolicy
 from .skills_playbook import relevant_skills
@@ -243,6 +244,10 @@ class AgentController:
         # Composable loop middleware (budget, HITL, vaccine, tracing, …). Empty by
         # default; register via add_middleware(). See core/middleware.py.
         self._middleware = MiddlewareChain()
+        # Progress ledger (agent-loop plan P1): persists across turns so the model
+        # stops re-trying dead ends. Recorded per dispatched action, injected each
+        # step. See core/progress_ledger.py.
+        self._progress_ledger = ProgressLedger()
 
         # Wire subsystems
         self.executor.set_model_caller(self._call_model_raw)
@@ -576,6 +581,11 @@ class AgentController:
             if refreshed:
                 snippets.append(refreshed)
             snippets.extend(relevant_skills(self.chain.attack_state, user_input))
+            # Negative knowledge: remind the model of dead ends it already walked so
+            # it stops re-spraying the same fruitless endpoints/params across turns.
+            ledger = self._progress_ledger.render()
+            if ledger:
+                snippets.append(ledger)
             if snippets:
                 self.context.inject_memory(snippets)
 
@@ -1381,6 +1391,15 @@ class AgentController:
             before = self._finding_snapshot()
             self.chain.on_tool_result(tool_name, tool_output)
             await self._emit_new_findings(before, session_id)
+
+            # Progress ledger: record whether this action surfaced anything new so
+            # a fruitless action becomes a durable "dead end" the model is told not
+            # to repeat next turn (the exact-duplicate guard below resets per turn).
+            self._progress_ledger.record(
+                self._call_signature(tool_name, _args),
+                action_label(tool_name, _args),
+                found_new=self._finding_snapshot() != before,
+            )
 
             compressed = self.chain.get_compressed_tool_output(tool_name, tool_output)
             seen[self._call_signature(tool_name, _args)] = compressed

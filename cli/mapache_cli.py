@@ -503,6 +503,14 @@ class MapacheCLI:
             profile_provider=lambda: self.user_profile.summary(),
         )
         self._wire_scope_notifier()
+        # Engagement budget (optional): a token/time cap that stops the loop
+        # gracefully when exceeded. Inert unless configured (config.budget or
+        # --budget-tokens/--budget-seconds).
+        self._wire_budget()
+        # Human-in-the-loop checkpoints (optional): pause at milestones for
+        # operator approve/deny/steer. Inert unless configured (config.hitl or
+        # --hitl/--hitl-every).
+        self._wire_hitl()
         # Live status: a spinner shows "running <tool>…" while a tool executes,
         # then a "ran <tool> · <N>s" line settles above it. Replaces the raw
         # agent_controller INFO logs (silenced on the console; still in the file).
@@ -676,6 +684,103 @@ class MapacheCLI:
                   f"{data.get('reason')}\n", flush=True)
 
         self.controller.bus.subscribe("agent.scope_refused", _on_refused)
+
+    def _wire_budget(self) -> None:
+        """Register a BudgetMiddleware when an engagement budget is configured.
+
+        Sources (CLI flags override config.budget): --budget-tokens / --budget-seconds
+        beat `config.budget = {"max_tokens": …, "max_seconds": …}`. Inert when
+        neither cap is set, so the loop is unchanged for the common case.
+        """
+        if self.controller is None:
+            return
+        spec = dict(getattr(self.config, "budget", None) or {})
+        max_tokens = getattr(self.args, "budget_tokens", None)
+        max_seconds = getattr(self.args, "budget_seconds", None)
+        if max_tokens is None:
+            max_tokens = spec.get("max_tokens")
+        if max_seconds is None:
+            max_seconds = spec.get("max_seconds")
+        if not max_tokens and not max_seconds:
+            return
+        from core.agent_middlewares import BudgetMiddleware
+        self.controller.add_middleware(
+            BudgetMiddleware(max_tokens=max_tokens, max_seconds=max_seconds))
+        caps = []
+        if max_tokens:
+            caps.append(f"{int(max_tokens)} tokens")
+        if max_seconds:
+            caps.append(f"{float(max_seconds):.0f}s")
+        print(f"  💳 Engagement budget: {' / '.join(caps)}", flush=True)
+
+    def _wire_hitl(self) -> None:
+        """Register a HITLMiddleware when human-in-the-loop checkpoints are enabled.
+
+        Sources (CLI flags override config.hitl): --hitl / --hitl-every N beat
+        `config.hitl = {"enabled": …, "every": …, "on_phase_change": …}`. Inert when
+        not enabled. At each checkpoint the loop pauses for operator approve/deny/steer.
+        """
+        if self.controller is None:
+            return
+        spec = dict(getattr(self.config, "hitl", None) or {})
+        every = getattr(self.args, "hitl_every", None)
+        if every is None:
+            every = spec.get("every", 0)
+        every = int(every or 0)
+        on_phase = bool(spec.get("on_phase_change", True))
+        enabled = (getattr(self.args, "hitl", False) or spec.get("enabled")
+                   or every > 0)
+        if not enabled:
+            return
+        from core.agent_middlewares import HITLMiddleware
+        self.controller.add_middleware(
+            HITLMiddleware(self._hitl_prompt, every=every, on_phase_change=on_phase))
+        bits = []
+        if every > 0:
+            bits.append(f"every {every} steps")
+        if on_phase:
+            bits.append("on phase change")
+        print(f"  🧑 HITL checkpoints: {' + '.join(bits) or 'on phase change'} "
+              "([Enter]=approve · 'q'=stop · type guidance to steer)", flush=True)
+
+    async def _hitl_prompt(self, ctx, reason: str):
+        """Console HITL callback: pause, show the checkpoint, read one operator line.
+
+        Reuses the single stdin reader (via `_pending_confirm`) so it never opens a
+        second competing reader. Enter approves, 'q'/'stop' halts, any other text
+        steers (injected before the next model call).
+        """
+        from core.agent_middlewares import HITLDecision
+        st = ctx.attack_state
+        snap = ""
+        if st is not None:
+            bits = [f"phase={getattr(st, 'current_phase', '?')}"]
+            if getattr(st, "open_ports", None):
+                bits.append(f"ports={len(st.open_ports)}")
+            if getattr(st, "vulnerabilities", None):
+                bits.append(f"vulns={len(st.vulnerabilities)}")
+            if getattr(st, "credentials", None):
+                bits.append(f"creds={len(st.credentials)}")
+            if getattr(st, "flags", None):
+                bits.append(f"flags={len(st.flags)}")
+            snap = "  ·  ".join(bits)
+        print(f"\n  ⏸ HITL checkpoint — {reason}", flush=True)
+        if snap:
+            print(f"     state: {snap}", flush=True)
+        print("     [Enter]=approve · 'q'=stop · or type guidance to steer ▸ ",
+              end="", flush=True)
+        loop = asyncio.get_event_loop()
+        fut: asyncio.Future = loop.create_future()
+        self._pending_confirm = fut
+        try:
+            ans = (await fut).strip()
+        finally:
+            self._pending_confirm = None
+        if not ans:
+            return HITLDecision.approve()
+        if ans.lower() in ("q", "quit", "stop", "deny", "n", "halt"):
+            return HITLDecision.deny("Operator halted the engagement at a checkpoint.")
+        return HITLDecision.steer(ans)
 
     async def _connect_mcp(self) -> None:
         """Load mcp.json, connect to each server, register its tools."""
@@ -1957,6 +2062,18 @@ def parse_args() -> argparse.Namespace:
                              "with a suggestion if it fell short (adds one model call)")
     parser.add_argument("--no-verifier", action="store_true",
                         help="(deprecated no-op; the verifier is now off unless --verify)")
+    parser.add_argument("--budget-tokens", type=int, default=None, metavar="N",
+                        help="Engagement budget: stop the loop gracefully once "
+                             "cumulative tokens reach N (overrides config.budget)")
+    parser.add_argument("--budget-seconds", type=float, default=None, metavar="S",
+                        help="Engagement budget: stop the loop gracefully after S "
+                             "wall-clock seconds (overrides config.budget)")
+    parser.add_argument("--hitl", action="store_true",
+                        help="Human-in-the-loop: pause the loop at milestones (phase "
+                             "changes) for operator approve/deny/steer")
+    parser.add_argument("--hitl-every", type=int, default=None, metavar="N",
+                        help="HITL: also pause every N iterations for operator review "
+                             "(implies --hitl; overrides config.hitl)")
     parser.add_argument("--no-tools", action="store_true")
     parser.add_argument("--all-tools", action="store_true",
                         help="Disable phase-based tool subsetting and expose all "

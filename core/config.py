@@ -252,6 +252,13 @@ class MapacheConfig:
     hub: dict[str, Any] = field(default_factory=dict)
     # Voice I/O (Phase 9): raw dict ({"enabled": bool, "tts": …, "stt": …}).
     voice: dict[str, Any] = field(default_factory=dict)
+    # Engagement budget (optional): {"max_tokens": int, "max_seconds": number}.
+    # Enforced by BudgetMiddleware — the loop stops gracefully when exceeded.
+    budget: dict[str, Any] = field(default_factory=dict)
+    # Human-in-the-loop checkpoints (optional): {"enabled": bool, "every": int,
+    # "on_phase_change": bool}. Enforced by HITLMiddleware — the loop pauses for
+    # operator approve/deny/steer at milestones.
+    hitl: dict[str, Any] = field(default_factory=dict)
     # Paths the config was assembled from, for diagnostics.
     sources: list[str] = field(default_factory=list)
 
@@ -286,6 +293,8 @@ class MapacheConfig:
             integrations=list(data.get("integrations") or []),
             hub=dict(data.get("hub") or {}),
             voice=dict(data.get("voice") or {}),
+            budget=dict(data.get("budget") or {}),
+            hitl=dict(data.get("hitl") or {}),
             sources=list(data.get("_sources") or []),
         )
 
@@ -349,6 +358,8 @@ class MapacheConfig:
             "integrations": list(self.integrations),
             "hub": dict(self.hub),
             "voice": dict(self.voice),
+            "budget": dict(self.budget),
+            "hitl": dict(self.hitl),
         }
 
     def redacted(self) -> dict[str, Any]:
