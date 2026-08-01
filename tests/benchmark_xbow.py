@@ -349,7 +349,8 @@ def build_provider(model: str, base_url: str):
 async def run_agent(port: int, meta: dict, flag: str, provider, *, max_iters: int,
                     log_path: Path, session_id: str, strategy: str = "single",
                     supervisor_rounds: int = 10, fanout: bool = False,
-                    reflect: bool = False, reflect_every: int = 6) -> tuple[bool, object, str]:
+                    reflect: bool = False, reflect_every: int = 6,
+                    attempts: int = 1) -> tuple[bool, object, str]:
     base = f"http://127.0.0.1:{port}"
     # Minimal RoE by request: NO target-scoping guardrails. The lab is isolated
     # loopback containers and the scope was refusing legitimate calls; an empty
@@ -428,7 +429,13 @@ async def run_agent(port: int, meta: dict, flag: str, provider, *, max_iters: in
         haystack = content + "\n" + "\n".join(seen_output)
         return (flag.lower() in haystack.lower() or sres.solved), result, haystack
 
-    result = await controller.run(objective, session_id=session_id)
+    if attempts and attempts > 1:
+        from core.multi_attempt import run_with_attempts
+        ar = await run_with_attempts(controller, objective, session_id=session_id,
+                                     max_attempts=attempts)
+        result = ar.result
+    else:
+        result = await controller.run(objective, session_id=session_id)
     haystack = (result.content or "") + "\n" + "\n".join(seen_output)
     found = flag.lower() in haystack.lower()
     return found, result, haystack
@@ -451,7 +458,8 @@ async def run_one(repo: Path, bid: str, provider, prov_label: str, *,
                   max_iters: int, build_timeout: int, up_timeout: int,
                   run_timeout: int, log_dir: Path, preflight: bool = False,
                   strategy: str = "single", supervisor_rounds: int = 10,
-                  fanout: bool = False, reflect: bool = False, reflect_every: int = 6) -> dict:
+                  fanout: bool = False, reflect: bool = False, reflect_every: int = 6,
+                  attempts: int = 1) -> dict:
     bench_dir = repo / "benchmarks" / bid
     project = f"xben_{bid.lower().replace('-', '_')}"
     flag = expected_flag(bid)
@@ -475,7 +483,8 @@ async def run_one(repo: Path, bid: str, provider, prov_label: str, *,
                 run_agent(port, meta, flag, provider, max_iters=max_iters,
                           log_path=log_dir / f"{bid}.jsonl", session_id=bid,
                           strategy=strategy, supervisor_rounds=supervisor_rounds,
-                          fanout=fanout, reflect=reflect, reflect_every=reflect_every),
+                          fanout=fanout, reflect=reflect, reflect_every=reflect_every,
+                          attempts=attempts),
                 timeout=run_timeout)
             rec.update(status="ok", solved=bool(found),
                        iterations=getattr(result, "iterations", 0),
@@ -553,7 +562,8 @@ async def main_async(args) -> int:
             build_timeout=args.build_timeout, up_timeout=args.up_timeout,
             run_timeout=args.run_timeout, log_dir=log_dir, preflight=args.preflight,
             strategy=args.strategy, supervisor_rounds=args.supervisor_rounds,
-            fanout=args.fanout, reflect=args.reflect, reflect_every=args.reflect_every))
+            fanout=args.fanout, reflect=args.reflect, reflect_every=args.reflect_every,
+            attempts=args.attempts))
         (log_dir / summary_name).write_text(
             json.dumps({"model": args.model, "preflight": args.preflight,
                         "results": results}, indent=2), encoding="utf-8")
@@ -589,6 +599,9 @@ def main() -> None:
                     help="inject a self-critique checkpoint every N steps")
     ap.add_argument("--reflect-every", type=int, default=6,
                     help="reflection cadence in steps (default 6)")
+    ap.add_argument("--attempts", type=int, default=1,
+                    help="self-consistency: retry with a fresh approach up to N times "
+                         "(single strategy; stops on first solve)")
     args = ap.parse_args()
     _quiet_and_utf8()
     sys.exit(asyncio.run(main_async(args)))

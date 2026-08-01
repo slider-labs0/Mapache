@@ -837,6 +837,48 @@ async def test_reflection_middleware():
     print("  PASS  reflection_middleware")
 
 
+async def test_multi_attempt():
+    """run_with_attempts retries with a fresh context until success, hands the retry a
+    different-approach directive, applies an adaptive budget, and stops early on solve."""
+    import types
+    from core.multi_attempt import run_with_attempts
+
+    S = types.SimpleNamespace
+    cleared: list = []
+
+    class FakeCtrl:
+        def __init__(self, solve_on):
+            self.solve_on = solve_on
+            self.runs = 0
+            self.prompts: list = []
+            self.chain = S(attack_state=S(flags=[]))
+            self.context = S(clear_history=lambda: cleared.append(1))
+            self.bus = None
+            self._progress_ledger = None
+            self.MAX_ITERATIONS = 40
+        async def run(self, prompt, session_id=""):
+            self.runs += 1
+            self.prompts.append(prompt)
+            if self.runs >= self.solve_on:
+                self.chain.attack_state.flags.append("FLAG{x}")
+            return S(content="done", iterations=1, error=None)
+
+    # Solves on attempt 2 → stops early; history cleared once; retry prompt differs.
+    cleared.clear()
+    c = FakeCtrl(solve_on=2)
+    r = await run_with_attempts(c, "get the flag", max_attempts=3)
+    assert r.solved and r.attempts == 2 and c.runs == 2
+    assert len(cleared) == 1
+    assert c.prompts[0] == "get the flag" and "DIFFERENT approach" in c.prompts[1]
+
+    # Never solves → exhausts all attempts; adaptive per-attempt budget applied.
+    c2 = FakeCtrl(solve_on=99)
+    r2 = await run_with_attempts(c2, "obj", max_attempts=3, per_attempt_iters=10)
+    assert not r2.solved and r2.attempts == 3 and c2.runs == 3
+    assert c2.MAX_ITERATIONS == 10
+    print("  PASS  multi_attempt")
+
+
 async def test_agent_plan_dispatches_and_seeds_todos():
     model = MockModel()
     # A plan must dispatch its first_tool AND seed the persistent task list,
@@ -5064,6 +5106,7 @@ async def run_all():
     await test_hitl_middleware()
     await test_vaccine_middleware()
     await test_reflection_middleware()
+    await test_multi_attempt()
     test_progress_ledger_unit()
     await test_progress_ledger_records_dead_ends()
     await test_agent_grounding_nudge()

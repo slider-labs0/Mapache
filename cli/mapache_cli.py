@@ -535,6 +535,12 @@ class MapacheCLI:
         # initial-access / post-exploitation sub-agent switches the accent colour.
         self.controller.bus.subscribe("agent.delegate.start", self._on_delegate_start)
         self.controller.bus.subscribe("agent.delegate.end", self._on_delegate_end)
+        # Self-consistency (#5): announce each fresh attempt.
+        async def _on_attempt(event) -> None:
+            d = event.data or {}
+            print(f"\n  ↻ attempt {d.get('attempt')}/{d.get('of')} — fresh approach\n",
+                  flush=True)
+        self.controller.bus.subscribe("attempt.start", _on_attempt)
 
         if not self.args.no_tools:
             self.registry = ToolRegistry(granted_permissions={
@@ -1318,9 +1324,21 @@ class MapacheCLI:
             # Stream tokens live when the model supports it (native tool-calling
             # models). The controller no-ops the callback in JSON mode, so the
             # renderer's streamed state stays False and it prints the content.
-            turn_task = asyncio.create_task(self.controller.run(
-                user_input, session_id=self.session_id, on_token=_on_token
-            ))
+            attempts = int(getattr(self.args, "attempts", 1) or 1)
+            if attempts > 1:
+                # Self-consistency (#5): retry with a fresh approach until solved.
+                # Token streaming is skipped in this mode (attempt banners show progress).
+                from core.multi_attempt import run_with_attempts
+                async def _run_attempts():
+                    ar = await run_with_attempts(
+                        self.controller, user_input,
+                        session_id=self.session_id, max_attempts=attempts)
+                    return ar.result
+                turn_task = asyncio.create_task(_run_attempts())
+            else:
+                turn_task = asyncio.create_task(self.controller.run(
+                    user_input, session_id=self.session_id, on_token=_on_token
+                ))
             response = await self._drive_turn(turn_task)
             # If streaming already began, the ticker line was cleared in _on_token
             # (before "agent > "); clearing again here would wipe that streamed line.
@@ -2217,6 +2235,9 @@ def parse_args() -> argparse.Namespace:
                              "(confirmed facts → hypothesis → highest-value next action)")
     parser.add_argument("--reflect-every", type=int, default=None, metavar="N",
                         help="Reflection cadence in steps (implies --reflect; default 6)")
+    parser.add_argument("--attempts", type=int, default=1, metavar="N",
+                        help="Self-consistency: if the objective isn't reached, retry "
+                             "with a fresh approach up to N times (stops on first solve)")
     parser.add_argument("--fanout", action="store_true",
                         help="Swarm (/swarm): when a single operator stalls, deploy "
                              "several specialists in parallel to break the plateau")
