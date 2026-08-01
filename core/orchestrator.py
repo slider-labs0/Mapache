@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 
 from core.operators import all_operators, get_operator, suggest_operators
+from core.learning_store import fingerprint_of
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +154,8 @@ class OperatorRouter:
     unless explicitly enabled."""
 
     def __init__(self, *, allow_remote: bool = False, allow_gated: bool = False,
-                 allow_deconfliction: bool = False, explore: bool = True) -> None:
+                 allow_deconfliction: bool = False, explore: bool = True,
+                 learning: Any = None) -> None:
         self.allow_remote = allow_remote
         self.allow_gated = allow_gated
         self.allow_deconfliction = allow_deconfliction
@@ -161,6 +163,11 @@ class OperatorRouter:
         # different specialists when findings-driven routing stalls, instead of
         # stopping after one operator. Disable for purely findings-driven routing.
         self.explore = explore
+        # Cross-engagement learning (optional): a LearningStore that biases routing
+        # toward operators which historically won against similar targets. The bonus is
+        # small (< a kill-chain stage) so it reorders/ties-breaks without overriding
+        # advancement.
+        self.learning = learning
 
     def _eligible(self, op) -> bool:
         if op is None:
@@ -234,6 +241,19 @@ class OperatorRouter:
             consider("exploit_operator", 2.4, "explore: speculative exploitation")
             consider("analyst", 2.2, "explore: analyze the state for a next step")
             consider("recon_operator", 2.0, "explore: re-scan the target")
+
+        # Cross-engagement learning: nudge operators that won on similar targets before.
+        if self.learning is not None:
+            try:
+                fp = fingerprint_of(state.services, state.open_ports)
+                bias = self.learning.operator_bias(fp)
+            except Exception:
+                bias = {}
+            for name, bonus in bias.items():
+                cand = best.get(name)
+                if cand is not None and bonus > 0:
+                    cand.score += bonus
+                    cand.reason += f" (+{bonus} learned)"
 
         return sorted(best.values(), key=lambda c: -c.score)
 

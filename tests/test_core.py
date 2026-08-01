@@ -3883,6 +3883,49 @@ async def test_scoped_bus_tags():
     print("  PASS  scoped_bus_tags")
 
 
+def test_learning_store_and_bias():
+    """LearningStore records outcomes by target fingerprint, recalls prior wins, and
+    biases the OperatorRouter toward operators that won on similar targets — the
+    cross-engagement 'smarter over time' loop."""
+    import os
+    import tempfile
+    from core.learning_store import LearningStore, EngagementOutcome, fingerprint_of
+    from core.orchestrator import OperatorRouter, RoutingState
+
+    assert fingerprint_of({"80": "http", "443": "https"}, []) == "http,https"
+    assert fingerprint_of({}, ["445/tcp", "139"]) == "139,445"
+
+    ls = LearningStore()
+    ls.record(EngagementOutcome(fingerprint="http,https", solved=True,
+              operators=["web_operator", "exploit_operator"], vuln_classes=["sqli"]), save=False)
+    ls.record(EngagementOutcome(fingerprint="http", solved=True,
+              operators=["web_operator"], vuln_classes=["idor"]), save=False)
+    ls.record(EngagementOutcome(fingerprint="ssh", solved=False,
+              operators=["exploit_operator"]), save=False)
+    bias = ls.operator_bias("http,https")
+    assert bias.get("web_operator", 0) > 0                      # proven path biased up
+    assert bias["web_operator"] >= bias.get("exploit_operator", 0)
+    assert "worked via web_operator" in ls.hint("http,https")
+    assert ls.operator_bias("ssh") == {}                        # only wins count
+
+    # Router applies the learned bonus on a matching (http) state.
+    st = RoutingState(target="t", phase="enumeration",
+                      open_ports=["80/tcp"], services={"80": "http"})
+    def score(router, name):
+        return next((c.score for c in router.select(st) if c.operator == name), 0.0)
+    assert score(OperatorRouter(learning=ls), "web_operator") > \
+           score(OperatorRouter(), "web_operator")
+
+    # Persistence round-trips.
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "learning.json")
+        s = LearningStore(p)
+        s.record(EngagementOutcome(fingerprint="http", solved=True, operators=["web_operator"]))
+        s2 = LearningStore(p)
+        assert len(s2) == 1 and s2.operator_bias("http").get("web_operator", 0) > 0
+    print("  PASS  learning_store_and_bias")
+
+
 def test_skill_md_format():
     """SKILL.md round-trips through parse/format, its predicate is built from the
     frontmatter triggers, and a directory of them loads into the injection set."""
@@ -5252,6 +5295,7 @@ async def run_all():
     await test_orchestrator_exploration_ladder()
     await test_orchestrator_fanout()
     await test_scoped_bus_tags()
+    test_learning_store_and_bias()
     test_skill_md_format()
 
     print("\nWeb tools, grounding + headless browser (P0 / capability #1)")

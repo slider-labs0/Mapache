@@ -20,3 +20,4 @@ vaccines/
 *.egg-info/
 build/
 dist/
+learning.json

@@ -350,7 +350,7 @@ async def run_agent(port: int, meta: dict, flag: str, provider, *, max_iters: in
                     log_path: Path, session_id: str, strategy: str = "single",
                     supervisor_rounds: int = 10, fanout: bool = False,
                     reflect: bool = False, reflect_every: int = 6,
-                    attempts: int = 1) -> tuple[bool, object, str]:
+                    attempts: int = 1, learning: object = None) -> tuple[bool, object, str]:
     base = f"http://127.0.0.1:{port}"
     # Minimal RoE by request: NO target-scoping guardrails. The lab is isolated
     # loopback containers and the scope was refusing legitimate calls; an empty
@@ -411,14 +411,17 @@ async def run_agent(port: int, meta: dict, flag: str, provider, *, max_iters: in
         # blackboard with the known web target so the router starts at enumeration
         # (web_operator) rather than reconnaissance/nmap on a single known port.
         import types
-        from core.orchestrator import Supervisor, make_model_planner
+        from core.orchestrator import Supervisor, OperatorRouter, make_model_planner
         st = controller.chain.attack_state
         st.target = "127.0.0.1"
         st.open_ports = [f"{port}/tcp"]
         st.services = {str(port): "http"}
         st.current_phase = "enumeration"
+        # Cross-engagement learning: the router is biased by prior wins on similar
+        # targets, so a swarm run benefits from earlier benchmarks this session.
+        router = OperatorRouter(explore=True, learning=learning)
         sres = await Supervisor(
-            controller, max_rounds=supervisor_rounds, session_id=session_id,
+            controller, router=router, max_rounds=supervisor_rounds, session_id=session_id,
             planner=make_model_planner(controller), fanout=fanout,
         ).run(objective, session_id=session_id)
         content = (f"[swarm: {sres.stop_reason}] operators: "
@@ -427,7 +430,15 @@ async def run_agent(port: int, meta: dict, flag: str, provider, *, max_iters: in
                                        tool_calls_made=sres.operators_run,
                                        error=None, session_id=session_id)
         haystack = content + "\n" + "\n".join(seen_output)
-        return (flag.lower() in haystack.lower() or sres.solved), result, haystack
+        found = flag.lower() in haystack.lower() or sres.solved
+        if learning is not None:
+            from core.learning_store import EngagementOutcome, fingerprint_of
+            learning.record(EngagementOutcome(
+                fingerprint=fingerprint_of(st.services, st.open_ports),
+                solved=bool(found), operators=sres.operators_run,
+                vuln_classes=list(st.vulnerabilities)[:8],
+                target=st.target or "", ts=str(int(time.time()))))
+        return found, result, haystack
 
     if attempts and attempts > 1:
         from core.multi_attempt import run_with_attempts
@@ -459,7 +470,7 @@ async def run_one(repo: Path, bid: str, provider, prov_label: str, *,
                   run_timeout: int, log_dir: Path, preflight: bool = False,
                   strategy: str = "single", supervisor_rounds: int = 10,
                   fanout: bool = False, reflect: bool = False, reflect_every: int = 6,
-                  attempts: int = 1) -> dict:
+                  attempts: int = 1, learning: object = None) -> dict:
     bench_dir = repo / "benchmarks" / bid
     project = f"xben_{bid.lower().replace('-', '_')}"
     flag = expected_flag(bid)
@@ -484,7 +495,7 @@ async def run_one(repo: Path, bid: str, provider, prov_label: str, *,
                           log_path=log_dir / f"{bid}.jsonl", session_id=bid,
                           strategy=strategy, supervisor_rounds=supervisor_rounds,
                           fanout=fanout, reflect=reflect, reflect_every=reflect_every,
-                          attempts=attempts),
+                          attempts=attempts, learning=learning),
                 timeout=run_timeout)
             rec.update(status="ok", solved=bool(found),
                        iterations=getattr(result, "iterations", 0),
@@ -555,6 +566,8 @@ async def main_async(args) -> int:
     print(f"Running {len(ids)} benchmark(s) with {args.model} ({prov_label}).")
     t0 = time.time()
     results = []
+    from core.learning_store import LearningStore
+    learning = LearningStore(log_dir / "learning.json")
     summary_name = "xbow_preflight.json" if args.preflight else "xbow_summary.json"
     for bid in ids:
         results.append(await run_one(
@@ -563,7 +576,7 @@ async def main_async(args) -> int:
             run_timeout=args.run_timeout, log_dir=log_dir, preflight=args.preflight,
             strategy=args.strategy, supervisor_rounds=args.supervisor_rounds,
             fanout=args.fanout, reflect=args.reflect, reflect_every=args.reflect_every,
-            attempts=args.attempts))
+            attempts=args.attempts, learning=learning))
         (log_dir / summary_name).write_text(
             json.dumps({"model": args.model, "preflight": args.preflight,
                         "results": results}, indent=2), encoding="utf-8")

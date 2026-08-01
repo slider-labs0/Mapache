@@ -361,6 +361,14 @@ class MapacheCLI:
         # when the dirs are absent.
         self._load_file_skills()
 
+        # Cross-engagement learning: persistent record of what worked against which
+        # target fingerprint, used to bias routing and inject prior-win hints so
+        # Mapache gets smarter across engagements.
+        from core.learning_store import LearningStore
+        self.learning = LearningStore(
+            os.path.join(os.path.expanduser("~"), ".mapache", "learning.json"))
+        self._ran_operators: set[str] = set()
+
         # Provider-aware pool: builds Ollama or OpenAI-compatible per model id.
         pool = ModelPool(base_url=self.ollama_url, config=self.config)
         primary_prov = self.config.provider_for_model(self.model)
@@ -506,8 +514,9 @@ class MapacheCLI:
             opsec_policy=self.opsec,
             # Persona (feature E): re-read soul.md each turn so edits hot-reload.
             persona_provider=lambda: load_soul(self.working_dir),
-            # User profile (feature F): inject durable user facts each turn.
-            profile_provider=lambda: self.user_profile.summary(),
+            # User profile (feature F) + cross-engagement learning hint: durable user
+            # facts plus what worked against similar targets before.
+            profile_provider=self._profile_with_learning,
             # Candidate-flag verifier: expected flag format from --flag-format / config.
             flag_format=(getattr(self.args, "flag_format", None)
                          or getattr(self.config, "flag_format", "") or None),
@@ -854,6 +863,39 @@ class MapacheCLI:
             sink=self._vaccine_sink, per_step_cap=cap))
         print("  💉 Vaccine loop: on — a detection+remediation is generated for each "
               "confirmed vuln (→ vaccines/)", flush=True)
+
+    def _profile_with_learning(self) -> str:
+        """User profile plus a 'what worked against similar targets before' hint."""
+        parts = [self.user_profile.summary()]
+        try:
+            st = self.controller.chain.attack_state if self.controller else None
+            if st is not None and getattr(self, "learning", None) is not None:
+                from core.learning_store import fingerprint_of
+                hint = self.learning.hint(fingerprint_of(st.services, st.open_ports))
+                if hint:
+                    parts.append(hint)
+        except Exception:
+            pass
+        return "\n\n".join(p for p in parts if p)
+
+    def _record_learning(self) -> None:
+        """At session end, record what worked against this target's fingerprint."""
+        if getattr(self, "learning", None) is None or self.controller is None:
+            return
+        try:
+            from core.learning_store import EngagementOutcome, fingerprint_of
+            st = self.controller.chain.attack_state
+            fp = fingerprint_of(st.services, st.open_ports)
+            if not fp:
+                return
+            import time as _t
+            self.learning.record(EngagementOutcome(
+                fingerprint=fp, solved=bool(st.flags),
+                operators=sorted(self._ran_operators),
+                vuln_classes=list(st.vulnerabilities)[:8],
+                target=st.target or "", ts=str(int(_t.time()))))
+        except Exception:
+            pass
 
     def _wire_reflection(self) -> None:
         """Register a ReflectionMiddleware when periodic self-critique is enabled.
@@ -1227,6 +1269,8 @@ class MapacheCLI:
                     await bt.aclose()
                 except Exception:
                     pass
+            # Cross-engagement learning: record what worked this engagement.
+            self._record_learning()
             await self.memory.end_session()
 
     async def _process_line(self, raw: str) -> bool:
@@ -1608,9 +1652,11 @@ class MapacheCLI:
 
     async def _on_delegate_start(self, event) -> None:
         """Work is routing to a specialist — switch the transcript accent + banner."""
+        name = event.data.get("operator")
+        if name:
+            getattr(self, "_ran_operators", set()).add(name)  # for cross-engagement learning
         if self.tui is None:
             return
-        name = event.data.get("operator")
         accent = self._agent_accent(name)
         task = (event.data.get("task") or "").strip()
         self._accent_stack.append(getattr(self.render, "accent", "green"))
