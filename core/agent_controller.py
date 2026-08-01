@@ -127,6 +127,14 @@ class AgentController:
     STALL_NUDGE_STEPS = 4
     STALL_ABORT_DUP = 4
     STALL_ABORT_NOPROG = 8
+    # Response-grounded acting (P0): the top failure mode was blind endpoint/credential
+    # spraying — hitting invented URLs/paths that never appeared in any response. A web
+    # call whose target path is absent from all prior tool output is an "ungrounded
+    # probe"; after this many in a row the loop nudges the model to act on what a real
+    # response actually contained (a surfaced form/link/endpoint), not a guess. Advisory
+    # only — the first recon call and deliberate fuzzing aren't blocked.
+    GROUNDING_WEB_TOOLS = {"http_request", "web_fetch", "browser"}
+    GROUNDING_NUDGE_STREAK = 3
     # When the final answer contains a flag that never appeared in tool output
     # (a fabrication), send the model back to actually obtain it this many times
     # before accepting the answer with an UNVERIFIED caveat.
@@ -534,6 +542,11 @@ class AgentController:
         # result, so an identical repeated call is short-circuited instead of
         # re-run (breaks the "fetch the same URL 5 times" loop).
         self._seen_calls: dict[str, str] = {}
+        # Grounding corpus (see GROUNDING_*): lowercased text of every tool result this
+        # turn, so a web call to a path that never appeared in any response can be
+        # recognised as a blind probe. Persists across steps within the turn.
+        self._grounding_seen = ""
+        self._ungrounded_streak = 0
         # Stall detection (see STALL_* constants): consecutive all-duplicate steps
         # and consecutive steps that discovered nothing new.
         dup_streak = 0
@@ -1256,6 +1269,26 @@ class AgentController:
             arg_str = str(args)
         return f"{tool_name}|{arg_str}"
 
+    @classmethod
+    def _web_call_path(cls, tool_name: str, args: dict[str, Any]) -> Optional[str]:
+        """The URL path (+query) of a web call, lowercased, for grounding — or None if
+        this isn't a groundable web call."""
+        if tool_name not in cls.GROUNDING_WEB_TOOLS:
+            return None
+        url = (args or {}).get("url") or (args or {}).get("endpoint") or ""
+        if not isinstance(url, str) or not url.strip():
+            return None
+        path = re.sub(r"^[a-z][a-z0-9+.\-]*://[^/]+", "", url.strip(), flags=re.IGNORECASE)
+        return (path.lower() or "/")
+
+    def _is_grounded(self, path: str) -> bool:
+        """True if the path is the target root or its distinctive segment has appeared
+        in some prior tool result this turn (i.e. the model isn't inventing it)."""
+        core = (path or "").split("?", 1)[0].strip("/")
+        if not core:                     # root / empty → fetching the target itself
+            return True
+        return core in self._grounding_seen
+
     async def _execute_tool_calls(
         self,
         calls: list[dict[str, Any]],
@@ -1368,6 +1401,14 @@ class AgentController:
         if not approved:
             return (0, duplicates)
 
+        # Response-grounded acting: classify the approved WEB calls as grounded (their
+        # path appeared in prior output) or blind probes (invented paths), against the
+        # corpus from EARLIER steps — before this step's own results are folded in.
+        web_calls = [(n, a) for (_id, n, a) in approved
+                     if self._web_call_path(n, a) is not None]
+        ungrounded = [(n, a) for (n, a) in web_calls
+                      if not self._is_grounded(self._web_call_path(n, a) or "")]
+
         # Announce each tool starting so the UI can show a live "running X…" line.
         for call_id, name, args in approved:
             await self.bus.emit(
@@ -1403,6 +1444,9 @@ class AgentController:
 
             compressed = self.chain.get_compressed_tool_output(tool_name, tool_output)
             seen[self._call_signature(tool_name, _args)] = compressed
+            # Grow the grounding corpus so future calls can be checked against what
+            # responses actually contained (capped so it can't grow unbounded).
+            self._grounding_seen = (self._grounding_seen + " " + tool_output.lower())[-20000:]
             self.context.add_tool_result(
                 tool_call_id=tool_call_id,
                 tool_name=tool_name,
@@ -1423,6 +1467,31 @@ class AgentController:
                 source="controller",
                 session_id=session_id,
             )
+
+        # Grounding streak: a step whose web calls were ALL blind probes advances the
+        # streak; any grounded web call resets it. On crossing the threshold, nudge the
+        # model to act on what a real response contained instead of guessing URLs.
+        if web_calls:
+            if ungrounded and len(ungrounded) == len(web_calls):
+                self._ungrounded_streak += 1
+            else:
+                self._ungrounded_streak = 0
+            if self._ungrounded_streak >= self.GROUNDING_NUDGE_STREAK:
+                self._ungrounded_streak = 0
+                await self.bus.emit(
+                    "agent.grounding",
+                    {"action": "nudge", "session_id": session_id,
+                     "paths": [self._web_call_path(n, a) for (n, a) in ungrounded]},
+                    source="controller", session_id=session_id)
+                self.context.add_user_message(
+                    "Several of your recent web requests targeted paths that never "
+                    "appeared in any response — that is blind guessing, the top reason "
+                    "engagements stall. STOP inventing URLs. GROUND your next action in "
+                    "the most recent response: act on a form action, a link, a "
+                    "referenced endpoint, a parameter name, or an error message it "
+                    "ACTUALLY contains. If nothing there advances the objective, fetch "
+                    "the target root or a discovered index to surface real endpoints "
+                    "first.")
 
         return (len(approved), duplicates)
 

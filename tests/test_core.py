@@ -1111,6 +1111,41 @@ async def test_agent_duplicate_call_guard():
     print("  PASS  agent_duplicate_call_guard")
 
 
+async def test_agent_grounding_nudge():
+    """Repeated web calls to invented paths (never seen in any response) trip the
+    response-grounded-acting nudge — the guard against blind endpoint spraying."""
+    class Stub:
+        async def dispatch(self, name, args, session_id):
+            return "404 Not Found"        # nothing that could ground a future path
+
+    class SprayModel:
+        supports_tools = False
+        def __init__(self):
+            self.n = 0
+            self.paths = ["/api/zzz1", "/api/zzz2", "/api/zzz3", "/api/zzz4"]
+        async def chat(self, messages, tools=None, json_mode=False, stream=False):
+            if self.n < len(self.paths):
+                p = self.paths[self.n]; self.n += 1
+                return json.dumps({"type": "tool_call", "tool": "http_request",
+                                   "args": {"url": f"http://t{p}"}})
+            return json.dumps({"type": "response", "content": "done"})
+
+    events: list = []
+    async def on_ground(e):
+        events.append(e.data)
+
+    controller = AgentController(model_provider=SprayModel(), tool_dispatcher=Stub(),
+                                 mode=AgentMode.AGENT, use_function_calling=False)
+    controller.bus.subscribe("agent.grounding", on_ground)
+    controller.register_tool(ToolSchema(
+        name="http_request", description="req",
+        parameters={"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}))
+    await controller.start()
+    await controller.run("find the flag", session_id="ground-test")
+    assert events and events[0]["action"] == "nudge", events
+    print("  PASS  agent_grounding_nudge")
+
+
 def test_progress_ledger_unit():
     """ProgressLedger tracks distinct actions, keeps a dead-end list, promotes an
     action out of it when it later pays off, and renders a compact block."""
@@ -4969,6 +5004,7 @@ async def run_all():
     await test_vaccine_middleware()
     test_progress_ledger_unit()
     await test_progress_ledger_records_dead_ends()
+    await test_agent_grounding_nudge()
 
     print("\nSelf-authored tools (feature A)")
     await test_generated_tool_roundtrip()
