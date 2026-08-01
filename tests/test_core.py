@@ -483,6 +483,39 @@ def test_skills_playbook_domain_matching():
     print("  PASS  skills_playbook_domain_matching")
 
 
+def test_skills_playbook_specialist_matching():
+    """The specialist-domain playbooks (web3, supply-chain, ICS, IoT, wireless, OSINT,
+    DFIR) fire on their own keyword/port signals so every domain operator has method."""
+    from core.skills_playbook import (relevant_skills, WEB3_ATTACK_SKILL,
+                                      SUPPLY_CHAIN_SKILL, ICS_ATTACK_SKILL,
+                                      IOT_ATTACK_SKILL, WIRELESS_ATTACK_SKILL,
+                                      OSINT_SKILL, DFIR_SKILL)
+    from core.conversation_chain import AttackState
+    E = AttackState()
+
+    assert WEB3_ATTACK_SKILL.body in relevant_skills(E, "audit the Solidity contract for reentrancy")
+    assert SUPPLY_CHAIN_SKILL.body in relevant_skills(E, "check for dependency confusion in npm")
+    assert ICS_ATTACK_SKILL.body in relevant_skills(E, "enumerate the modbus PLC")
+    assert IOT_ATTACK_SKILL.body in relevant_skills(E, "binwalk the firmware image")
+    assert WIRELESS_ATTACK_SKILL.body in relevant_skills(E, "capture the WPA2 handshake and deauth")
+    assert OSINT_SKILL.body in relevant_skills(E, "passive subdomain enum with amass and shodan")
+    assert DFIR_SKILL.body in relevant_skills(E, "build a timeline and write sigma rules")
+
+    # Port triggers: Modbus 502 → ICS; MQTT 1883 → IoT.
+    st_ics = AttackState(); st_ics.open_ports = ["502/tcp"]
+    assert ICS_ATTACK_SKILL.body in relevant_skills(st_ics, "map the process")
+    st_iot = AttackState(); st_iot.open_ports = ["1883"]
+    assert IOT_ATTACK_SKILL.body in relevant_skills(st_iot, "poke the broker")
+
+    # A plain web request pulls none of the specialist playbooks.
+    spec = {WEB3_ATTACK_SKILL.body, SUPPLY_CHAIN_SKILL.body, ICS_ATTACK_SKILL.body,
+            IOT_ATTACK_SKILL.body, WIRELESS_ATTACK_SKILL.body, OSINT_SKILL.body,
+            DFIR_SKILL.body}
+    stw = AttackState(); stw.open_ports = ["80"]
+    assert not (spec & set(relevant_skills(stw, "find an XSS in the search box")))
+    print("  PASS  skills_playbook_specialist_matching")
+
+
 async def test_web_skill_injected_into_context():
     # The web playbook must actually reach the model's system prompt on a
     # web-shaped turn (just-in-time grounding).
@@ -5205,6 +5238,7 @@ async def run_all():
     test_skills_playbook_credential_matching()
     test_skills_playbook_ad_matching()
     test_skills_playbook_domain_matching()
+    test_skills_playbook_specialist_matching()
     await test_web_skill_injected_into_context()
     await test_agent_verifier_retry()
     await test_agent_verifier_off_by_default()

@@ -438,12 +438,275 @@ SOCIAL_ENGINEERING_SKILL = Skill(
 )
 
 
-# The active skill set: Mapache's baked-in offensive playbooks across domains
-# (web, network service, credential, AD, cloud, binary, mobile, social engineering).
+# --- Smart contracts / Web3 (Solidity/EVM). Keyword-driven. ------------------ #
+_WEB3_HINT_RE = re.compile(
+    r"\b(solidity|\bevm\b|smart[-\s]?contract|reentran\w*|erc[-\s]?(20|721|1155)|\bdefi\b|"
+    r"flash[-\s]?loan|web3|blockchain|ethereum|slither|mythril|foundry|hardhat|"
+    r"delegatecall|selfdestruct|oracle[-\s]?manipulation|\babi\b|\bdapp\b)\b",
+    re.IGNORECASE)
+
+
+def _is_web3_target(state: Any, user_input: str) -> bool:
+    return bool(_WEB3_HINT_RE.search(user_input or ""))
+
+
+WEB3_ATTACK_SKILL = Skill(
+    name="smart_contract_attacks",
+    matches=_is_web3_target,
+    body=(
+        "ACTIVE PLAYBOOK — SMART CONTRACT / Web3 (Solidity/EVM) audit. Reason over the "
+        "source and run analyzers through `shell` (slither, mythril, foundry).\n"
+        "1. GET THE SOURCE + STATE — verified source from the explorer, or decompile "
+        "bytecode. Note compiler version, who is `owner`/admin, upgradeability (proxy/"
+        "delegatecall), and where value flows.\n"
+        "2. RUN STATIC ANALYSIS — `slither .` and `myth analyze <file>`; triage the "
+        "findings, don't trust them blindly.\n"
+        "3. HUNT THE HIGH-IMPACT CLASSES: reentrancy (external call before state update "
+        "— check-effects-interactions violated); broken access control (missing "
+        "onlyOwner, unprotected init/selfdestruct, tx.origin auth); oracle/price "
+        "manipulation + flash-loan-amplified logic; unchecked arithmetic/return values; "
+        "delegatecall to attacker-controlled code; signature replay (missing nonce/"
+        "chainid). \n"
+        "4. PROVE IT — write a Foundry PoC test (`forge test`) that drains funds or "
+        "seizes ownership on a fork; that exploit test IS the evidence.\n"
+        "PROOF = a passing PoC exploit (funds moved / ownership taken) — not a "
+        "theoretical finding."
+    ),
+)
+
+
+# --- Supply chain (dependencies / CI / packages). Keyword-driven. ------------ #
+_SUPPLY_HINT_RE = re.compile(
+    r"\b(supply[-\s]?chain|dependency[-\s]?confusion|typosquat\w*[-\s]?package|npm|pypi|"
+    r"pip[-\s]?install|package[-\s]?registry|ci/?cd|pipeline|github[-\s]?actions|\bsbom\b|"
+    r"lock[-\s]?file|package\.json|requirements\.txt|malicious[-\s]?package|build[-\s]?"
+    r"pipeline|artifact[-\s]?integrity)\b",
+    re.IGNORECASE)
+
+
+def _is_supply_target(state: Any, user_input: str) -> bool:
+    return bool(_SUPPLY_HINT_RE.search(user_input or ""))
+
+
+SUPPLY_CHAIN_SKILL = Skill(
+    name="supply_chain_attacks",
+    matches=_is_supply_target,
+    body=(
+        "ACTIVE PLAYBOOK — SUPPLY-CHAIN attack surface (dependencies, build, packages). "
+        "Only touch registries/repos/pipelines that are IN SCOPE.\n"
+        "1. MAP DEPENDENCIES — read package.json/requirements.txt/go.mod/pom.xml + the "
+        "lockfile; list direct + transitive deps and pin state. Look for INTERNAL package "
+        "names resolvable from a PUBLIC registry (dependency-confusion) and for install/"
+        "postinstall scripts.\n"
+        "2. TYPOSQUAT / CONFUSION — a private dep name unclaimed on npm/PyPI is a "
+        "dependency-confusion foothold; a near-miss of a popular name is a typosquat "
+        "target. (Publish/claim only with explicit authorization.)\n"
+        "3. CI/CD — inspect GitHub Actions / GitLab CI: unpinned third-party actions "
+        "(`uses: x@main`), secrets exposed to PRs (pull_request_target), self-hosted "
+        "runner takeover, and injectable workflow inputs (`${{ github.event.* }}` into a "
+        "run step = command injection in CI).\n"
+        "4. INTEGRITY — check signatures/provenance (SBOM, Sigstore, checksums); a "
+        "missing/forgeable integrity check is the tampering vector.\n"
+        "PROOF = a concrete foothold: an unclaimed internal package name, an injectable "
+        "workflow, a leaked CI secret, or a malicious-build path — demonstrated, not assumed."
+    ),
+)
+
+
+# --- ICS / OT / SCADA. Protocol ports + keywords. ---------------------------- #
+ICS_PORTS = {"502", "20000", "102", "44818", "47808", "4840", "2404", "789"}
+_ICS_HINT_RE = re.compile(
+    r"\b(\bics\b|scada|\bot\b|\bplc\b|modbus|dnp3|s7comm|\bs7\b|bacnet|opc[-\s]?ua|\bhmi\b|"
+    r"historian|purdue|iec[-\s]?61850|profinet|ethernet/?ip|rockwell|siemens[-\s]?s7)\b",
+    re.IGNORECASE)
+
+
+def _is_ics_target(state: Any, user_input: str) -> bool:
+    if _bare_ports(state) & ICS_PORTS:
+        return True
+    return bool(_ICS_HINT_RE.search(user_input or ""))
+
+
+ICS_ATTACK_SKILL = Skill(
+    name="ics_ot_attacks",
+    matches=_is_ics_target,
+    body=(
+        "ACTIVE PLAYBOOK — ICS / OT / SCADA. SAFETY FIRST: these control physical "
+        "processes — stay READ-ONLY and passive unless the RoE explicitly authorizes "
+        "writes; a careless write can trip or damage equipment. Deconflict with the "
+        "process owner.\n"
+        "1. IDENTIFY, DON'T DISRUPT — passive fingerprint the protocol/port: Modbus/TCP "
+        "502, DNP3 20000, S7comm 102, EtherNet/IP 44818, BACnet 47808, OPC-UA 4840, "
+        "IEC-104 2404. Use `nmap` with the ICS NSE scripts (`s7-info`, `modbus-discover`, "
+        "`bacnet-info`) at low rate, and PLC-safe tools (plcscan, the Metasploit "
+        "scanner/scada modules) for enumeration only.\n"
+        "2. ENUMERATE — read device identity, registers/coils (Modbus read), tags, and "
+        "logic metadata to map the process. `nmap -sV` + protocol read requests.\n"
+        "3. ASSESS — default/hardcoded creds on the HMI/engineering workstation, exposed "
+        "historians, unauthenticated protocol writes, and known PLC CVEs (searchsploit "
+        "the exact model/firmware).\n"
+        "4. WRITES ONLY IF AUTHORIZED — any coil/register/logic write is high-risk; do it "
+        "only with signed-off RoE and process-owner presence.\n"
+        "PROOF = the enumerated process map / identified weakness (default cred, exposed "
+        "write) — demonstrated read-only wherever possible."
+    ),
+)
+
+
+# --- IoT / embedded / firmware. Ports + keywords. ---------------------------- #
+IOT_PORTS = {"1883", "8883", "5683", "554", "5000", "37777", "9999", "1900"}
+_IOT_HINT_RE = re.compile(
+    r"\b(\biot\b|firmware|embedded|\buart\b|\bjtag\b|\bspi\b[-\s]?flash|binwalk|squashfs|"
+    r"u-?boot|serial[-\s]?console|bootloader|busybox|\bmqtt\b|\bcoap\b|\bupnp\b|\brtsp\b|"
+    r"\brtos\b|\bota\b[-\s]?update|hardcoded[-\s]?cred\w*)\b",
+    re.IGNORECASE)
+
+
+def _is_iot_target(state: Any, user_input: str) -> bool:
+    if _bare_ports(state) & IOT_PORTS:
+        return True
+    return bool(_IOT_HINT_RE.search(user_input or ""))
+
+
+IOT_ATTACK_SKILL = Skill(
+    name="iot_firmware_attacks",
+    matches=_is_iot_target,
+    body=(
+        "ACTIVE PLAYBOOK — IoT / EMBEDDED / firmware. Software analysis runs via `shell`/"
+        "`kali_run`; anything needing UART/JTAG/SPI or a radio needs physical hardware.\n"
+        "1. FIRMWARE EXTRACTION — `binwalk -e firmware.bin` (or `unblob`); mount the "
+        "extracted squashfs/jffs2 root. If binwalk can't carve it, check for encryption/"
+        "custom packing and pull it from an OTA endpoint or SPI flash dump.\n"
+        "2. HUNT SECRETS + WEAK AUTH — grep the rootfs for hardcoded creds, API keys, "
+        "private keys, and backdoor accounts (`/etc/passwd`, `/etc/shadow`, config, "
+        "certs). `firmwalker`; extract the web UI + CGI binaries.\n"
+        "3. ANALYZE THE BINARIES — the httpd/CGI/service binaries: command injection in "
+        "CGI params, unauthenticated endpoints, and memory-corruption (see the "
+        "binary_exploitation playbook for the pwn path; MIPS/ARM cross-arch).\n"
+        "4. NETWORK SERVICES — probe MQTT 1883 (anonymous publish/subscribe → control), "
+        "CoAP 5683, UPnP 1900 (exposed actions), RTSP 554 (default-cred camera streams), "
+        "and vendor ports (Dahua 37777, etc.).\n"
+        "5. HARDWARE (needs a device) — UART root shell via a serial adapter, JTAG/SWD "
+        "halt-and-dump, SPI-flash read with a clip.\n"
+        "PROOF = an extracted secret/cred, an injectable endpoint, or a shell on the device."
+    ),
+)
+
+
+# --- Wireless / RF (needs hardware). Keyword-driven. ------------------------- #
+_WIRELESS_HINT_RE = re.compile(
+    r"\b(wi-?fi|wpa[-\s]?[23]?|\bwps\b|deauth\w*|aircrack|evil[-\s]?twin|\bpmkid\b|"
+    r"handshake|802\.11|\bble\b|bluetooth|zigbee|z-wave|sub-?ghz|\brfid\b|\bnfc\b|\bsdr\b|"
+    r"hackrf|\brtl-?sdr\b|gnuradio|hostapd|wifiphisher)\b",
+    re.IGNORECASE)
+
+
+def _is_wireless_target(state: Any, user_input: str) -> bool:
+    return bool(_WIRELESS_HINT_RE.search(user_input or ""))
+
+
+WIRELESS_ATTACK_SKILL = Skill(
+    name="wireless_attacks",
+    matches=_is_wireless_target,
+    body=(
+        "ACTIVE PLAYBOOK — WIRELESS / RF. NEEDS PHYSICAL HARDWARE: a monitor-mode Wi-Fi "
+        "adapter, a BLE dongle, or an SDR (HackRF/RTL-SDR) — say so if none is present. "
+        "Only attack RADIOS/SSIDs that are in scope.\n"
+        "1. Wi-Fi — `airmon-ng` monitor mode; `airodump-ng` to survey BSSIDs/clients/"
+        "encryption. WPA2: capture the 4-way handshake (or a PMKID with hcxdumptool), "
+        "then crack offline (`hashcat -m 22000`). WPS: `reaver`/`bully`. Rogue AP / evil "
+        "twin with hostapd + a captive portal for credential capture (in scope only).\n"
+        "2. BLE — `bluetoothctl`/`gatttool`/`bettercap` to enumerate services and "
+        "characteristics; look for unauthenticated read/write, pairing weaknesses, and "
+        "replayable commands.\n"
+        "3. Zigbee / sub-GHz / RFID — SDR (`gqrx`/GNU Radio, `rtl_433`) or a Proxmark/"
+        "Flipper: capture, analyze, and replay the signal; test rolling-code vs fixed-code.\n"
+        "PROOF = a cracked key, a captured/replayed command, or captured credentials — "
+        "actually demonstrated on the in-scope radio."
+    ),
+)
+
+
+# --- OSINT / passive recon. Keyword-driven; strictly passive. ---------------- #
+_OSINT_HINT_RE = re.compile(
+    r"\b(osint|footprint\w*|passive[-\s]?recon\w*|subdomain[-\s]?enum\w*|\bwhois\b|"
+    r"dns[-\s]?enum\w*|shodan|censys|the[-\s]?harvester|\bamass\b|maltego|google[-\s]?"
+    r"dork\w*|breach[-\s]?data|credential[-\s]?leak\w*|employee[-\s]?(email|enum)|"
+    r"github[-\s]?leak\w*|dehashed|leak[-\s]?database)\b",
+    re.IGNORECASE)
+
+
+def _is_osint_target(state: Any, user_input: str) -> bool:
+    return bool(_OSINT_HINT_RE.search(user_input or ""))
+
+
+OSINT_SKILL = Skill(
+    name="osint_recon",
+    matches=_is_osint_target,
+    body=(
+        "ACTIVE PLAYBOOK — OSINT / PASSIVE reconnaissance. STRICTLY PASSIVE: gather from "
+        "public/third-party sources; do NOT touch the target's systems directly (that is "
+        "Recon's job). Feeds Recon, Credential, and Phishing.\n"
+        "1. DOMAINS + INFRA — `whois`, DNS records, and passive subdomain enumeration "
+        "(amass -passive, crt.sh certificate transparency, subfinder). Map the external "
+        "footprint without scanning it.\n"
+        "2. PEOPLE — enumerate employees, roles, and email format (theHarvester, "
+        "LinkedIn, the site) to build a users/email list for later spraying/phishing.\n"
+        "3. EXPOSURE — Shodan/Censys for exposed services/banners tied to the org; GitHub/"
+        "GitLab dorking for leaked keys, configs, and internal hostnames; Google dorks "
+        "(`site:`, `filetype:`) for exposed docs.\n"
+        "4. BREACHES — check breach/leak datasets (HaveIBeenPwned, Dehashed) for "
+        "already-compromised employee credentials to reuse.\n"
+        "PROOF = the collected artifacts — the subdomain/email/employee list, a leaked "
+        "credential or key, an exposed asset — handed to the active operators."
+    ),
+)
+
+
+# --- DFIR / purple-team validation. Keyword-driven; defensive. --------------- #
+_DFIR_HINT_RE = re.compile(
+    r"\b(dfir|forensic\w*|incident[-\s]?response|\bioc\b|indicators?[-\s]?of[-\s]?"
+    r"compromise|detection[-\s]?engineer\w*|sigma[-\s]?rules?|\byara\b|purple[-\s]?team|"
+    r"memory[-\s]?forensic\w*|volatility|timeline\w*|att&?ck[-\s]?map\w*|"
+    r"log[-\s]?analysis|triage[-\s]?image)\b",
+    re.IGNORECASE)
+
+
+def _is_dfir_target(state: Any, user_input: str) -> bool:
+    return bool(_DFIR_HINT_RE.search(user_input or ""))
+
+
+DFIR_SKILL = Skill(
+    name="dfir_purple",
+    matches=_is_dfir_target,
+    body=(
+        "ACTIVE PLAYBOOK — DFIR / PURPLE-TEAM validation (defensive). Turn offensive "
+        "activity into detections and confirm what a defender would see. Read-only over "
+        "collected evidence.\n"
+        "1. TIMELINE — build a super-timeline from the evidence (log2timeline/plaso, "
+        "`mactime`); order the events and pin the entry point + lateral movement.\n"
+        "2. ARTIFACTS — hosts: prefetch, ShimCache/AmCache, event logs (4624/4625/4688/"
+        "7045), scheduled tasks, registry run keys; memory: `volatility3` (pslist, "
+        "malfind, netscan). Extract IOCs — hashes, IPs, domains, filenames, mutexes.\n"
+        "3. MAP TO ATT&CK — tag each observed action with its MITRE technique; note which "
+        "were logged vs invisible (the detection gaps).\n"
+        "4. WRITE DETECTIONS — author Sigma rules (and YARA for the samples) for the "
+        "techniques that had no coverage; validate they fire against the evidence.\n"
+        "PROOF = the timeline + IOC list + the Sigma/YARA rules that detect the activity, "
+        "with the attack→detection mapping."
+    ),
+)
+
+
+# The active skill set: Mapache's baked-in offensive playbooks across domains — web,
+# network service, credential, AD, cloud, binary, mobile, social engineering, smart
+# contracts, supply chain, ICS/OT, IoT/firmware, wireless, OSINT, and DFIR/purple.
 # User/community additions load from SKILL.md files via core/skill_format.py.
 SKILLS: list[Skill] = [WEB_ATTACK_SKILL, NETWORK_ATTACK_SKILL, CREDENTIAL_ATTACK_SKILL,
                        AD_ATTACK_SKILL, CLOUD_ATTACK_SKILL, BINARY_PWN_SKILL,
-                       MOBILE_ATTACK_SKILL, SOCIAL_ENGINEERING_SKILL]
+                       MOBILE_ATTACK_SKILL, SOCIAL_ENGINEERING_SKILL, WEB3_ATTACK_SKILL,
+                       SUPPLY_CHAIN_SKILL, ICS_ATTACK_SKILL, IOT_ATTACK_SKILL,
+                       WIRELESS_ATTACK_SKILL, OSINT_SKILL, DFIR_SKILL]
 
 # File-authored skills (SKILL.md, loaded via core/skill_format.py) register here, so
 # an operator can drop a Markdown playbook into a skills/ dir and have it injected the
