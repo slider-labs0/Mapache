@@ -91,7 +91,7 @@ class Operator:
 # the workhorses (any installed CLI tool runs through them); create_tool lets an
 # operator author a missing wrapper. Sets are deliberately small.
 _RECON = {"nmap_scan", "web_fetch", "web_search", "http_request", "shell", "searchsploit"}
-_WEB = {"kali_run", "web_fetch", "web_search", "http_request", "burp_scan",
+_WEB = {"kali_run", "web_fetch", "web_search", "http_request", "browser", "burp_scan",
         "burp_proxy", "searchsploit", "shell"}
 _EXPLOIT = {"msf_search", "msf_run", "msf_sessions", "searchsploit", "http_request",
             "kali_run", "shell"}

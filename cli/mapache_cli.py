@@ -563,6 +563,12 @@ class MapacheCLI:
             web_session = WebSession()
             self.registry.register(WebFetchTool(egress=self.egress, session=web_session))
             self.registry.register(HttpRequestTool(egress=self.egress, session=web_session))
+            # Real headless browser (capability #1): renders JavaScript/SPAs that the
+            # raw HTTP tools can't. Safe to register even without Playwright — it
+            # reports install steps at call time. Kept for teardown at shutdown.
+            from browser.browser_tool import BrowserTool
+            self._browser_tool = BrowserTool(egress=self.egress)
+            self.registry.register(self._browser_tool)
             self.registry.register(WebSearchTool())
             self.registry.register(TorFetchTool())
             self.registry.register(EgressCheckTool(egress=self.egress))
@@ -1176,6 +1182,13 @@ class MapacheCLI:
                 print(f"  Engagement log: {self.engagement_log.summary()}")
             if self.mcp:
                 await self.mcp.close_all()
+            # Tear down the headless browser if one was started this session.
+            bt = getattr(self, "_browser_tool", None)
+            if bt is not None:
+                try:
+                    await bt.aclose()
+                except Exception:
+                    pass
             await self.memory.end_session()
 
     async def _process_line(self, raw: str) -> bool:

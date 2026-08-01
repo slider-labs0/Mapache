@@ -84,6 +84,10 @@ class ChromiumController:
         )
         self._playwright: Optional[Any] = None
         self._browser: Optional[Any] = None
+        # One persistent context for the controller's lifetime, so cookies (a login,
+        # a session token) carry across pages/calls — the auth/IDOR continuity that a
+        # fresh page-per-call would lose.
+        self._context: Optional[Any] = None
 
     async def start(self) -> None:
         if not HAS_PLAYWRIGHT:
@@ -107,14 +111,33 @@ class ChromiumController:
             launch_kwargs["proxy"] = {"server": self.proxy}
 
         self._browser = await self._playwright.chromium.launch(**launch_kwargs)
+        # ignore_https_errors: lab targets often serve self-signed certs.
+        self._context = await self._browser.new_context(
+            user_agent=self.user_agent, ignore_https_errors=True)
+        self._context.set_default_timeout(self.timeout)
         logger.info("Chromium started (headless=%s proxy=%s)", self.headless, self.proxy)
 
+    async def _new_page(self) -> Any:
+        """A page in the shared context (cookies persist), starting the browser lazily."""
+        if self._context is None:
+            await self.start()
+        return await self._context.new_page()
+
     async def stop(self) -> None:
+        if self._context:
+            await self._context.close()
+            self._context = None
         if self._browser:
             await self._browser.close()
+            self._browser = None
         if self._playwright:
             await self._playwright.stop()
+            self._playwright = None
         logger.info("Chromium stopped")
+
+    async def cookies(self) -> list:
+        """The context's current cookies (for inspection / cross-tool sharing)."""
+        return await self._context.cookies() if self._context else []
 
     async def __aenter__(self) -> "ChromiumController":
         await self.start()
@@ -143,13 +166,7 @@ class ChromiumController:
             wait_for:        CSS selector to wait for before extracting content
             click_selector:  CSS selector to click after page load
         """
-        if not self._browser:
-            return BrowserResult(
-                url=url, title="", text="", html="",
-                error="Browser not started. Call start() first.",
-            )
-
-        page = await self._browser.new_page(user_agent=self.user_agent)
+        page = await self._new_page()
 
         try:
             await page.set_extra_http_headers({
@@ -232,13 +249,7 @@ class ChromiumController:
             fields:           dict of {css_selector: value}
             submit_selector:  CSS selector of the submit button
         """
-        if not self._browser:
-            return BrowserResult(
-                url=url, title="", text="", html="",
-                error="Browser not started",
-            )
-
-        page = await self._browser.new_page(user_agent=self.user_agent)
+        page = await self._new_page()
         try:
             await page.goto(url, timeout=self.timeout, wait_until="domcontentloaded")
 

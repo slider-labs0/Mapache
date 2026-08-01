@@ -3807,6 +3807,28 @@ async def test_web_tools_share_session():
     print("  PASS  web_tools_share_session")
 
 
+async def test_browser_tool():
+    """The headless-browser tool validates its input and degrades gracefully when
+    Playwright is absent — it reports install steps instead of crashing the loop."""
+    from browser.browser_tool import BrowserTool
+    from browser.chromium_controller import ChromiumController
+
+    t = BrowserTool()
+    assert t.name == "browser"
+    props = t.parameters["properties"]
+    assert "url" in props and "action" in props and props["action"]["enum"] == ["fetch", "fill_form"]
+
+    bad = await t.execute(url="ftp://nope")
+    assert not bad.success and "http" in (bad.error or "").lower()
+
+    res = await t.execute(url="http://127.0.0.1/")
+    if ChromiumController.is_available():
+        assert res is not None            # Playwright present: returns a ToolResult, no raise
+    else:
+        assert not res.success and "playwright" in (res.error or "").lower()
+    print("  PASS  browser_tool")
+
+
 def test_recon_attack_surface_extraction():
     """The web tools surface the REAL attack surface — form actions + field names,
     referenced endpoints, and comments — so the agent stops guessing routes/params."""
@@ -5013,6 +5035,13 @@ async def run_all():
     await test_orchestrator_fanout()
     await test_scoped_bus_tags()
     test_skill_md_format()
+
+    print("\nWeb tools, grounding + headless browser (P0 / capability #1)")
+    await test_web_session_persists_login()
+    await test_web_tools_share_session()
+    test_recon_attack_surface_extraction()
+    await test_web_fetch_surfaces_attack_surface()
+    await test_browser_tool()
 
     print("\nAutomated reporting (feature L)")
     test_report_builder()

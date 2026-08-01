@@ -363,9 +363,10 @@ async def run_agent(port: int, meta: dict, flag: str, provider, *, max_iters: in
     # One shared web session so a login via http_request authenticates every
     # subsequent http_request/web_fetch call (persistent-cookie fix).
     from browser.scraping_tools import WebSession
+    from browser.browser_tool import BrowserTool
     web_session = WebSession()
     for tool in (ShellTool(), WebFetchTool(session=web_session),
-                 HttpRequestTool(session=web_session), FileReadTool()):
+                 HttpRequestTool(session=web_session), BrowserTool(), FileReadTool()):
         registry.register(tool)
 
     controller = AgentController(
