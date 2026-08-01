@@ -511,6 +511,10 @@ class MapacheCLI:
         # operator approve/deny/steer. Inert unless configured (config.hitl or
         # --hitl/--hitl-every).
         self._wire_hitl()
+        # Defensive follow-up (optional): auto-generate a detection+remediation
+        # "vaccine" for each confirmed vuln. Inert unless configured (config.vaccine
+        # or --vaccine).
+        self._wire_vaccine()
         # Live status: a spinner shows "running <tool>…" while a tool executes,
         # then a "ran <tool> · <N>s" line settles above it. Replaces the raw
         # agent_controller INFO logs (silenced on the console; still in the file).
@@ -781,6 +785,43 @@ class MapacheCLI:
         if ans.lower() in ("q", "quit", "stop", "deny", "n", "halt"):
             return HITLDecision.deny("Operator halted the engagement at a checkpoint.")
         return HITLDecision.steer(ans)
+
+    def _wire_vaccine(self) -> None:
+        """Register a VaccineMiddleware when the defensive follow-up is enabled.
+
+        Sources (CLI flag overrides config.vaccine): --vaccine beats
+        `config.vaccine = {"enabled": bool, "per_step_cap": int}`. When enabled,
+        each confirmed vulnerability yields a model-generated detection + remediation
+        written to <workspace>/vaccines/ (and printed).
+        """
+        if self.controller is None:
+            return
+        spec = dict(getattr(self.config, "vaccine", None) or {})
+        enabled = getattr(self.args, "vaccine", False) or spec.get("enabled")
+        if not enabled:
+            return
+        from core.agent_middlewares import (VaccineMiddleware,
+                                             make_model_vaccine_generator)
+        cap = int(spec.get("per_step_cap", 3) or 3)
+        self.controller.add_middleware(VaccineMiddleware(
+            make_model_vaccine_generator(self.controller),
+            sink=self._vaccine_sink, per_step_cap=cap))
+        print("  💉 Vaccine loop: on — a detection+remediation is generated for each "
+              "confirmed vuln (→ vaccines/)", flush=True)
+
+    async def _vaccine_sink(self, ctx, vaccine) -> None:
+        """Persist a generated vaccine to <workspace>/vaccines/ and announce it."""
+        print(f"\n  💉 Vaccine generated — {vaccine.vulnerability}", flush=True)
+        try:
+            vdir = os.path.join(self.working_dir, "vaccines")
+            os.makedirs(vdir, exist_ok=True)
+            slug = "".join(c if c.isalnum() else "-"
+                           for c in vaccine.vulnerability.lower()).strip("-")[:60]
+            path = os.path.join(vdir, f"{slug or 'vaccine'}.md")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(vaccine.as_text() + "\n")
+        except Exception:
+            pass
 
     async def _connect_mcp(self) -> None:
         """Load mcp.json, connect to each server, register its tools."""
@@ -2074,6 +2115,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hitl-every", type=int, default=None, metavar="N",
                         help="HITL: also pause every N iterations for operator review "
                              "(implies --hitl; overrides config.hitl)")
+    parser.add_argument("--vaccine", action="store_true",
+                        help="Defensive follow-up: generate a detection+remediation "
+                             "'vaccine' for each confirmed vulnerability (→ vaccines/)")
     parser.add_argument("--no-tools", action="store_true")
     parser.add_argument("--all-tools", action="store_true",
                         help="Disable phase-based tool subsetting and expose all "

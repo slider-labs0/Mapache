@@ -9,14 +9,18 @@ from the framework so the framework stays dependency-free.
   - HITLMiddleware — human-in-the-loop checkpoint gate: pause the loop at
     milestones and let a human approve / deny / steer (Decepticon-parity: real
     HITL slot).
+  - VaccineMiddleware — defensive follow-up: when the engagement confirms a new
+    vulnerability, generate a detection signature + remediation ("vaccine") and
+    record it (Decepticon-parity: blue-cell / offensive-vaccine loop).
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from core.middleware import AgentMiddleware, LoopContext
 
@@ -178,3 +182,183 @@ class HITLMiddleware(AgentMiddleware):
         elif decision.action == "steer" and decision.message:
             ctx.inject.append(decision.message)
             logger.info("HITL: operator steered at iteration %d", ctx.iteration)
+
+
+@dataclass
+class Vaccine:
+    """A defensive artifact generated from a confirmed vulnerability."""
+    vulnerability: str
+    detection: str = ""     # a detection signature / rule / log query
+    remediation: str = ""   # how to fix or mitigate
+    notes: str = ""
+
+    def as_text(self) -> str:
+        parts = [f"# Vaccine — {self.vulnerability}"]
+        if self.detection:
+            parts.append(f"\n## Detection\n{self.detection}")
+        if self.remediation:
+            parts.append(f"\n## Remediation\n{self.remediation}")
+        if self.notes:
+            parts.append(f"\n## Notes\n{self.notes}")
+        return "\n".join(parts)
+
+
+def _coerce_vaccine(vuln: str, result: Any) -> Vaccine:
+    """Normalise a generator's return (Vaccine | dict | str) into a Vaccine."""
+    if isinstance(result, Vaccine):
+        if not result.vulnerability:
+            result.vulnerability = vuln
+        return result
+    if isinstance(result, dict):
+        return Vaccine(
+            vulnerability=result.get("vulnerability") or vuln,
+            detection=str(result.get("detection", "")).strip(),
+            remediation=str(result.get("remediation", "")).strip(),
+            notes=str(result.get("notes", "")).strip())
+    return Vaccine(vulnerability=vuln, notes=str(result).strip())
+
+
+VaccineGenerator = Callable[[str, dict], Awaitable[Any]]
+VaccineSink = Callable[[LoopContext, Vaccine], Awaitable[None]]
+
+
+class VaccineMiddleware(AgentMiddleware):
+    """Defensive follow-up loop ('offensive vaccine' / blue-cell).
+
+    Every time the engagement confirms a NEW vulnerability, generate a defensive
+    artifact for it — a detection signature and a remediation — and record it, so
+    each offensive finding yields a blue-team deliverable. This is Decepticon's
+    blue-cell node expressed as a composable loop slot.
+
+    Vulnerabilities are read from the attack-state blackboard; each is vaccinated
+    exactly once (tracked across turns). A `generator` produces the artifact
+    (async `(vuln, context) -> Vaccine | dict | str | None`); a returned None is
+    skipped. Recording emits a `vaccine.generated` bus event, adds a `note` to the
+    knowledge graph linked to the vulnerability, and calls the optional `sink`
+    (e.g. write a file / print). `per_step_cap` bounds how many are generated in a
+    single slot invocation so a burst of findings doesn't stall the loop; the rest
+    are picked up on the next step.
+    """
+
+    name = "vaccine"
+
+    def __init__(self, generator: VaccineGenerator,
+                 sink: Optional[VaccineSink] = None, per_step_cap: int = 3) -> None:
+        self.generator = generator
+        self.sink = sink
+        self.per_step_cap = int(per_step_cap or 0) or 3
+        self._seen: set[str] = set()   # vulnerabilities already vaccinated
+
+    @staticmethod
+    def _vulns(ctx: LoopContext) -> list:
+        st = ctx.attack_state
+        return list(getattr(st, "vulnerabilities", []) or []) if st is not None else []
+
+    @staticmethod
+    def _context(ctx: LoopContext) -> dict:
+        st = ctx.attack_state
+        return {
+            "target": getattr(st, "target", None) if st is not None else None,
+            "phase": getattr(st, "current_phase", None) if st is not None else None,
+        }
+
+    async def _sweep(self, ctx: LoopContext) -> None:
+        made = 0
+        for vuln in self._vulns(ctx):
+            if vuln in self._seen:
+                continue
+            if made >= self.per_step_cap:
+                break
+            self._seen.add(vuln)
+            made += 1
+            try:
+                result = await self.generator(vuln, self._context(ctx))
+            except Exception as exc:
+                logger.warning("Vaccine generator failed for %r: %s", vuln, exc)
+                continue
+            if result is None:
+                continue
+            await self._record(ctx, _coerce_vaccine(vuln, result))
+
+    async def _record(self, ctx: LoopContext, vaccine: Vaccine) -> None:
+        controller = ctx.controller
+        bus = getattr(controller, "bus", None)
+        if bus is not None:
+            try:
+                await bus.emit("vaccine.generated",
+                               {"vulnerability": vaccine.vulnerability,
+                                "detection": vaccine.detection,
+                                "remediation": vaccine.remediation,
+                                "session_id": ctx.session_id},
+                               source="vaccine", session_id=ctx.session_id)
+            except Exception:
+                pass
+        kg = getattr(controller, "knowledge_graph", None)
+        if kg is not None:
+            try:
+                note = kg.add("note", f"vaccine: {vaccine.vulnerability}",
+                              attrs={"kind": "vaccine",
+                                     "detection": vaccine.detection,
+                                     "remediation": vaccine.remediation,
+                                     "notes": vaccine.notes},
+                              source="vaccine")
+                vuln_ent = kg.add("vulnerability", vaccine.vulnerability, source="vaccine")
+                if note is not None and vuln_ent is not None:
+                    kg.relate(vuln_ent.id, "mitigated-by", note.id)
+            except Exception as exc:  # a findings-store hiccup must not break the loop
+                logger.debug("Vaccine KG record failed: %s", exc)
+        if self.sink is not None:
+            try:
+                await self.sink(ctx, vaccine)
+            except Exception as exc:
+                logger.warning("Vaccine sink failed: %s", exc)
+
+    async def on_iteration_start(self, ctx: LoopContext) -> None:
+        await self._sweep(ctx)
+
+    async def on_turn_end(self, ctx: LoopContext, response: Any) -> None:
+        # Catch a vulnerability confirmed on the final step of the turn.
+        await self._sweep(ctx)
+
+
+def make_model_vaccine_generator(controller: Any) -> VaccineGenerator:
+    """A default generator that asks the controller's model for the vaccine JSON.
+
+    Best-effort: any model/parse failure yields None (skip) so the loop is never
+    broken by the defensive follow-up. Returns an async `(vuln, context) -> Vaccine`.
+    """
+    async def _gen(vuln: str, context: dict) -> Optional[Vaccine]:
+        target = context.get("target") or "the target"
+        prompt = [
+            {"role": "system", "content":
+                "You are a blue-team detection engineer supporting an AUTHORIZED "
+                "security engagement. Given a confirmed vulnerability, produce a "
+                "concise DEFENSIVE artifact. Reply with ONLY one JSON object: "
+                '{"detection": "<a concrete detection signature, log query, or rule>", '
+                '"remediation": "<how to fix or mitigate>", "notes": "<optional>"}.'},
+            {"role": "user", "content":
+                f"Target: {target}\nConfirmed vulnerability: {vuln}\n"
+                "Produce the vaccine JSON now."},
+        ]
+        try:
+            raw = await controller.model.chat(messages=prompt)
+        except Exception as exc:
+            logger.debug("Vaccine model call failed: %s", exc)
+            return None
+        try:
+            content = (controller._parse_model_response(raw).get("content", "") or "").strip()
+        except Exception:
+            content = raw.strip() if isinstance(raw, str) else ""
+        parsed: dict = {}
+        try:
+            start, end = content.index("{"), content.rindex("}") + 1
+            parsed = json.loads(content[start:end])
+        except Exception:
+            parsed = {"notes": content[:500]}
+        return Vaccine(
+            vulnerability=vuln,
+            detection=str(parsed.get("detection", "")).strip(),
+            remediation=str(parsed.get("remediation", "")).strip(),
+            notes=str(parsed.get("notes", "")).strip())
+
+    return _gen

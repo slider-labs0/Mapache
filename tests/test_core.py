@@ -741,6 +741,66 @@ async def test_hitl_middleware():
     print("  PASS  hitl_middleware")
 
 
+async def test_vaccine_middleware():
+    """VaccineMiddleware generates a defensive artifact once per new vulnerability,
+    records it to the bus + knowledge graph + sink, dedups across turns, and caps a
+    burst per step."""
+    import types
+    from core.middleware import LoopContext
+    from core.agent_middlewares import VaccineMiddleware, _coerce_vaccine
+    from core.event_bus import EventBus
+    from core.knowledge_graph import KnowledgeGraph
+
+    # _coerce_vaccine + rendering.
+    v = _coerce_vaccine("SQLi", {"detection": "d", "remediation": "r"})
+    assert v.vulnerability == "SQLi" and v.detection == "d" and "Detection" in v.as_text()
+    assert _coerce_vaccine("XSS", "just a note").notes == "just a note"
+
+    gen_calls: list = []
+    async def fake_gen(vuln, context):
+        gen_calls.append((vuln, context.get("target"), context.get("phase")))
+        return {"detection": f"alert on {vuln}", "remediation": "patch it"}
+
+    sink_calls: list = []
+    async def sink(ctx, vaccine):
+        sink_calls.append(vaccine.vulnerability)
+
+    events: list = []
+    async def collect(e):
+        events.append(e.data["vulnerability"])
+
+    bus = EventBus()
+    bus.subscribe("vaccine.generated", collect)
+    kg = KnowledgeGraph()
+    st = types.SimpleNamespace(vulnerabilities=["SQLi in /login"], target="10.0.0.5",
+                               current_phase="exploitation")
+    ctrl = types.SimpleNamespace(bus=bus, knowledge_graph=kg,
+                                 chain=types.SimpleNamespace(attack_state=st))
+    ctx = LoopContext(controller=ctrl, session_id="s", user_input="x")
+    mw = VaccineMiddleware(fake_gen, sink=sink)
+
+    await mw.on_iteration_start(ctx)
+    assert gen_calls == [("SQLi in /login", "10.0.0.5", "exploitation")]
+    assert sink_calls == ["SQLi in /login"] and events == ["SQLi in /login"]
+    # A knowledge-graph note tagged 'vaccine' now exists and is linked to the vuln.
+    notes = kg.query(type="note")
+    assert any(n.attrs.get("kind") == "vaccine" for n in notes)
+    assert any(r.rel == "mitigated-by" for r in kg.relations())
+
+    # Dedup: the same vuln on a later step generates nothing new.
+    await mw.on_iteration_start(ctx)
+    assert len(gen_calls) == 1
+
+    # New vulns are vaccinated, but per_step_cap bounds a single sweep.
+    st.vulnerabilities = ["SQLi in /login", "XSS in /q", "IDOR /u/1", "RCE /ping"]
+    mw.per_step_cap = 2
+    await mw.on_iteration_start(ctx)
+    assert len(gen_calls) == 3           # 1 prior + 2 new this step (capped)
+    await mw.on_iteration_start(ctx)
+    assert len(gen_calls) == 4           # the remaining one picked up next step
+    print("  PASS  vaccine_middleware")
+
+
 async def test_agent_plan_dispatches_and_seeds_todos():
     model = MockModel()
     # A plan must dispatch its first_tool AND seed the persistent task list,
@@ -4759,6 +4819,7 @@ async def run_all():
     await test_agent_middleware_hooks()
     await test_budget_middleware()
     await test_hitl_middleware()
+    await test_vaccine_middleware()
     test_progress_ledger_unit()
     await test_progress_ledger_records_dead_ends()
 

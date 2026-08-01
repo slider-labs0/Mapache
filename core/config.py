@@ -259,6 +259,10 @@ class MapacheConfig:
     # "on_phase_change": bool}. Enforced by HITLMiddleware — the loop pauses for
     # operator approve/deny/steer at milestones.
     hitl: dict[str, Any] = field(default_factory=dict)
+    # Defensive follow-up (optional): {"enabled": bool, "per_step_cap": int}.
+    # Enforced by VaccineMiddleware — each confirmed vuln yields a detection +
+    # remediation "vaccine" written to <workspace>/vaccines/.
+    vaccine: dict[str, Any] = field(default_factory=dict)
     # Paths the config was assembled from, for diagnostics.
     sources: list[str] = field(default_factory=list)
 
@@ -295,6 +299,7 @@ class MapacheConfig:
             voice=dict(data.get("voice") or {}),
             budget=dict(data.get("budget") or {}),
             hitl=dict(data.get("hitl") or {}),
+            vaccine=dict(data.get("vaccine") or {}),
             sources=list(data.get("_sources") or []),
         )
 
@@ -360,6 +365,7 @@ class MapacheConfig:
             "voice": dict(self.voice),
             "budget": dict(self.budget),
             "hitl": dict(self.hitl),
+            "vaccine": dict(self.vaccine),
         }
 
     def redacted(self) -> dict[str, Any]:
