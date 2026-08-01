@@ -503,7 +503,7 @@ Specialist sub-agents coordinated by a lead over a shared blackboard.
 
 ---
 
-## Q. Decepticon-parity convergence  ← in progress (2026-07 → 2026-08)
+## Q. Decepticon-parity convergence  ✅  ← 1–7 sequence complete (2026-07 → 2026-08)
 A second wave toward Decepticon parity: a durable knowledge graph, an operations
 plan, a vuln-research pipeline, an autonomous supervisor, and a composable
 middleware architecture around the loop. The 1–7 items are the user-set build
@@ -526,7 +526,11 @@ order (middleware → budget → HITL → vaccine → fan-out → skill.md → t
 - [x] **5. Parallel operator fan-out**: on a supervisor stall, deploy the top-N distinct
       operators concurrently (`Supervisor(fanout=…)`, emits `supervisor.fanout`). `--fanout`.
       Live-verified on grok-4 / XBEN-001 (2026-08-01): 1 solo op → 3 parallel on stall.
-- [ ] **6. SKILL.md formatter** — Decepticon skill-package frontmatter / authoring. NEXT.
+- [x] **6. SKILL.md formatter** (`core/skill_format.py`): author playbooks as Markdown with
+      frontmatter (name/description/when_to_use/ports/keywords/target_scheme/phase/tools);
+      parse ↔ format round-trip (no PyYAML), predicate BUILT from the frontmatter, and
+      `load_skill_dir` registers `~/.mapache/skills/` + `<workspace>/skills/` into the JIT
+      injection set alongside the built-ins. Ships `skills/lfi_ssrf.md` as an example.
 - [x] **7. Full sub-agent trace streaming** (`ScopedBus`): tags every delegated event with
       operator/depth so the CLI streams the sub-agent's attributed `⤷ [op]` trace, not just
       the delegate start/end banners.
