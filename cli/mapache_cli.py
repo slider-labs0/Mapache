@@ -49,6 +49,7 @@ from security_tools.exploitation.metasploit_tool import (
 )
 from security_tools.exploitation.burpsuite_tool import BurpScanTool, BurpProxyTool
 from security_tools.cracking.john_tool import JohnCrackTool, JohnFormatTool
+from security_tools.kali.heavy_tools import SqlmapTool, FuzzTool
 from security_tools.kali.kali_tools_interface import (
     KaliToolListTool, KaliRunTool, SearchsploitTool,
 )
@@ -586,6 +587,11 @@ class MapacheCLI:
             # can run on a remote Kali box / container too.
             self.registry.register(KaliRunTool(backend=self.exec_backend, egress=self.egress))
             self.registry.register(SearchsploitTool())
+            # Disciplined heavy exploit/discovery tools (capability #3): guided sqlmap
+            # + ffuf that build correct invocations and summarise output, run through
+            # the execution backend + egress like kali_run.
+            self.registry.register(SqlmapTool(backend=self.exec_backend, egress=self.egress))
+            self.registry.register(FuzzTool(backend=self.exec_backend, egress=self.egress))
 
             # Integrations (bring-your-own tools): http (e.g. Shodan) + command (a
             # CLI / GitHub repo) specs from config.integrations. They run through the

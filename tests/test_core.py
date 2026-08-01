@@ -3864,6 +3864,31 @@ async def test_browser_tool():
     print("  PASS  browser_tool")
 
 
+async def test_heavy_tools():
+    """sqlmap/fuzz wrappers build correct invocations from structured args, validate
+    input, and degrade gracefully when the underlying tool is absent."""
+    import shutil
+    from security_tools.kali.heavy_tools import SqlmapTool, FuzzTool
+
+    sq = SqlmapTool()
+    cmd = sq._build_cmd("http://t/p?id=1", data="a=b", param="id", level=3, dump=True)
+    assert cmd.startswith("sqlmap -u ") and "--batch" in cmd and "--data" in cmd
+    assert "-p id" in cmd and "--level 3" in cmd and "--dump" in cmd
+    bad = await sq.execute(url="ftp://x")
+    assert not bad.success and "http" in (bad.error or "").lower()
+    if shutil.which("sqlmap") is None:
+        res = await sq.execute(url="http://t/?id=1")
+        assert not res.success and "sqlmap" in (res.error or "").lower()
+
+    fz = FuzzTool()
+    fcmd = fz._build_cmd("http://t/FUZZ", extensions="php,bak", filter_codes="404", threads=20)
+    assert fcmd.startswith("ffuf -u ") and "-w " in fcmd
+    assert "-e php,bak" in fcmd and "-fc 404" in fcmd and "-t 20" in fcmd
+    nofuzz = await fz.execute(url="http://t/no-keyword")
+    assert not nofuzz.success and "FUZZ" in (nofuzz.error or "")
+    print("  PASS  heavy_tools")
+
+
 def test_recon_attack_surface_extraction():
     """The web tools surface the REAL attack surface — form actions + field names,
     referenced endpoints, and comments — so the agent stops guessing routes/params."""
@@ -5078,6 +5103,7 @@ async def run_all():
     test_recon_attack_surface_extraction()
     await test_web_fetch_surfaces_attack_surface()
     await test_browser_tool()
+    await test_heavy_tools()
 
     print("\nAutomated reporting (feature L)")
     test_report_builder()
