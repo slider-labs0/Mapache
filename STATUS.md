@@ -192,11 +192,12 @@ blind endpoint spraying), disciplined **sqlmap + ffuf** wrappers, a **reflection
 tactical-staging** middleware, and **multi-attempt / self-consistency** solving
 (`--attempts`).
 
-**S — Full-spectrum coverage + cross-engagement learning (2026-08):** built-in
-just-in-time playbooks now span web, network, credential, AD, **cloud**, **binary-pwn**,
-**mobile**, and **social-engineering** (Mapache is no longer web-only); a **format-aware
-candidate-flag verifier**; and a **cross-engagement learning store** that biases routing
-toward what won on similar targets before.
+**S — Full-spectrum coverage + cross-engagement learning (2026-08):** **15 built-in
+just-in-time playbooks** — web, network, credential, AD, cloud, binary-pwn, mobile,
+social-engineering, smart-contracts/Web3, supply-chain, ICS/OT, IoT/firmware, wireless,
+OSINT, and DFIR/purple — so every domain operator has injected method (Mapache is no
+longer web-only); a **format-aware candidate-flag verifier**; and a **cross-engagement
+learning store** that biases routing toward what won on similar targets before.
 
 ---
 
