@@ -542,6 +542,40 @@ order (middleware → budget → HITL → vaccine → fan-out → skill.md → t
 
 ---
 
+## R. Frontier-loop capability upgrades  ← in progress (2026-08)
+The evidence-backed gaps after the XBOW diagnosis ("gap is the loop + tooling, not the
+model"). Ordered by leverage; 1–5 shipped 2026-08-01.
+
+- [x] **1. Headless browser tool** (`browser/browser_tool.py`): exposes the existing
+      Playwright ChromiumController as the `browser` tool (JS/SPA rendering, form fill,
+      recon on the RENDERED DOM). Persistent context = login carries across calls.
+      Unlocks the modern-web-app class raw HTTP can't see. Optional dep — degrades to
+      install guidance.
+- [x] **2. Response-grounded acting** (agent_controller): a per-turn grounding corpus
+      flags web calls to invented paths (never seen in any response) as blind probes;
+      after a short streak, nudges the model to act on what a real response contained.
+      Kills the #1 failure mode (blind spraying). Emits agent.grounding.
+- [x] **3. Disciplined heavy tools** (`security_tools/kali/heavy_tools.py`): guided
+      SqlmapTool + FuzzTool (ffuf) that build correct invocations from structured args
+      and summarise output — real SQLi/discovery instead of hand-sprayed payloads.
+- [x] **4. Reflection + tactical staging** (`ReflectionMiddleware`): every N steps,
+      inject CONFIRMED/HYPOTHESIS/NEXT self-critique + the kill-chain stage from live
+      state. `--reflect`. No extra model call.
+- [x] **5. Multi-attempt / self-consistency** (`core/multi_attempt.py`): retry up to N
+      times with a fresh context (findings persist) + a different-approach directive +
+      the ledger's dead ends; stop on first solve. `--attempts N`.
+- [ ] **6. Measure the swarm/fanout + capability lift** — plumbing ready
+      (`benchmark_xbow --strategy swarm --fanout --reflect --attempts N`); a meaningful
+      A/B needs a capable PAID model and enough benchmarks (free tier gives no signal).
+- [ ] **7. Base model** — data shows DeepSeek V4 Pro > grok-4 by ~42% on XBOW; a
+      frontier model raises the floor and compounds 1–5. Config choice, not code.
+- Touchpoints: `browser/browser_tool.py`, `browser/chromium_controller.py`,
+  `security_tools/kali/heavy_tools.py`, `core/agent_controller.py`,
+  `core/agent_middlewares.py`, `core/multi_attempt.py`, `cli/mapache_cli.py`,
+  `tests/benchmark_xbow.py`. Tests in `tests/test_core.py` (suite 164).
+
+---
+
 ## Suggested ordering (dependencies)
 
 1. **C (setup)** + **G (providers)** — providers need key storage; do together.
