@@ -41,112 +41,22 @@ optional Telegram/Discord operation.
   prompt-injection shield with active detection, an append-only engagement audit log,
   and an optional replayable session recording (asciicast).
 
+## Quickstart
+
+```bash
+pip install -r requirements.txt
+python -m cli setup      # pick a provider + model (local via Ollama, or a cloud key)
+python -m cli            # start the agent
+```
+
+Needs Python 3.10+. Kali/ParrotOS is the recommended platform (the offensive toolchain
+is packaged there). Missing tools degrade gracefully.
+
 ## Documentation
 
-Full docs live in [`docs/`](docs/): [usage](docs/usage.md), the
-[tool reference](docs/tools.md), [architecture](docs/architecture.md), and
-[reporting](docs/reporting.md). `STATUS.md` and `ROADMAP.md` cover internals and
-planned work.
+- [Usage](docs/usage.md) - flags, slash commands, cloud models, config.
+- [Tools](docs/tools.md) - the offensive toolchain reference.
+- [Architecture](docs/architecture.md) - the loop, swarm, and safety layers.
+- [Reporting](docs/reporting.md) - evidence-first findings and report formats.
 
-## Requirements
-
-- **Python 3.10+**
-- **[Ollama](https://ollama.com)** for local models (`ollama serve`, then pull a model).
-  Cloud providers (Anthropic, OpenAI-compatible, Grok, OpenRouter) work instead via
-  `--model <id> --allow-cloud`.
-- The offensive tools shell out to their real binaries (`nmap`, `msfconsole`,
-  `searchsploit`, etc.), pre-installed on Kali/ParrotOS. On other distros, install the
-  ones you need; missing tools degrade gracefully and the agent adapts.
-
-## Linux setup
-
-Linux (especially Kali) is the recommended platform: the offensive toolchain is packaged
-there and the POSIX shell avoids the quoting workarounds Windows needs.
-
-```bash
-# 1. Clone
-git clone <your-fork-url> Mapache && cd Mapache
-
-# 2. Virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
-
-# 3. Dependencies (core is just httpx; see requirements.txt for optional extras)
-pip install -r requirements.txt
-
-# 4. Local model backend
-#    Install Ollama from https://ollama.com, then:
-ollama serve &                 # start the daemon
-ollama pull qwen2.5:32b        # or any model you like
-
-# 5. Configure once (interactive wizard: pick provider + model), then run
-python -m cli setup
-python -m cli --model qwen2.5:32b
-```
-
-Handy alias so the subcommands read as documented (`mapache setup`, etc.):
-
-```bash
-alias mapache='python -m cli'      # add to ~/.bashrc to persist
-mapache config show                # inspect the merged config
-```
-
-### Optional extras
-
-Everything beyond the core is feature-gated; install per feature (uncomment the matching
-line in `requirements.txt`):
-
-```bash
-pip install rich                      # nicer CLI panels/colour
-pip install pymetasploit3             # msf_* tools via RPC
-pip install playwright && playwright install chromium   # headless-browser scraping
-pip install python-telegram-bot discord.py              # run Mapache from chat
-```
-
-Offensive binaries on Debian/Kali (install what you need):
-
-```bash
-sudo apt update && sudo apt install -y nmap metasploit-framework exploitdb hydra john tor
-```
-
-### Cloud models (optional)
-
-Set the key for your provider and pass `--allow-cloud`:
-
-```bash
-export ANTHROPIC_API_KEY=...        # or OPENAI_API_KEY / XAI_API_KEY / OPENROUTER_API_KEY
-python -m cli --model claude-opus-4-8 --allow-cloud
-```
-
-Config lives at `~/.mapache/config.json` (see `python -m cli config show`). Keys can be
-stored there or referenced from the environment.
-
-## Useful flags and commands
-
-```bash
-python -m cli --scope scope.json      # enforce rules-of-engagement (in-scope targets)
-python -m cli --cast                  # record the engagement as a replayable asciicast
-python -m cli --exec-backend docker   # run shell tools in an attacker container
-python -m cli --strategy hybrid       # route model calls per role (local + cloud)
-```
-
-Inside a session, slash commands include `/swarm` (toggle the autonomous multi-agent
-supervisor), `/report [md|html|both|sarif|bounty|all]` (write the findings report), and
-`/scope` (show the active rules-of-engagement).
-
-## Running the tests
-
-```bash
-python tests/test_core.py
-```
-
-On Windows, prefix with `PYTHONUTF8=1` to avoid console-encoding errors on log output.
-On Linux, UTF-8 is already the default.
-
-## Windows
-
-Mapache also runs on Windows. Use a normal `py -m venv` / `pip install -r
-requirements.txt`. Many offensive binaries are unavailable on Windows, so route the
-agent's shell through an attacker container (`--exec-backend docker`) or a remote Kali
-box (SSH backend) for the real toolchain. See `tests/lab/isolated_lab.sh` for a
-contained lab.
+`STATUS.md` and `ROADMAP.md` cover internals and planned work.
