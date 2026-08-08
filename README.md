@@ -41,6 +41,13 @@ optional Telegram/Discord operation.
   prompt-injection shield with active detection, an append-only engagement audit log,
   and an optional replayable session recording (asciicast).
 
+## Documentation
+
+Full docs live in [`docs/`](docs/): [usage](docs/usage.md), the
+[tool reference](docs/tools.md), [architecture](docs/architecture.md), and
+[reporting](docs/reporting.md). `STATUS.md` and `ROADMAP.md` cover internals and
+planned work.
+
 ## Requirements
 
 - **Python 3.10+**
