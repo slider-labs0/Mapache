@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/mapache-logo.png" alt="Mapache" width="600">
+  <img src="assets/mapache-logo.png" alt="Mapache" width="1000">
 </div>
 
 <h1 align="center">Mapache</h1>
