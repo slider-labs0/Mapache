@@ -327,7 +327,7 @@ class HttpRequestTool(BaseTool):
                     "server", "x-powered-by")
 
     def __init__(self, egress: Any = None, session: "Optional[WebSession]" = None,
-                 **kwargs: Any) -> None:
+                 history: Any = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         # Egress/OPSEC: route the request through the configured proxy/Tor so the
         # target's web logs show that IP, not the operator's.
@@ -335,6 +335,10 @@ class HttpRequestTool(BaseTool):
         # Persistent cookie jar shared with the other web tools (see WebSession) —
         # a login here authenticates every later http_request/web_fetch call.
         self.session = session or WebSession()
+        # Shared Burp-lite history: every request is recorded so http_repeater can
+        # replay/tamper/diff it later (id `rN`). Shared with http_repeater + across
+        # sub-agents via the shared tool instance.
+        self.history = history
 
     def _proxy(self) -> Any:
         return self.egress.httpx_proxy() if self.egress is not None else None
@@ -368,8 +372,19 @@ class HttpRequestTool(BaseTool):
         if response.error and response.status_code == 0:
             return ToolResult.fail(response.error)
 
+        ex_id = ""
+        if self.history is not None:
+            ex = self.history.record(
+                method=method, url=str(response.url), status=response.status_code,
+                req_headers=req_headers or {}, req_params=params, req_json=json_body,
+                req_data=data, req_body=body, resp_headers=dict(response.headers),
+                resp_body=response.text or "", elapsed_ms=response.elapsed_ms)
+            ex_id = ex.id
+
         lines = [f"{method.upper()} {response.url}",
                  f"Status: {response.status_code} ({response.elapsed_ms:.0f}ms)"]
+        if ex_id:
+            lines.append(f"[recorded as {ex_id} — replay/tamper/diff it with http_repeater]")
         for h in self._KEY_HEADERS:
             if h in {k.lower() for k in response.headers}:
                 val = next(v for k, v in response.headers.items() if k.lower() == h)
@@ -399,6 +414,148 @@ class HttpRequestTool(BaseTool):
             metadata={"url": str(response.url), "status": response.status_code,
                       "method": method.upper()},
         )
+
+
+class HttpRepeaterTool(BaseTool):
+    name = "http_repeater"
+    description = (
+        "Burp Repeater for the agent: replay, tamper, and diff HTTP requests you "
+        "already sent (each http_request is recorded with an id like r3).\n"
+        "USE THIS FOR IDOR / BROKEN ACCESS CONTROL: replay an authenticated request "
+        "changing ONE id/param (e.g. account?id=123 -> 124) and it auto-DIFFS the two "
+        "responses. A DIFFERENT body = you read another user's object (a CONFIRMED "
+        "IDOR — the flag is often there). An IDENTICAL body = the param is ignored "
+        "(dead vector; change approach). Session cookies are reused automatically.\n"
+        "actions: 'history' (list recorded requests), 'show' (full request+response "
+        "of one id), 'replay' (re-send id N with optional tamper overrides + auto-diff "
+        "vs the original), 'diff' (compare two ids)."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string",
+                       "description": "history | show | replay | diff",
+                       "default": "history"},
+            "id": {"type": "string",
+                   "description": "Exchange id to show/replay (e.g. 'r3')"},
+            "id_b": {"type": "string",
+                     "description": "Second exchange id for action='diff'"},
+            # Tamper overrides for action='replay' — any omitted field reuses the
+            # original request's value. This is how you flip the IDOR id.
+            "url": {"type": "string", "description": "replay: override the URL"},
+            "method": {"type": "string", "description": "replay: override the method"},
+            "params": {"type": "object", "description": "replay: override query params (the usual IDOR knob)"},
+            "json_body": {"type": "object", "description": "replay: override the JSON body"},
+            "data": {"type": "object", "description": "replay: override the form body"},
+            "headers": {"type": "object", "description": "replay: merge/override headers"},
+            "search": {"type": "string",
+                       "description": "history: only list exchanges matching this substring"},
+            "max_length": {"type": "integer", "default": 4000},
+        },
+        "required": ["action"],
+    }
+    permissions = {Permission.NETWORK}
+    timeout = 30
+    tags = ["browser", "web", "http", "repeater", "idor"]
+
+    def __init__(self, egress: Any = None, session: "Optional[WebSession]" = None,
+                 history: Any = None, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.egress = egress
+        self.session = session or WebSession()
+        if history is None:
+            from browser.http_history import HTTPHistory
+            history = HTTPHistory()
+        self.history = history
+
+    def _proxy(self) -> Any:
+        return self.egress.httpx_proxy() if self.egress is not None else None
+
+    async def execute(self, action: str = "history", id: Optional[str] = None,
+                      id_b: Optional[str] = None, url: Optional[str] = None,
+                      method: Optional[str] = None, params: Optional[dict] = None,
+                      json_body: Optional[dict] = None, data: Optional[dict] = None,
+                      headers: Optional[dict] = None, search: Optional[str] = None,
+                      max_length: int = 4000, **kwargs: Any) -> ToolResult:
+        action = (action or "history").lower().strip()
+
+        if action == "history":
+            items = self.history.search(search) if search else self.history.recent(25)
+            if not items:
+                return ToolResult.ok("(no requests recorded yet — send some with http_request)")
+            return ToolResult.ok("Recorded HTTP exchanges:\n"
+                                 + "\n".join("  " + e.summary() for e in items))
+
+        if action == "show":
+            ex = self.history.get(id or "")
+            if ex is None:
+                return ToolResult.fail(f"No exchange with id {id!r}. Use action='history'.")
+            body = (ex.resp_body or "")[:max_length]
+            req = []
+            if ex.req_params:
+                req.append(f"  params: {ex.req_params}")
+            if ex.req_json is not None:
+                req.append(f"  json: {ex.req_json}")
+            if ex.req_data:
+                req.append(f"  data: {ex.req_data}")
+            if ex.req_body:
+                req.append(f"  body: {ex.req_body[:500]}")
+            return ToolResult.ok(
+                f"{ex.id}: {ex.method} {ex.url}\n" + ("\n".join(req) + "\n" if req else "")
+                + f"-> {ex.status} ({ex.elapsed_ms:.0f}ms)\n--- Body ({len(ex.resp_body)}B) ---\n{body}")
+
+        if action == "diff":
+            a = self.history.get(id or "")
+            b = self.history.get(id_b or "")
+            if a is None or b is None:
+                return ToolResult.fail("diff needs two valid ids: id and id_b.")
+            return ToolResult.ok(self._render_diff(a, b))
+
+        if action == "replay":
+            base = self.history.get(id or "")
+            if base is None:
+                return ToolResult.fail(f"No exchange with id {id!r} to replay. Use action='history'.")
+            r_method = (method or base.method).upper()
+            r_url = url or base.url
+            r_params = params if params is not None else base.req_params
+            r_json = json_body if json_body is not None else base.req_json
+            r_data = data if data is not None else base.req_data
+            r_headers = {**(base.req_headers or {}), **(self.session.headers or {}),
+                         **(headers or {})} or None
+            async with HttpClient(timeout=25.0, proxy=self._proxy(),
+                                  cookies=self.session.cookies) as client:
+                response = await client.request(
+                    r_method, r_url, params=r_params, data=r_data, json=r_json,
+                    content=base.req_body, extra_headers=r_headers)
+                self.session.absorb(client.cookies)
+            if response.error and response.status_code == 0:
+                return ToolResult.fail(response.error)
+            new = self.history.record(
+                method=r_method, url=str(response.url), status=response.status_code,
+                req_headers=r_headers or {}, req_params=r_params, req_json=r_json,
+                req_data=r_data, req_body=base.req_body,
+                resp_headers=dict(response.headers), resp_body=response.text or "",
+                elapsed_ms=response.elapsed_ms, tag=f"replay of {base.id}")
+            return ToolResult.ok(
+                f"Replayed {base.id} -> {new.id}: {r_method} {response.url} "
+                f"-> {response.status_code}\n\n" + self._render_diff(base, new),
+                metadata={"replay_of": base.id, "new_id": new.id,
+                          "status": response.status_code})
+
+        return ToolResult.fail(f"Unknown action {action!r}. Use history|show|replay|diff.")
+
+    def _render_diff(self, a: Any, b: Any) -> str:
+        from browser.http_history import diff_bodies
+        changed, rendered = diff_bodies(a.resp_body, b.resp_body)
+        head = (f"diff {a.id} (status {a.status}, {len(a.resp_body)}B) "
+                f"vs {b.id} (status {b.status}, {len(b.resp_body)}B)")
+        if not changed and a.status == b.status:
+            return (head + "\nIDENTICAL response — the changed input had NO effect "
+                    "(dead vector). Try a different parameter/technique.")
+        verdict = ("DIFFERENT response — the change altered the output. If you swapped "
+                   "an id/owner, you likely accessed another principal's data (possible "
+                   "IDOR / broken access control) — inspect it for the flag.")
+        return f"{head}\n{verdict}\n--- body diff ---\n{rendered}"
 
 
 class WebSearchTool(BaseTool):

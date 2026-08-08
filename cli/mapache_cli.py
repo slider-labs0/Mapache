@@ -101,7 +101,7 @@ Commands:
   /scope                 Show Rules-of-Engagement scope (in-scope targets)
   /log                   Show engagement-log summary
   /log export            Write a Markdown engagement-log timeline
-  /report [md|html|both] Generate a structured pentest report (findings/severity)
+  /report [md|html|both|sarif|bounty|all]  Structured report (findings/severity; SARIF + bounty drafts)
   /cve [CVE-id]          Ground discovered services to CVEs (CVSS + exploits)
   /synthesize            Save the proven attack chain as a reusable signed skill
   /history               Show conversation history
@@ -207,7 +207,11 @@ enter this workflow; run the one tool and stop.
                 FTP (21)=anonymous login; SSH (22)=note for creds; Telnet (23)=connect
 3. EXPLOIT    → msf_search / searchsploit on the exact service+version → msf_run or kali_run
 4. POST       → find flags, escalate privileges, dump credentials
-5. REPORT     → memory_target_store with every finding
+5. REPORT     → the DELIVERABLE. The moment you CONFIRM a weakness (not just a flag), call
+                report_finding with title, severity, asset, and EVIDENCE (the actual
+                request+response / command output that proves it) — impact + remediation
+                auto-fill. A proven finding IS success on a real target; the flag is optional.
+                Also memory_target_store the facts.
 Do not skip ahead: do not attempt exploitation before a scan has returned open ports.
 
 ═══════════════════════════════════════════
@@ -235,6 +239,7 @@ class MapacheCLI:
         self.gen_manager: GeneratedToolManager | None = None
         self.scope = None  # EngagementScope, loaded in setup()
         self.engagement_log: EngagementLog | None = None  # feature K, started in run()
+        self.cast = None  # AsciicastRecorder when --cast is set
         self._ptk = None          # prompt_toolkit session (enhanced input), set in run()
         self._input_q = None      # fallback stdin queue, set in run()
         self._running_tool = None  # tool currently executing, for the live status line
@@ -537,6 +542,7 @@ class MapacheCLI:
         # Periodic self-critique (optional): inject a reflect-and-refocus checkpoint
         # every N steps. Inert unless configured (config.reflection or --reflect).
         self._wire_reflection()
+        self._wire_route_enum()
         # Live status: a spinner shows "running <tool>…" while a tool executes,
         # then a "ran <tool> · <N>s" line settles above it. Replaces the raw
         # agent_controller INFO logs (silenced on the console; still in the file).
@@ -581,10 +587,37 @@ class MapacheCLI:
 
             # Browser — HTTP tools route through the egress proxy/Tor when active,
             # and share one persistent cookie jar so a login carries across calls.
-            from browser.scraping_tools import WebSession
+            from browser.scraping_tools import WebSession, HttpRepeaterTool
+            from browser.http_history import HTTPHistory
             web_session = WebSession()
+            http_history = HTTPHistory()
             self.registry.register(WebFetchTool(egress=self.egress, session=web_session))
-            self.registry.register(HttpRequestTool(egress=self.egress, session=web_session))
+            self.registry.register(HttpRequestTool(egress=self.egress, session=web_session,
+                                                   history=http_history))
+            # Burp-lite: replay/tamper/diff any recorded request (IDOR/authz primitive).
+            self.registry.register(HttpRepeaterTool(egress=self.egress, session=web_session,
+                                                    history=http_history))
+            # Evidence-first deliverable: the agent records confirmed findings (title,
+            # severity, evidence, impact, remediation) into a shared report — success
+            # is a finding with proof, not a flag.
+            from core.findings import FindingsStore
+            from tools.reporting_tools import ReportFindingTool
+            self.findings_store = FindingsStore(
+                path=os.path.join(self.working_dir, "findings.json"))
+            self.registry.register(ReportFindingTool(store=self.findings_store))
+            # Offensive knowledge + specialist web/cloud weapons (payloads corpus, JWT,
+            # GraphQL, IMDS, secret-scan, tech-fingerprint).
+            from security_tools.web_weapons import SearchPayloadsTool, JwtTool, GraphqlTool
+            from security_tools.recon_weapons import SecretScanTool, TechDetectTool
+            from security_tools.cloud_metadata import CloudMetadataTool
+            from security_tools.llm_attacks import LlmInjectTool
+            from security_tools.ad_tools import AdAttackTool
+            from security_tools.reversing_tools import BinaryAnalyzeTool
+            for _t in (SearchPayloadsTool(), JwtTool(), GraphqlTool(session=web_session),
+                       SecretScanTool(), TechDetectTool(session=web_session),
+                       CloudMetadataTool(), LlmInjectTool(session=web_session),
+                       AdAttackTool(), BinaryAnalyzeTool()):
+                self.registry.register(_t)
             # Real headless browser (capability #1): renders JavaScript/SPAs that the
             # raw HTTP tools can't. Safe to register even without Playwright — it
             # reports install steps at call time. Kept for teardown at shutdown.
@@ -897,6 +930,23 @@ class MapacheCLI:
         except Exception:
             pass
 
+    async def _maybe_autoreport(self) -> None:
+        """At session end, auto-generate the engagement report if anything worth
+        reporting was found (agent findings OR blackboard vulns/creds) — so a real
+        user always leaves with a deliverable, not just a chat log."""
+        if self.controller is None:
+            return
+        store = getattr(self, "findings_store", None)
+        st = self.controller.chain.attack_state
+        has_content = (store is not None and len(store) > 0) or \
+            st.vulnerabilities or st.credentials or st.flags
+        if not has_content:
+            return
+        try:
+            await self._generate_report("both")
+        except Exception:
+            pass
+
     def _wire_reflection(self) -> None:
         """Register a ReflectionMiddleware when periodic self-critique is enabled.
 
@@ -916,6 +966,18 @@ class MapacheCLI:
         from core.agent_middlewares import ReflectionMiddleware
         self.controller.add_middleware(ReflectionMiddleware(every=every))
         print(f"  🧭 Reflection: self-critique checkpoint every {every} steps", flush=True)
+
+    def _wire_route_enum(self) -> None:
+        """Register RouteEnumMiddleware (--route-enum): on a web target with few known
+        endpoints, probe common routes once and inject the real ones so the single
+        agent stops guessing. The swarm path enumerates in the Supervisor instead."""
+        if self.controller is None:
+            return
+        if not getattr(self.args, "route_enum", False):
+            return
+        from core.agent_middlewares import RouteEnumMiddleware
+        self.controller.add_middleware(RouteEnumMiddleware())
+        print("  🗺 Route enumeration: probe common paths on a sparse web target", flush=True)
 
     async def _vaccine_sink(self, ctx, vaccine) -> None:
         """Persist a generated vaccine to <workspace>/vaccines/ and announce it."""
@@ -1093,6 +1155,13 @@ class MapacheCLI:
                 "scope": self.scope.name if (self.scope and self.scope.active) else None,
                 "roe_enforced": bool(self.scope and self.scope.active),
             })
+            # Evidence capture (--cast): record the engagement as a replayable asciicast.
+            if getattr(self.args, "cast", False):
+                from core.asciicast import AsciicastRecorder
+                self.cast = AsciicastRecorder(
+                    os.path.join(self.working_dir, "engagements", f"engagement-{stamp}.cast"),
+                    title=f"Mapache — {self.session_id}")
+                self.cast.attach(self.controller.bus)
 
         # Full-screen TUI (--tui): a bordered input box pinned to the bottom with a
         # scrolling output region above. Decided BEFORE the banner so the banner and
@@ -1252,6 +1321,9 @@ class MapacheCLI:
             # Restore stdout first so shutdown messages print to the real terminal
             # (the TUI's full-screen app has torn down by now).
             sys.stdout = getattr(self, "_orig_stdout", sys.stdout)
+            if self.cast is not None:
+                self.cast.close()
+                print(f"  Session recording: {self.cast.path}")
             if self.engagement_log:
                 self.engagement_log.close(summary={
                     "target": self.controller.chain.attack_state.target
@@ -1271,6 +1343,8 @@ class MapacheCLI:
                     pass
             # Cross-engagement learning: record what worked this engagement.
             self._record_learning()
+            # Evidence-first deliverable: auto-generate the report if anything was found.
+            await self._maybe_autoreport()
             await self.memory.end_session()
 
     async def _process_line(self, raw: str) -> bool:
@@ -1828,7 +1902,9 @@ class MapacheCLI:
             "RoE enforced": bool(self.scope and self.scope.active),
             "Session": self.session_id,
         }
-        report = build_report(self.controller.chain.attack_state, records, meta)
+        extra = self.findings_store.all() if getattr(self, "findings_store", None) else None
+        report = build_report(self.controller.chain.attack_state, records, meta,
+                              extra_findings=extra)
 
         stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
         out_dir = os.path.join(self.working_dir, "engagements")
@@ -1839,10 +1915,24 @@ class MapacheCLI:
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write(report.to_markdown())
             written.append(path)
-        if fmt in ("html", "both"):
+        if fmt in ("html", "both", "all"):
             path = os.path.join(out_dir, f"report-{stamp}.html")
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write(report.to_html())
+            written.append(path)
+        # SARIF (CI / code-scanning) + bug-bounty drafts, from the evidence-rich store.
+        store_findings = self.findings_store.all() if getattr(self, "findings_store", None) else []
+        if fmt in ("sarif", "all") and store_findings:
+            from reporting.exporters import to_sarif
+            path = os.path.join(out_dir, f"report-{stamp}.sarif")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(to_sarif(store_findings))
+            written.append(path)
+        if fmt in ("bounty", "all") and store_findings:
+            from reporting.exporters import to_bounty_bundle
+            path = os.path.join(out_dir, f"report-{stamp}-bounty.md")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(to_bounty_bundle(store_findings))
             written.append(path)
 
         counts = report.severity_counts()
@@ -2279,6 +2369,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vaccine", action="store_true",
                         help="Defensive follow-up: generate a detection+remediation "
                              "'vaccine' for each confirmed vulnerability (→ vaccines/)")
+    parser.add_argument("--route-enum", action="store_true",
+                        help="On a web target with few known endpoints, probe common "
+                             "routes once and inject the real ones (so the agent uses "
+                             "actual paths instead of guessing /login, /dashboard)")
     parser.add_argument("--reflect", action="store_true",
                         help="Inject a reflect-and-refocus self-critique every N steps "
                              "(confirmed facts → hypothesis → highest-value next action)")
@@ -2330,6 +2424,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-engagement-log", action="store_true",
                         help="Disable the append-only engagement audit log "
                              "(written to engagements/ by default).")
+    parser.add_argument("--cast", action="store_true",
+                        help="Record the engagement as a replayable asciicast "
+                             "(engagements/*.cast) — court-ready session evidence.")
     parser.add_argument("--confirm", action="store_true")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--log-dir", default=os.environ.get("MAPACHE_LOG_DIR"))

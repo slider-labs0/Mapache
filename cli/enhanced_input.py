@@ -55,7 +55,8 @@ SLASH_COMMANDS: list[tuple[str, str]] = [
 SUBCOMMANDS: dict[str, list[tuple[str, str]]] = {
     "/pipeline": [("single", ""), ("pipeline", ""), ("auto", ""), ("hybrid", "")],
     "/memory": [("notes", ""), ("search", ""), ("targets", "")],
-    "/report": [("md", ""), ("html", ""), ("both", "")],
+    "/report": [("md", ""), ("html", ""), ("both", ""), ("sarif", ""),
+                ("bounty", ""), ("all", "")],
     "/voice": [("on", ""), ("off", "")],
     "/confirm": [("on", ""), ("off", "")],
     "/debug": [("on", ""), ("off", "")],

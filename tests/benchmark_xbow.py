@@ -333,7 +333,7 @@ OBJECTIVE = (
 )
 
 
-def build_provider(model: str, base_url: str):
+def build_provider(model: str, base_url: str, tier_model: str = ""):
     config = load_config()
     pool = ModelPool(base_url=base_url, config=config)
     prov_cfg = config.provider_for_model(model)
@@ -342,6 +342,14 @@ def build_provider(model: str, base_url: str):
             raise RuntimeError(f"'{model}' is cloud ({prov_cfg.name}); set allow_cloud=true.")
         if not prov_cfg.is_usable:
             raise RuntimeError(f"cloud provider '{prov_cfg.name}' has no API key.")
+        if tier_model:
+            # Tiered: low-tier operators (recon/OSINT/scanner) run on the cheaper model,
+            # the hacking-critical ones on `model`. Cuts cost across a swarm's many
+            # sub-agents (the lever the credit-exhausted run needed).
+            from models.tiered_model import TieredModel
+            provider = TieredModel(pool, {"high": model, "low": tier_model},
+                                   default_model=model, tier="high")
+            return provider, f"{prov_cfg.name} (cloud, tiered: low={tier_model})"
         return pool.get(model), f"{prov_cfg.name} (cloud)"
     return OllamaProvider(model=model, base_url=base_url), "ollama (local)"
 
@@ -363,14 +371,31 @@ async def run_agent(port: int, meta: dict, flag: str, provider, *, max_iters: in
         Permission.SHELL, Permission.NETWORK, Permission.FILESYSTEM,
         Permission.SYSTEM_INFO, Permission.DANGEROUS, Permission.UNRESTRICTED})
     # One shared web session so a login via http_request authenticates every
-    # subsequent http_request/web_fetch call (persistent-cookie fix).
-    from browser.scraping_tools import WebSession
+    # subsequent http_request/web_fetch call (persistent-cookie fix), plus a shared
+    # Burp-lite history so http_repeater can replay/tamper/diff any recorded request.
+    from browser.scraping_tools import WebSession, HttpRepeaterTool
+    from browser.http_history import HTTPHistory
     from browser.browser_tool import BrowserTool
     from security_tools.kali.heavy_tools import SqlmapTool, FuzzTool
+    from tools.reporting_tools import ReportFindingTool
+    from core.findings import FindingsStore
+    from security_tools.web_weapons import SearchPayloadsTool, JwtTool, GraphqlTool
+    from security_tools.recon_weapons import SecretScanTool, TechDetectTool
+    from security_tools.cloud_metadata import CloudMetadataTool
+    from security_tools.llm_attacks import LlmInjectTool
+    from security_tools.ad_tools import AdAttackTool
+    from security_tools.reversing_tools import BinaryAnalyzeTool
     web_session = WebSession()
+    http_history = HTTPHistory()
+    findings = FindingsStore(path=log_path.with_name(f"{session_id}-findings.json"))
     for tool in (ShellTool(), WebFetchTool(session=web_session),
-                 HttpRequestTool(session=web_session), BrowserTool(),
-                 SqlmapTool(), FuzzTool(), FileReadTool()):
+                 HttpRequestTool(session=web_session, history=http_history),
+                 HttpRepeaterTool(session=web_session, history=http_history),
+                 ReportFindingTool(store=findings),
+                 SearchPayloadsTool(), JwtTool(), GraphqlTool(session=web_session),
+                 SecretScanTool(), TechDetectTool(session=web_session), CloudMetadataTool(),
+                 LlmInjectTool(session=web_session), AdAttackTool(), BinaryAnalyzeTool(),
+                 BrowserTool(), SqlmapTool(), FuzzTool(), FileReadTool()):
         registry.register(tool)
 
     controller = AgentController(
@@ -556,7 +581,8 @@ async def main_async(args) -> int:
         provider, prov_label = None, "preflight (no model)"
     else:
         try:
-            provider, prov_label = build_provider(args.model, args.base_url)
+            provider, prov_label = build_provider(args.model, args.base_url,
+                                                  tier_model=getattr(args, "tier_model", ""))
         except RuntimeError as exc:
             print(f"✗ {exc}")
             return 2
@@ -570,16 +596,25 @@ async def main_async(args) -> int:
     learning = LearningStore(log_dir / "learning.json")
     summary_name = "xbow_preflight.json" if args.preflight else "xbow_summary.json"
     for bid in ids:
-        results.append(await run_one(
+        rec = await run_one(
             repo, bid, provider, prov_label, max_iters=args.max_iters,
             build_timeout=args.build_timeout, up_timeout=args.up_timeout,
             run_timeout=args.run_timeout, log_dir=log_dir, preflight=args.preflight,
             strategy=args.strategy, supervisor_rounds=args.supervisor_rounds,
             fanout=args.fanout, reflect=args.reflect, reflect_every=args.reflect_every,
-            attempts=args.attempts, learning=learning))
+            attempts=args.attempts, learning=learning)
+        results.append(rec)
         (log_dir / summary_name).write_text(
             json.dumps({"model": args.model, "preflight": args.preflight,
                         "results": results}, indent=2), encoding="utf-8")
+        # Fail-fast: stop at the first benchmark that isn't solved (agent miss OR infra
+        # error) so the operator can diagnose it before spending on the rest.
+        if getattr(args, "fail_fast", False) and not args.preflight and not rec.get("solved"):
+            print(f"\n✗ FAIL-FAST: {bid} not solved "
+                  f"(status={rec.get('status')}, iters={rec.get('iterations')}, "
+                  f"{rec.get('seconds')}s) — stopping. detail: {rec.get('detail')}")
+            print_report(results, args.model, time.time() - t0)
+            return 1
     print_report(results, args.model, time.time() - t0)
     return 0
 
@@ -591,6 +626,9 @@ def main() -> None:
     ap.add_argument("--only", default="", help="comma-separated benchmark ids to run")
     ap.add_argument("--limit", type=int, default=0, help="run the first N (0 = all)")
     ap.add_argument("--model", default="grok-4")
+    ap.add_argument("--tier-model", default="",
+                    help="cheaper model id for LOW-tier operators (recon/OSINT/scanner); "
+                         "the strong --model runs the hacking-critical ones. Cuts swarm cost.")
     ap.add_argument("--max-iters", type=int, default=30)
     ap.add_argument("--build-timeout", type=int, default=1200)
     ap.add_argument("--up-timeout", type=int, default=300)
@@ -615,6 +653,8 @@ def main() -> None:
     ap.add_argument("--attempts", type=int, default=1,
                     help="self-consistency: retry with a fresh approach up to N times "
                          "(single strategy; stops on first solve)")
+    ap.add_argument("--fail-fast", action="store_true",
+                    help="stop at the first benchmark that isn't solved and report why")
     args = ap.parse_args()
     _quiet_and_utf8()
     sys.exit(asyncio.run(main_async(args)))

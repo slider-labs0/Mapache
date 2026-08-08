@@ -10,6 +10,7 @@ Fixes the three root causes of broken conversation continuity:
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -50,6 +51,10 @@ CORE_TOOLS = {
     "skill_search", "skill_list", "skill_install", "install_github_tool",
     # Shared findings store — query/record findings across objectives + sub-agents.
     "kg_query", "kg_add",
+    # Evidence-first engagement report — record a confirmed finding (the deliverable).
+    "report_finding",
+    # Offensive knowledge: look up real payloads instead of inventing; scan for secrets.
+    "search_payloads", "secret_scan",
     # Operation plan (OPPLAN) — objectives + status transitions for the orchestrator.
     "opplan_add", "opplan_update", "opplan_show",
     # Vulnerability-research pipeline seeder (scanner→detector→verifier→patcher→exploiter).
@@ -57,18 +62,22 @@ CORE_TOOLS = {
 }
 
 PHASE_TOOLS = {
-    "recon": {"nmap_scan", "web_fetch", "http_request", "web_search"},
+    "recon": {"nmap_scan", "web_fetch", "http_request", "http_repeater", "web_search",
+              "tech_detect"},
     "enumeration": {
-        "nmap_scan", "web_fetch", "http_request", "web_search",
+        "nmap_scan", "web_fetch", "http_request", "http_repeater", "web_search",
         "kali_list", "kali_run", "searchsploit", "tor_fetch",
+        "tech_detect", "graphql", "jwt_tool",
     },
     "exploitation": {
         "msf_search", "msf_run", "msf_sessions", "searchsploit",
-        "kali_run", "web_fetch", "http_request",
+        "kali_run", "web_fetch", "http_request", "http_repeater",
         "burp_scan", "burp_proxy", "john_crack", "john_identify",
+        "jwt_tool", "graphql", "cloud_metadata", "llm_inject",
+        "ad_attack", "binary_analyze",
     },
     "post": {
-        "msf_sessions", "kali_run", "john_crack", "john_identify",
+        "msf_sessions", "kali_run", "john_crack", "john_identify", "ad_attack",
     },
     "reporting": {
         "memory_note_create", "memory_note_search", "memory_note_list",
@@ -78,10 +87,10 @@ PHASE_TOOLS = {
 
 # Open-port → additional tools that become useful once a service is seen.
 PORT_TOOLS = {
-    "80":   {"kali_run", "web_fetch", "http_request", "web_search", "burp_scan", "burp_proxy"},
-    "443":  {"kali_run", "web_fetch", "http_request", "web_search", "burp_scan", "burp_proxy"},
-    "8080": {"kali_run", "web_fetch", "http_request", "web_search", "burp_scan", "burp_proxy"},
-    "8000": {"kali_run", "web_fetch", "http_request", "web_search", "burp_scan", "burp_proxy"},
+    "80":   {"kali_run", "web_fetch", "http_request", "http_repeater", "web_search", "burp_scan", "burp_proxy", "tech_detect", "jwt_tool", "graphql"},
+    "443":  {"kali_run", "web_fetch", "http_request", "http_repeater", "web_search", "burp_scan", "burp_proxy", "tech_detect", "jwt_tool", "graphql"},
+    "8080": {"kali_run", "web_fetch", "http_request", "http_repeater", "web_search", "burp_scan", "burp_proxy", "tech_detect", "jwt_tool", "graphql"},
+    "8000": {"kali_run", "web_fetch", "http_request", "http_repeater", "web_search", "burp_scan", "burp_proxy", "tech_detect", "jwt_tool", "graphql"},
     "445":  {"msf_search", "msf_run", "kali_run"},
     "139":  {"msf_search", "msf_run", "kali_run"},
     "3389": {"msf_search", "msf_run", "kali_run"},
@@ -131,6 +140,65 @@ class AttackState:
     flags: list[str] = field(default_factory=list)
     current_phase: str = "recon"
     notes: list[str] = field(default_factory=list)
+    # Distinct web-surface keys discovered (normalized `path?param-names`). This is a
+    # PROGRESS signal for the multi-agent supervisor: surface/parameter *discovery*
+    # advances the routing signature (so an operator mid-enumeration isn't benched as
+    # "stalled"), while value brute-forcing over one param collapses to a single key
+    # and correctly reads as no-progress. Capped so the blackboard stays bounded.
+    endpoints: list[str] = field(default_factory=list)
+    # HTML forms discovered in responses, as human-readable descriptors
+    # ("POST /login [fields: username, password]"). Surfaced in the state block so the
+    # agent submits the REAL form action/fields instead of inventing an endpoint like
+    # /login — the concrete gap that sank the IDOR trading-platform benchmark.
+    forms: list[str] = field(default_factory=list)
+    # Path templates that returned an IDENTICAL response body across several DISTINCT
+    # requests (e.g. ?id=1,2,3 all yielding the same page) — a dead vector the agent
+    # should stop fuzzing. A WORKING IDOR yields DIFFERENT bodies per id, so it is never
+    # flagged here. Surfaced in the state block as a hard "switch approach" steer.
+    dead_vectors: list[str] = field(default_factory=list)
+
+    def record_dead_vector(self, key: str) -> bool:
+        if key and key not in self.dead_vectors and len(self.dead_vectors) < 32:
+            self.dead_vectors.append(key)
+            return True
+        return False
+
+    # Credentials DISCLOSED in page content (HTML comments, JS, "password is …"), e.g.
+    # a `test:test` left in a comment. Surfaced as a directive to try them on the login
+    # form FIRST — the agent had these in context but submitted `admin`/no-password.
+    disclosed_creds: list[str] = field(default_factory=list)
+
+    def record_disclosed_creds(self, items) -> int:
+        added = 0
+        for c in items:
+            if c and c not in self.disclosed_creds and len(self.disclosed_creds) < 12:
+                self.disclosed_creds.append(c)
+                added += 1
+        return added
+
+    def record_endpoints(self, keys) -> int:
+        """Add distinct normalized endpoint keys; return how many were NEW."""
+        added = 0
+        for k in keys:
+            if not k or k in self.endpoints:
+                continue
+            if len(self.endpoints) >= 512:
+                break
+            self.endpoints.append(k)
+            added += 1
+        return added
+
+    def record_forms(self, descriptors) -> int:
+        """Add distinct form descriptors; return how many were NEW."""
+        added = 0
+        for d in descriptors:
+            if not d or d in self.forms:
+                continue
+            if len(self.forms) >= 24:
+                break
+            self.forms.append(d)
+            added += 1
+        return added
 
     def update_from_nmap(self, nmap_output: str) -> None:
         port_pattern = re.compile(r"(\d+)/(tcp|udp)\s+open\s+(\S+)(?:\s+(.*))?")
@@ -231,7 +299,8 @@ class AttackState:
         return "Continue the attack"
 
     def to_prompt_block(self) -> str:
-        if not self.target and not self.open_ports:
+        if not (self.target or self.open_ports or self.endpoints or self.forms
+                or self.dead_vectors or self.disclosed_creds):
             return ""
 
         lines = ["=== CURRENT ATTACK STATE ==="]
@@ -256,6 +325,27 @@ class AttackState:
 
         if self.flags:
             lines.append(f"Flags captured: {', '.join(self.flags)}")
+
+        if self.disclosed_creds:
+            lines.append("DISCLOSED credentials found in page content (a `user:pass` "
+                         "token or labeled value — TRY THESE on the login form FIRST, "
+                         "submitting ALL of the form's fields): "
+                         + ", ".join(self.disclosed_creds[:8]))
+
+        if self.forms:
+            lines.append("Discovered forms (submit the REAL method/action/fields — do "
+                         "NOT invent an endpoint like /login; an action of '(self)' "
+                         "means POST back to the URL you fetched):")
+            for f in self.forms[:6]:
+                lines.append(f"  - {f}")
+
+        if self.endpoints:
+            lines.append("Discovered endpoints (use these real paths — do not guess "
+                         f"/dashboard etc.): {', '.join(self.endpoints[:15])}")
+
+        if self.dead_vectors:
+            lines.append("DEAD vectors (identical response for every value tried — STOP "
+                         f"fuzzing these, switch approach): {', '.join(self.dead_vectors[:8])}")
 
         lines.append(f"Next step: {self.suggest_next_step()}")
         lines.append("=== END ATTACK STATE ===")
@@ -398,7 +488,7 @@ class ConversationChain:
                ["attack", "exploit", "hack", "pwn", "root", "flag", "compromise"]):
             self._current_goal = user_input
 
-    def on_tool_result(self, tool_name: str, output: str) -> None:
+    def on_tool_result(self, tool_name: str, output: str, args=None) -> None:
         if not self._current_turn:
             return
 
@@ -425,12 +515,21 @@ class ConversationChain:
             self.attack_state.update_from_exploit(output)
             # Exec output may carry a raw 32-hex flag file (user.txt/root.txt).
             self._scan_for_flags(output, hex32=True)
+            # shell is the agent's main curl runner — mine page bodies for surface.
+            self.attack_state.record_endpoints(self._endpoint_keys(output))
+            self.attack_state.record_forms(self._extract_forms(output))
+            self.attack_state.record_disclosed_creds(self._extract_creds(output))
+            self._detect_dead_vector(tool_name, args, output)
 
         elif tool_name in ("web_fetch", "http_request", "curl"):
             # Web-recon flags surface in page bodies too (CTF chains end at a flag
             # endpoint). Match only explicit flag formats — a bare 32-hex string in
             # HTML is usually an asset/session hash, not a flag.
             self._scan_for_flags(output, hex32=False)
+            self.attack_state.record_endpoints(self._endpoint_keys(output))
+            self.attack_state.record_forms(self._extract_forms(output))
+            self.attack_state.record_disclosed_creds(self._extract_creds(output))
+            self._detect_dead_vector(tool_name, args, output)
 
         elif tool_name == "msf_search":
             cves = re.findall(r"CVE-\d{4}-\d+", output)
@@ -441,18 +540,193 @@ class ConversationChain:
     # match in arbitrary web content, the bare 32-hex form is not.
     _FLAG_BRACE_RE = re.compile(r"(?:HTB|FLAG|CTF|flag)\{[^}]+\}", re.IGNORECASE)
     _FLAG_HEX32_RE = re.compile(r"\b[0-9a-f]{32}\b", re.IGNORECASE)
+    # A bare 32-hex on an HTTP-header/key-value line is an ETag, session hash, or
+    # request id — NOT a flag. `shell` is now the agent's main curl/aws runner, so
+    # header lines routinely reach the hex32 path (a curl `-D -` dump of an S3
+    # object surfaced its ETag as a "flag" and falsely ended a live engagement).
+    # A real user.txt/root.txt prints the hash as a plain value, not a `Key: …` line.
+    _HTTP_HEADERISH_RE = re.compile(
+        r"(^[<>]?\s*[A-Za-z][A-Za-z0-9-]*:\s)|etag|x-amz-|www-authenticate|http/\d",
+        re.IGNORECASE)
 
     def _scan_for_flags(self, output: str, *, hex32: bool) -> None:
         if not output:
             return
         matches = list(self._FLAG_BRACE_RE.findall(output))
         if hex32:
-            matches += self._FLAG_HEX32_RE.findall(output)
+            for line in output.splitlines():
+                for hx in self._FLAG_HEX32_RE.findall(line):
+                    if not self._HTTP_HEADERISH_RE.search(line):
+                        matches.append(hx)
         for flag in matches:
             if flag not in self.attack_state.flags:
                 self.attack_state.add_flag(flag)
                 if self._current_turn:
                     self._current_turn.key_findings.append(f"FLAG FOUND: {flag}")
+
+    # Web-surface extraction for the supervisor's progress signal. Full URLs and
+    # href/src/action paths in a tool's output are the endpoints the agent has
+    # surfaced; normalizing query VALUES away (keeping param NAMES) means param
+    # discovery counts as progress while `id=1,2,3…` value iteration collapses to one.
+    _URL_RE = re.compile(r"https?://[^\s\"'<>)\]]+", re.IGNORECASE)
+    _PATH_ATTR_RE = re.compile(r"""(?:href|src|action)\s*=\s*["']?(/[^\s"'<>)\]]*)""",
+                               re.IGNORECASE)
+
+    @staticmethod
+    def _norm_endpoint(pathq: str) -> str:
+        """Normalize a path+query to a template key: keep param NAMES, drop VALUES, so
+        surface/param discovery counts but value iteration (?id=1,2,3) collapses to one."""
+        pathq = (pathq or "").strip()
+        if "?" not in pathq:
+            return pathq or "/"
+        path, q = pathq.split("?", 1)
+        names = sorted({kv.split("=", 1)[0] for kv in q.split("&") if kv})
+        return (path or "/") + ("?" + ",".join(names) if names else "")
+
+    @classmethod
+    def _endpoint_keys(cls, output: str) -> list[str]:
+        if not output:
+            return []
+        keys: list[str] = []
+        for u in cls._URL_RE.findall(output)[:200]:
+            keys.append(cls._norm_endpoint(re.sub(r"^https?://[^/]+", "", u) or "/"))
+        for p in cls._PATH_ATTR_RE.findall(output)[:200]:
+            keys.append(cls._norm_endpoint(p))
+        return keys
+
+    @classmethod
+    def _request_url(cls, tool_name: str, args, output: str) -> str:
+        """Best-effort recovery of the URL a web tool actually requested — from its
+        args (http_request/web_fetch), the curl command (shell), or the request line
+        the tool echoes into its output."""
+        if isinstance(args, dict):
+            if args.get("url"):
+                return str(args["url"])
+            if args.get("cmd"):
+                m = cls._URL_RE.search(str(args["cmd"]))
+                if m:
+                    return m.group(0)
+        # Fall back to the first URL in the output's opening line (tools echo the
+        # request line, e.g. "GET http://host/path Status: 200 …").
+        head = (output or "")[:300]
+        m = cls._URL_RE.search(head)
+        return m.group(0) if m else ""
+
+    @staticmethod
+    def _response_body(output: str) -> str:
+        """Isolate the response BODY from a tool's output (dropping the request/status/
+        header lines) so a per-endpoint body hash ignores the varying request line."""
+        if not output:
+            return ""
+        marker = output.find("--- Body")
+        if marker != -1:
+            nl = output.find("\n", marker)
+            return output[nl + 1:] if nl != -1 else ""
+        for sep in ("\r\n\r\n", "\n\n"):
+            i = output.find(sep)
+            if i != -1:
+                return output[i + len(sep):]
+        return output
+
+    # Form parsing: the real method/action/field-names of every <form> in a response,
+    # so the agent authenticates against what the page actually exposes rather than a
+    # guessed /login. A `<form method="POST">` with no action submits to the page itself.
+    _FORM_OPEN_RE = re.compile(r"<form\b([^>]*)>", re.IGNORECASE)
+    _FORM_METHOD_RE = re.compile(r"""method\s*=\s*["']?(\w+)""", re.IGNORECASE)
+    _FORM_ACTION_RE = re.compile(r"""action\s*=\s*["']?([^"'\s>]+)""", re.IGNORECASE)
+    _INPUT_NAME_RE = re.compile(
+        r"""<(?:input|select|textarea)\b[^>]*\bname\s*=\s*["']?([^"'\s>]+)""",
+        re.IGNORECASE)
+
+    @classmethod
+    def _extract_forms(cls, output: str) -> list[str]:
+        if not output or "<form" not in output.lower():
+            return []
+        low = output.lower()
+        out: list[str] = []
+        for m in cls._FORM_OPEN_RE.finditer(output):
+            attrs = m.group(1)
+            meth = cls._FORM_METHOD_RE.search(attrs)
+            method = meth.group(1).upper() if meth else "GET"
+            act = cls._FORM_ACTION_RE.search(attrs)
+            action = act.group(1) if act and act.group(1) else "(self — submits to this page's own URL)"
+            # Field names live between this <form> tag and the next </form> (bounded so
+            # a truncated response body still yields the fields it did include).
+            end = low.find("</form>", m.end())
+            body = output[m.end():(end if end != -1 else m.end() + 2000)]
+            fields: list[str] = []
+            for fm in cls._INPUT_NAME_RE.finditer(body):
+                if fm.group(1) not in fields:
+                    fields.append(fm.group(1))
+            desc = f"{method} {action}"
+            desc += f" [fields: {', '.join(fields[:12])}]" if fields else " [no named fields captured]"
+            out.append(desc)
+        return out
+
+    # Disclosed-credential extraction. CTF/app pages leak creds in HTML comments, JS,
+    # or "password is …" text. Precision matters: a `user:pass` token is only credible
+    # with NO whitespace around the colon (so "TODO: Delete" — space after colon — is
+    # skipped while "(test:test)" is caught), and a small denylist rejects obvious
+    # non-cred left tokens (http, todo, …).
+    _COMMENT_RE = re.compile(r"<!--(.*?)-->", re.DOTALL)
+    _CRED_COLON_RE = re.compile(
+        r"(?<![\w:/])([A-Za-z][\w.\-]{1,31}):([^\s:\"'<>(),;]{2,32})")
+    _CRED_LABELED_RE = re.compile(
+        r"""(?:pass(?:word|wd)?|pwd|user(?:name)?|login)\s*(?:is|=|:)\s*["'`]?"""
+        r"""([^\s"'`<>,;)]{2,40})""", re.IGNORECASE)
+    _CRED_DENY = {"http", "https", "ftp", "ssh", "url", "src", "href", "todo", "note",
+                  "fixme", "hint", "warning", "error", "version", "charset", "width",
+                  "height", "rel", "type", "id", "class", "style", "name"}
+
+    @classmethod
+    def _extract_creds(cls, output: str) -> list[str]:
+        if not output:
+            return []
+        found: list[str] = []
+        # `user:pass` tokens — trust them anywhere, but they're most common in comments.
+        scopes = cls._COMMENT_RE.findall(output) or []
+        scopes.append(output)  # also scan the whole body (JS strings, config dumps)
+        for scope in scopes:
+            for u, p in cls._CRED_COLON_RE.findall(scope):
+                p = p.rstrip(".")
+                if u.lower() in cls._CRED_DENY or u.isdigit() or len(p) < 2:
+                    continue
+                token = f"{u}:{p}"
+                if token not in found:
+                    found.append(token)
+        # Labeled forms: "password is hunter2", user='admin'.
+        for v in cls._CRED_LABELED_RE.findall(output):
+            v = v.strip().rstrip(".,;")
+            if v and v.lower() not in cls._CRED_DENY and f"(labeled) {v}" not in found:
+                found.append(f"(labeled) {v}")
+        return found[:12]
+
+    # No-op / dead-vector detection: N DISTINCT requests to the same path template that
+    # all return the IDENTICAL body = the vector is dead (the param is ignored). A real
+    # IDOR returns DIFFERENT bodies per id, so it's never flagged. `_vector_probe` maps a
+    # path template → {distinct full URLs seen, distinct body hashes seen}.
+    DEAD_VECTOR_MIN = 3
+
+    def _detect_dead_vector(self, tool_name: str, args, output: str) -> None:
+        url = self._request_url(tool_name, args, output)
+        if not url:
+            return
+        pathq = re.sub(r"^https?://[^/]+", "", url) or "/"
+        if "?" not in pathq:
+            return  # only value-fuzzing of a parameter can be a "same response" no-op
+        key = self._norm_endpoint(pathq)
+        probe = getattr(self, "_vector_probe", None)
+        if probe is None:
+            probe = self._vector_probe = {}
+        rec = probe.setdefault(key, {"urls": set(), "bodies": set()})
+        rec["urls"].add(pathq)
+        body = self._response_body(output)
+        rec["bodies"].add(hashlib.md5(body.strip().encode("utf-8", "replace")).hexdigest())
+        if len(rec["urls"]) >= self.DEAD_VECTOR_MIN and len(rec["bodies"]) == 1:
+            if self.attack_state.record_dead_vector(key) and self._current_turn:
+                self._current_turn.key_findings.append(
+                    f"DEAD VECTOR: {key} — identical response for "
+                    f"{len(rec['urls'])} distinct values; switch approach")
 
     def on_turn_end(self, response: str) -> None:
         if not self._current_turn:

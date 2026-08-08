@@ -38,6 +38,7 @@ _TOPIC_KIND = {
     "task.error": "tool_call",
     "agent.finding": "finding",
     "agent.scope_refused": "scope_refused",
+    "agent.injection_detected": "injection_detected",
     "agent.delegate.start": "delegate_start",
     "agent.delegate.end": "delegate_end",
     "agent.verify.retry": "verify_retry",
@@ -104,6 +105,9 @@ class EngagementLog:
         if kind == "scope_refused":
             return {"session": session, "tool": data.get("tool_name"),
                     "reason": data.get("reason"), "args": data.get("args")}
+        if kind == "injection_detected":
+            return {"session": session, "tool": data.get("tool"),
+                    "patterns": data.get("patterns")}
         if kind in ("delegate_start", "delegate_end"):
             return {"session": session, "task": data.get("task"),
                     "operator": data.get("operator"), "target": data.get("target"),

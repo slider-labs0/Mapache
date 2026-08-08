@@ -57,6 +57,7 @@ class RoutingState:
     vulnerabilities: list[str] = field(default_factory=list)
     credentials: list[str] = field(default_factory=list)
     flags: list[str] = field(default_factory=list)
+    endpoints: list[str] = field(default_factory=list)
     kg_counts: dict[str, int] = field(default_factory=dict)
 
     @classmethod
@@ -80,6 +81,7 @@ class RoutingState:
             vulnerabilities=list(g("vulnerabilities", []) or []),
             credentials=list(g("credentials", []) or []),
             flags=list(g("flags", []) or []),
+            endpoints=list(g("endpoints", []) or []),
             kg_counts=kg_counts,
         )
 
@@ -101,7 +103,7 @@ class RoutingState:
             self.target or "-", self.phase,
             ",".join(sorted(self.open_ports)),
             f"v{len(self.vulnerabilities)}", f"c{len(self.credentials)}",
-            f"f{len(self.flags)}",
+            f"f{len(self.flags)}", f"e{len(self.endpoints)}",
             ",".join(f"{k}{v}" for k, v in sorted(self.kg_counts.items())),
         ])
 
@@ -258,6 +260,37 @@ class OperatorRouter:
         return sorted(best.values(), key=lambda c: -c.score)
 
 
+# Distinct technique angles for parallel fan-out (Fix #3). When several operators are
+# deployed at once on a stall, each gets a DIFFERENT angle from the phase-aware menu so
+# the batch explores separate surfaces instead of all repeating the same recon.
+_FANOUT_ANGLE_MENUS: dict[str, list[str]] = {
+    "recon": [
+        "map the full endpoint/param surface: dir & param fuzzing, robots.txt/sitemap, "
+        "and read linked JS files for hidden routes/keys.",
+        "probe authentication & access control: login, session handling, IDOR/BOLA, and "
+        "forced browsing to restricted paths.",
+        "test injection classes: SQLi, OS-command, template/SSTI, and XXE on every input.",
+        "focus on client-side & app config: reflected/stored XSS, CSRF, and secrets/URLs "
+        "exposed in JavaScript.",
+    ],
+    "post": [
+        "escalate privileges from the current access.",
+        "harvest credentials/tokens/secrets reachable from this foothold.",
+        "enumerate internal/lateral surface reachable from here.",
+        "locate and read the objective (flag/sensitive data).",
+    ],
+}
+# enumeration shares the recon menu; exploitation shares the post menu.
+_FANOUT_ANGLE_MENUS["enumeration"] = _FANOUT_ANGLE_MENUS["recon"]
+_FANOUT_ANGLE_MENUS["exploitation"] = _FANOUT_ANGLE_MENUS["post"]
+
+
+def _fanout_angles(phase: str, n: int) -> list[str]:
+    """n distinct technique angles for a fan-out batch (round-robin over the menu)."""
+    menu = _FANOUT_ANGLE_MENUS.get(phase or "recon") or _FANOUT_ANGLE_MENUS["recon"]
+    return [menu[j % len(menu)] for j in range(n)]
+
+
 # --------------------------------------------------------------------------- #
 # Supervisor (the control loop)
 # --------------------------------------------------------------------------- #
@@ -300,10 +333,14 @@ class Supervisor:
                  max_rounds: int = 12, max_per_operator: int = 4,
                  planner: Optional["Planner"] = None, opplan: Any = None,
                  fanout: bool = False, fanout_width: int = 3, fanout_after: int = 1,
-                 session_id: str = "supervisor") -> None:
+                 route_enum: bool = True, session_id: str = "supervisor") -> None:
         self.controller = controller
         self.router = router or OperatorRouter()
         self.max_rounds = max_rounds
+        # Active route enumeration (Fix #2): once, before routing, probe common web
+        # routes and fold the real ones into the SHARED attack_state so every sub-agent
+        # sees real paths instead of guessing. Best-effort; no-op without a dispatcher.
+        self.route_enum = route_enum
         # Cap how many times any single operator may be dispatched in a run, so a
         # persistently-firing trigger can't monopolise the budget (global backstop
         # on top of the per-state anti-loop).
@@ -316,6 +353,12 @@ class Supervisor:
         self.fanout = fanout
         self.fanout_width = max(2, int(fanout_width or 2))
         self.fanout_after = max(1, int(fanout_after or 1))
+        # Soft anti-loop: how many times one operator may be re-dispatched at the SAME
+        # state signature before it's benched. A hard 1 (the old permanent ban) exhausts
+        # the tiny web-operator roster in a single solo+fanout cycle and quits at ~4
+        # rounds; allowing a couple of steered retries lets the per-operator budget
+        # (max_per_operator) actually be spent exploring. Still globally capped.
+        self.per_sig_cap = max(1, min(int(max_per_operator), 2))
         # Tier-2 routing brain (P1): an async callable that, when the deterministic
         # router runs dry, picks the next (operator, subtask) from the state + roster.
         # See `make_model_planner`. Optional — omitted keeps routing purely rule-based.
@@ -331,8 +374,34 @@ class Supervisor:
         if not name:
             return False
         return (self.router._eligible(get_operator(name))
-                and (name, sig) not in tried
+                and tried.get((name, sig), 0) < self.per_sig_cap
                 and op_counts.get(name, 0) < self.max_per_operator)
+
+    async def _maybe_enumerate_routes(self, session_id: str) -> None:
+        """Fix #2: one active route-enumeration pass before routing. Populates the
+        SHARED attack_state.endpoints so every sub-agent sees real paths. Best-effort:
+        silently no-ops without a dispatcher or a derivable web base URL."""
+        if not self.route_enum:
+            return
+        disp = getattr(self.controller, "tool_dispatcher", None)
+        st = getattr(getattr(self.controller, "chain", None), "attack_state", None)
+        if disp is None or st is None:
+            return
+        if len(getattr(st, "endpoints", []) or []) >= 4:
+            return
+        try:
+            from core.agent_middlewares import (enumerate_routes, base_url_from_state,
+                                                make_dispatcher_prober)
+            base = base_url_from_state(st)
+            if not base:
+                return
+            found = await enumerate_routes(make_dispatcher_prober(disp, session_id), base, st)
+            if found:
+                await self._emit("supervisor.route_enum",
+                                 {"base": base, "found": [p for p, _ in found]})
+                logger.info("Supervisor route-enum found %d paths on %s", len(found), base)
+        except Exception as exc:  # never let enumeration break the engagement
+            logger.warning("Supervisor route-enum failed: %s", exc)
 
     async def _emit(self, kind: str, data: dict) -> None:
         bus = getattr(self.controller, "bus", None)
@@ -372,8 +441,9 @@ class Supervisor:
 
     async def run(self, objective: str, session_id: Optional[str] = None) -> SupervisorResult:
         sid = session_id or self.session_id
+        await self._maybe_enumerate_routes(sid)
         rounds: list[SupervisorRound] = []
-        tried: set[tuple[str, str]] = set()   # (operator, state-signature) — anti-loop
+        tried: dict[tuple[str, str], int] = {}  # (operator, state-signature) → #dispatches
         op_counts: dict[str, int] = {}        # per-operator dispatch budget
         stall_streak = 0                      # consecutive rounds with no state change
         stop = "round budget exhausted"
@@ -392,9 +462,13 @@ class Supervisor:
                 picks = self._fanout_picks(state, sig, tried, op_counts)
                 if len(picks) >= 2:
                     for c in picks:
-                        tried.add((c.operator, sig))
+                        tried[(c.operator, sig)] = tried.get((c.operator, sig), 0) + 1
                         op_counts[c.operator] = op_counts.get(c.operator, 0) + 1
                     names = [c.operator for c in picks]
+                    # Fix #3: give each fanned-out operator a DISTINCT technique angle so
+                    # the parallel batch explores different surfaces instead of repeating
+                    # the same recon. Angles are drawn from a phase-aware menu, round-robin.
+                    angles = _fanout_angles(state.phase, len(picks))
                     await self._emit("supervisor.fanout", {
                         "round": i, "operators": names,
                         "reason": f"stall x{stall_streak} — parallel fan-out"})
@@ -402,7 +476,9 @@ class Supervisor:
                     results = await asyncio.gather(*(
                         self._spawn_safe(
                             f"Engagement objective: {objective}\n\n"
-                            f"Your focused task: {c.subtask}",
+                            f"Your focused task: {c.subtask}"
+                            + (f"\n\nDISTINCT ANGLE for this parallel branch — {angles[j]}"
+                               if angles[j] else ""),
                             c.operator, sid, f"fan{i}_{j}", state.target)
                         for j, c in enumerate(picks)))
                     for c, res in zip(picks, results):
@@ -456,15 +532,25 @@ class Supervisor:
                 stop = "no route (plan + deterministic + LLM exhausted)"
                 break
 
-            tried.add((operator, sig))
+            # Fix #2: a re-dispatch of the same operator at the same signature means its
+            # last turn didn't advance — steer it to a materially different technique
+            # rather than repeating what already stalled.
+            retry_n = tried.get((operator, sig), 0)
+            tried[(operator, sig)] = retry_n + 1
             op_counts[operator] = op_counts.get(operator, 0) + 1
+            steer = ""
+            if retry_n >= 1:
+                steer = ("\n\nNOTE: a previous attempt here made NO new progress. Do NOT "
+                         "repeat the same requests/commands — switch technique or attack a "
+                         "different part of the surface (new endpoints, params, auth, or "
+                         "an entirely different vulnerability class).")
             await self._emit("supervisor.route", {
                 "round": i, "operator": operator, "reason": reason, "subtask": subtask,
             })
             logger.info("Supervisor round %d → %s (%s)", i, operator, reason)
 
             full_task = (f"Engagement objective: {objective}\n\n"
-                         f"Your focused task: {subtask}")
+                         f"Your focused task: {subtask}{steer}")
             result = await self._spawn_safe(full_task, operator, sid, f"sup{i}",
                                             state.target)
 

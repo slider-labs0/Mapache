@@ -278,10 +278,33 @@ def build_report(
     metadata: Optional[dict[str, Any]] = None,
     *,
     redact_secrets: bool = False,
+    extra_findings: Optional[list] = None,
 ) -> EngagementReport:
-    """Assemble an EngagementReport from the blackboard + engagement-log records."""
+    """Assemble an EngagementReport from the blackboard + engagement-log records.
+
+    `extra_findings` are agent-authored, evidence-carrying findings (core.findings
+    Finding objects recorded via the report_finding tool) — the rich web/authz
+    findings with a real request/response as proof. They are merged in FIRST so the
+    deliverable leads with proven weaknesses, not just blackboard-derived ones.
+    """
     records = records or []
     findings: list[Finding] = []
+
+    for ef in (extra_findings or []):
+        ev = ef.evidence or ""
+        if getattr(ef, "impact", ""):
+            ev += f"\n\nImpact: {ef.impact}"
+        if getattr(ef, "asset", ""):
+            ev = f"Asset: {ef.asset}\n\n" + ev
+        if getattr(ef, "references", ""):
+            ev += f"\n\nRef: {ef.references}"
+        findings.append(Finding(
+            title=ef.title,
+            severity=(ef.severity or "medium").capitalize(),
+            finding_type=ef.category or "finding",
+            evidence=ev.strip(),
+            remediation=ef.remediation or _REMEDIATION.get("vulnerability", ""),
+        ))
 
     for vuln in getattr(attack_state, "vulnerabilities", []) or []:
         findings.append(_vuln_finding(vuln, records))

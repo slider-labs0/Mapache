@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
@@ -28,6 +29,121 @@ from typing import Any, Awaitable, Callable, Optional
 from core.middleware import AgentMiddleware, LoopContext
 
 logger = logging.getLogger(__name__)
+
+
+# --------------------------------------------------------------------------- #
+# Active route enumeration (gap #2: discover real routes, don't invent them)
+# --------------------------------------------------------------------------- #
+
+# A small, high-signal list of routes to probe on a web target — the kind an agent
+# would otherwise guess (and get wrong). Hits are folded into attack_state.endpoints
+# so they show up in the state block as REAL paths for every (sub-)agent to use.
+COMMON_ROUTES = [
+    "/robots.txt", "/sitemap.xml", "/login", "/logout", "/register", "/signup",
+    "/admin", "/administrator", "/dashboard", "/account", "/profile", "/user",
+    "/users", "/api", "/api/users", "/orders", "/order", "/cart", "/checkout",
+    "/search", "/upload", "/uploads", "/files", "/download", "/config", "/settings",
+    "/backup", "/.git/config", "/.env", "/flag", "/flag.txt", "/index.php",
+    "/home", "/static/", "/assets/", "/server-status", "/phpinfo.php", "/console",
+]
+
+
+async def enumerate_routes(prober: "Callable[[str], Awaitable[Optional[int]]]",
+                           base_url: str, state: Any, *, cap: int = 40) -> list:
+    """Probe COMMON_ROUTES against base_url with `prober(url)->status|None`. A route
+    'exists' if its status is a real response other than a hard miss (400/404) or a
+    5xx. Discovered paths are recorded into state.endpoints. Returns [(path, status)]."""
+    base = (base_url or "").rstrip("/")
+    if not base:
+        return []
+    found: list[tuple[str, int]] = []
+    for path in COMMON_ROUTES[:cap]:
+        try:
+            status = await prober(base + path)
+        except Exception:
+            status = None
+        if status and 200 <= status < 500 and status not in (400, 404):
+            found.append((path, status))
+    if found and state is not None:
+        try:
+            state.record_endpoints([p for p, _ in found])
+        except Exception:
+            pass
+    return found
+
+
+def base_url_from_state(state: Any) -> str:
+    """Best-effort base URL for a web target from the attack-state blackboard."""
+    tgt = (getattr(state, "target", None) or "").strip()
+    if not tgt:
+        return ""
+    if tgt.startswith("http://") or tgt.startswith("https://"):
+        return tgt
+    host = tgt.split("/")[0]
+    scheme, port = "http", None
+    for p, svc in (getattr(state, "services", {}) or {}).items():
+        s = str(svc).lower()
+        if "https" in s or "ssl" in s:
+            scheme, port = "https", p
+            break
+        if "http" in s:
+            scheme, port = "http", p
+    if port is None:
+        for raw in (getattr(state, "open_ports", []) or []):
+            m = re.match(r"(\d+)", str(raw))
+            if m:
+                port = m.group(1)
+                break
+    if port and str(port) not in ("80", "443"):
+        return f"{scheme}://{host}:{port}"
+    return f"{scheme}://{host}"
+
+
+def make_dispatcher_prober(dispatcher: Any, session_id: str = ""):
+    """A prober that issues a real GET through the tool dispatcher (so probes respect
+    scope + the persistent session) and reads the Status code the tool echoes back."""
+    async def prober(url: str) -> Optional[int]:
+        out = await dispatcher.dispatch("http_request", {"url": url, "method": "GET"},
+                                        session_id)
+        m = re.search(r"Status:\s*(\d+)", out or "")
+        return int(m.group(1)) if m else None
+    return prober
+
+
+class RouteEnumMiddleware(AgentMiddleware):
+    """Single-agent loop: once, if the web target has few discovered endpoints, probe
+    the common routes and inject the real ones so the agent stops guessing /dashboard."""
+    name = "route_enum"
+
+    def __init__(self, prober=None, *, min_endpoints: int = 4) -> None:
+        self._prober = prober
+        self._min = min_endpoints
+        self._done = False
+
+    async def on_iteration_start(self, ctx: LoopContext) -> None:
+        if self._done:
+            return
+        st = ctx.attack_state
+        if st is None:
+            return
+        if len(getattr(st, "endpoints", []) or []) >= self._min:
+            self._done = True
+            return
+        base = base_url_from_state(st)
+        if not base:
+            return
+        self._done = True
+        prober = self._prober
+        if prober is None:
+            disp = getattr(ctx.controller, "tool_dispatcher", None)
+            if disp is None:
+                return
+            prober = make_dispatcher_prober(disp, ctx.session_id)
+        found = await enumerate_routes(prober, base, st)
+        if found:
+            ctx.inject.append(
+                "Route enumeration found REAL paths (use these, do not guess): "
+                + ", ".join(f"{p} [{s}]" for p, s in found[:15]))
 
 
 class BudgetMiddleware(AgentMiddleware):

@@ -59,6 +59,11 @@ class Operator:
     # model); action/tool-driven ones use "executor" (the fast one). Only takes
     # effect when several models are installed under a routing strategy.
     model_role: str = "executor"
+    # Cost/quality tier for model routing (Decepticon-style): "high" = the strong
+    # model (default — never downgrade a hacking-critical operator by accident);
+    # "low" = a cheaper/faster model for high-volume, low-stakes discovery work
+    # (recon/OSINT/broad scanning). Only takes effect with a tiered model provider.
+    tier: str = "high"
 
     @property
     def constraints_block(self) -> str:
@@ -90,12 +95,16 @@ class Operator:
 # Tool subsets reference Mapache's *registered* tool names. shell + kali_run are
 # the workhorses (any installed CLI tool runs through them); create_tool lets an
 # operator author a missing wrapper. Sets are deliberately small.
-_RECON = {"nmap_scan", "web_fetch", "web_search", "http_request", "shell", "searchsploit"}
-_WEB = {"kali_run", "web_fetch", "web_search", "http_request", "browser", "sqlmap",
-        "fuzz", "burp_scan", "burp_proxy", "searchsploit", "shell"}
+_RECON = {"nmap_scan", "web_fetch", "web_search", "http_request", "http_repeater",
+          "shell", "searchsploit", "tech_detect"}
+_WEB = {"kali_run", "web_fetch", "web_search", "http_request", "http_repeater",
+        "browser", "sqlmap", "fuzz", "burp_scan", "burp_proxy", "searchsploit", "shell",
+        "tech_detect", "jwt_tool", "graphql", "llm_inject"}
 _EXPLOIT = {"msf_search", "msf_run", "msf_sessions", "searchsploit", "http_request",
-            "sqlmap", "fuzz", "kali_run", "shell"}
-_POST = {"shell", "kali_run", "john_crack", "john_identify", "msf_sessions", "file_read"}
+            "http_repeater", "sqlmap", "fuzz", "kali_run", "shell", "jwt_tool", "graphql",
+            "llm_inject", "ad_attack"}
+_POST = {"shell", "kali_run", "john_crack", "john_identify", "msf_sessions", "file_read",
+         "ad_attack"}
 _ANALYSIS = {"shell", "kali_run", "file_read", "file_list", "file_search",
              "searchsploit", "web_search", "create_tool"}
 
@@ -110,7 +119,7 @@ def _add(op: Operator) -> None:
 # --- killchain core (phase-aligned) ---------------------------------------- #
 
 _add(Operator(
-    name="recon_operator", title="Recon Operator", phase="recon",
+    name="recon_operator", title="Recon Operator", phase="recon", tier="low",
     prefer_local=False,  # early, low-sensitivity host/service discovery — cloud OK
     description="Active host/service discovery — port and version scanning.",
     tools=_RECON,
@@ -119,7 +128,7 @@ _add(Operator(
               "the lead so the right follow-on operator can be tasked.",
 ))
 _add(Operator(
-    name="osint_operator", title="OSINT Operator", phase="recon", read_only=True,
+    name="osint_operator", title="OSINT Operator", phase="recon", read_only=True, tier="low",
     prefer_local=False,  # works over public open-source intel — cloud OK
     model_role="planner",  # research/correlation — reasoning-heavy
     description="Passive open-source intel — domains, emails, employees, breaches, leaks.",
@@ -164,7 +173,10 @@ _add(Operator(
 _add(Operator(
     name="cloud_hunter", title="Cloud Hunter", phase="exploitation",
     description="Cloud infrastructure attacks — IAM, storage exposure, k8s, metadata abuse.",
-    tools={"shell", "kali_run", "web_fetch", "file_read", "create_tool"},
+    # http_request/http_repeater: raw calls to the metadata service (169.254.169.254 /
+    # 169.254.170.2) for credential theft, and to cloud REST APIs.
+    tools={"shell", "kali_run", "web_fetch", "http_request", "http_repeater",
+           "cloud_metadata", "file_read", "create_tool"},
     expertise="IAM privilege escalation, public S3/blob/bucket exposure, Kubernetes RBAC "
               "escapes and exposed kubelets/dashboards, and cloud metadata-service (IMDS) "
               "abuse for credential theft. Use provider CLIs via shell; respect scope.",
@@ -173,7 +185,8 @@ _add(Operator(
     name="contract_auditor", title="Contract Auditor", phase="exploitation",
     model_role="planner",  # deep reasoning over source
     description="Solidity / EVM smart-contract audits.",
-    tools={"shell", "file_read", "file_write", "web_fetch", "create_tool"},
+    # http_request: JSON-RPC calls to a node / block explorer APIs.
+    tools={"shell", "file_read", "file_write", "web_fetch", "http_request", "create_tool"},
     expertise="Solidity/EVM review for reentrancy, oracle manipulation, flash-loan abuse, "
               "and broken access control; run slither/mythril-style analysis through shell "
               "and reason over the source.",
@@ -182,7 +195,10 @@ _add(Operator(
     name="reverser", title="Reverser", phase="analysis",
     model_role="planner",  # reasoning over binaries
     description="Binary analysis and reverse engineering.",
-    tools={"shell", "kali_run", "file_read", "file_list", "create_tool"},
+    # binary_analyze: structured triage (checksec/strings/nm/ROPgadget with parsed output);
+    # file_search: grep strings/symbols/xrefs across an unpacked binary/firmware tree.
+    tools={"shell", "kali_run", "file_read", "file_list", "file_search", "binary_analyze",
+           "create_tool"},
     expertise="ELF/PE/Mach-O triage, packer detection, ROP gadget inventories, and "
               "Ghidra/radare2 static recon driven through shell/kali_run; surface "
               "exploitable primitives.",
@@ -208,7 +224,10 @@ _add(Operator(
 _add(Operator(
     name="mobile_operator", title="Mobile Operator", phase="exploitation",
     description="Android / iOS application attacks.",
-    tools={"shell", "kali_run", "file_read", "create_tool"},
+    # http_request/http_repeater: test the app's API backend (authz/IDOR on mobile
+    # endpoints); file_list/file_search: browse the decompiled apk/ipa tree.
+    tools={"shell", "kali_run", "file_read", "file_list", "file_search",
+           "http_request", "http_repeater", "create_tool"},
     expertise="static analysis (apktool/jadx/class-dump), dynamic instrumentation "
               "(frida/objection), SSL-pinning and root/jailbreak bypass, exported-component "
               "abuse, WebView JS-bridge exploitation, MobSF runs.",
@@ -225,7 +244,10 @@ _add(Operator(
 _add(Operator(
     name="iot_operator", title="IoT Operator", phase="exploitation", requires_remote=True,
     description="IoT / embedded device attacks — firmware, hardcoded creds, radios.",
-    tools={"shell", "kali_run", "searchsploit", "file_read", "create_tool"},
+    # web_fetch/http_request: the device's web UI / REST API; file_list/file_search:
+    # walk the binwalk-extracted firmware root for creds/keys/configs.
+    tools={"shell", "kali_run", "searchsploit", "file_read", "file_list", "file_search",
+           "web_fetch", "http_request", "create_tool"},
     triggers={"1900", "5683", "8883", "upnp", "mqtt", "coap"},
     expertise="firmware acquisition + binwalk extraction, hardcoded credentials, "
               "U-Boot / /dev/mem access, and BLE/Zigbee/Z-Wave/sub-GHz/LoRaWAN radio work "
@@ -235,7 +257,8 @@ _add(Operator(
     name="ics_operator", title="ICS Operator", phase="enumeration", roe_gated=True,
     read_only=True,
     description="ICS / OT / SCADA attacks (Modbus, DNP3, S7comm, BACnet, OPC-UA).",
-    tools={"shell", "kali_run", "web_fetch", "create_tool"},
+    # http_request: HMI / engineering-workstation web interfaces (read-only enum).
+    tools={"shell", "kali_run", "web_fetch", "http_request", "create_tool"},
     triggers={"502", "20000", "102", "44818", "47808", "modbus", "s7", "bacnet", "dnp3"},
     expertise="Modbus/DNP3/S7comm/BACnet/OPC-UA enumeration. OT is fragile: read-only "
               "enumeration first, and writes only against an explicit in-scope lab/canary — "
@@ -254,7 +277,10 @@ _add(Operator(
     name="supply_chain_operator", title="Supply Chain Operator", phase="exploitation",
     model_role="planner",  # dependency/pipeline analysis
     description="Supply-chain attacks — dependencies, build pipelines, package integrity.",
-    tools={"shell", "kali_run", "file_read", "web_search", "create_tool"},
+    # web_fetch/http_request: query package-registry APIs (npm/pypi) for typosquat /
+    # dependency-confusion checks and provenance metadata.
+    tools={"shell", "kali_run", "file_read", "web_search", "web_fetch",
+           "http_request", "create_tool"},
     expertise="dependency confusion / typosquatting, compromised or malicious packages, "
               "CI/CD pipeline and build-artifact integrity, and signing/provenance gaps "
               "across the software supply chain.",
@@ -269,7 +295,7 @@ _add(Operator(
 # --------------------------------------------------------------------------- #
 
 _add(Operator(
-    name="scanner", title="Scanner", phase="enumeration", model_role="executor",
+    name="scanner", title="Scanner", phase="enumeration", model_role="executor", tier="low",
     description="Vuln-research stage 1 — surface vulnerability candidates (CVE/CVSS).",
     tools={"nmap_scan", "kali_run", "searchsploit", "web_fetch", "http_request",
            "cve_lookup", "web_search"},
@@ -336,9 +362,10 @@ _add(Operator(
 
 
 # Every specialist can read prior findings and record its own in the shared
-# knowledge graph — the durable channel between fresh-context objectives.
+# knowledge graph — the durable channel between fresh-context objectives — and
+# record an evidence-first finding into the engagement report (the deliverable).
 for _op in _OPERATORS.values():
-    _op.tools |= {"kg_query", "kg_add"}
+    _op.tools |= {"kg_query", "kg_add", "report_finding"}
 
 
 # --------------------------------------------------------------------------- #

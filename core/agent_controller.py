@@ -1439,8 +1439,22 @@ class AgentController:
             # Snapshot findings so newly-discovered ones can be emitted as their
             # own timeline events (feature K's engagement log subscribes to these).
             before = self._finding_snapshot()
-            self.chain.on_tool_result(tool_name, tool_output)
+            self.chain.on_tool_result(tool_name, tool_output, _args)
             await self._emit_new_findings(before, session_id)
+
+            # Active injection detection (defensive): if target-controlled output is
+            # attempting to hijack the agent, raise an auditable event. The inline
+            # warning + shield clause handle the model side; this is the signal.
+            try:
+                from core.injection_shield import detect_injection
+                inj = detect_injection(tool_output)
+                if inj:
+                    await self.bus.emit("agent.injection_detected",
+                                        {"tool": tool_name, "patterns": inj,
+                                         "session_id": session_id},
+                                        source="controller", session_id=session_id)
+            except Exception:
+                pass
 
             # Progress ledger: record whether this action surfaced anything new so
             # a fruitless action becomes a durable "dead end" the model is told not
@@ -1680,6 +1694,11 @@ class AgentController:
         # when pinned. No-op for a generalist or a provider without role routing.
         if operator is not None and hasattr(child_model, "for_role"):
             child_model = child_model.for_role(operator.model_role)
+        # Cost/quality tiering (Decepticon-style): a tiered provider routes this
+        # sub-agent to its operator.tier model (low = cheap discovery, high = strong).
+        # No-op for providers without for_tier.
+        if operator is not None and hasattr(child_model, "for_tier"):
+            child_model = child_model.for_tier(getattr(operator, "tier", "high"))
 
         # Per-sub-agent execution terminal (feature H + P): if a factory is set,
         # mint this child its OWN backend and rebind a private dispatcher onto it,
