@@ -1,28 +1,48 @@
 # Mapache
 
-An offensive-security AI agent: a ReAct loop over a local model (via [Ollama](https://ollama.com))
-or a frontier cloud model, with phase-aware attack-state tracking, an offensive
-toolchain (nmap, Metasploit, searchsploit, hydra, john, …), persistent memory,
-rules-of-engagement guardrails, an auditable engagement log, and optional
-Telegram/Discord operation.
+A full-spectrum offensive-security AI agent. Mapache runs an observe-act (ReAct) loop
+over a local model (via [Ollama](https://ollama.com)) or a frontier cloud model, with
+phase-aware attack-state tracking, an autonomous multi-agent supervisor, a large
+offensive toolchain, evidence-first reporting, rules-of-engagement guardrails, and
+optional Telegram/Discord operation.
 
-> `STATUS.md` is the source of truth for architecture and progress.
+> `STATUS.md` is the source of truth for architecture and progress; `ROADMAP.md` tracks
+> planned work.
+
+## What it does
+
+- **Single agent or swarm.** A generalist agent works the kill chain, or an autonomous
+  supervisor routes bounded objectives to specialist sub-agents (recon, web, exploit,
+  post, cloud, AD, binary, mobile, and more) and fans out on a stall.
+- **Real offensive toolchain.** ~60 tools: nmap, Metasploit, searchsploit, sqlmap, ffuf,
+  hydra, john, a headless browser, plus specialist weapons (a Burp-style HTTP repeater
+  with replay/diff, JWT forging/cracking, GraphQL introspection, cloud metadata/IMDS,
+  secret and tech-stack scanners, Active Directory and binary-triage helpers). Anything
+  not wrapped runs through `shell`/`kali_run`.
+- **Grounded, not guessing.** It reads a target's real forms, endpoints, and disclosed
+  credentials into state, looks up payloads from an offline corpus instead of inventing
+  them, and detects dead attack vectors so it changes approach instead of spinning.
+- **Evidence-first deliverable.** Confirmed weaknesses are recorded as findings with
+  severity, evidence, impact, and remediation, and exported as a report (Markdown/HTML,
+  plus SARIF and bug-bounty drafts). Success is a proven finding, not just a flag.
+- **Safe to run unattended.** Rules-of-engagement scope gating, an always-on
+  prompt-injection shield with active detection, an append-only engagement audit log,
+  and an optional replayable session recording (asciicast).
 
 ## Requirements
 
 - **Python 3.10+**
 - **[Ollama](https://ollama.com)** for local models (`ollama serve`, then pull a model).
-  Cloud providers (Anthropic, OpenAI-compatible, Grok) work instead via `--model … --allow-cloud`.
+  Cloud providers (Anthropic, OpenAI-compatible, Grok, OpenRouter) work instead via
+  `--model <id> --allow-cloud`.
 - The offensive tools shell out to their real binaries (`nmap`, `msfconsole`,
-  `searchsploit`, …). These are pre-installed on **Kali/ParrotOS**; on other
-  distros install the ones you need. Missing tools degrade gracefully — the tool
-  reports it, the agent adapts.
+  `searchsploit`, etc.), pre-installed on Kali/ParrotOS. On other distros, install the
+  ones you need; missing tools degrade gracefully and the agent adapts.
 
 ## Linux setup
 
-Mapache runs natively on Linux, and Linux (especially Kali) is the recommended
-platform — the whole offensive toolchain is packaged there, and the POSIX shell
-avoids the quoting workarounds Windows needs.
+Linux (especially Kali) is the recommended platform: the offensive toolchain is packaged
+there and the POSIX shell avoids the quoting workarounds Windows needs.
 
 ```bash
 # 1. Clone
@@ -54,8 +74,8 @@ mapache config show                # inspect the merged config
 
 ### Optional extras
 
-Everything beyond the core is feature-gated; install per feature (uncomment the
-matching line in `requirements.txt`):
+Everything beyond the core is feature-gated; install per feature (uncomment the matching
+line in `requirements.txt`):
 
 ```bash
 pip install rich                      # nicer CLI panels/colour
@@ -79,8 +99,21 @@ export ANTHROPIC_API_KEY=...        # or OPENAI_API_KEY / XAI_API_KEY / OPENROUT
 python -m cli --model claude-opus-4-8 --allow-cloud
 ```
 
-Config lives at `~/.mapache/config.json` (see `python -m cli config show`). Keys
-can be stored there or referenced from the environment.
+Config lives at `~/.mapache/config.json` (see `python -m cli config show`). Keys can be
+stored there or referenced from the environment.
+
+## Useful flags and commands
+
+```bash
+python -m cli --scope scope.json      # enforce rules-of-engagement (in-scope targets)
+python -m cli --cast                  # record the engagement as a replayable asciicast
+python -m cli --exec-backend docker   # run shell tools in an attacker container
+python -m cli --strategy hybrid       # route model calls per role (local + cloud)
+```
+
+Inside a session, slash commands include `/swarm` (toggle the autonomous multi-agent
+supervisor), `/report [md|html|both|sarif|bounty|all]` (write the findings report), and
+`/scope` (show the active rules-of-engagement).
 
 ## Running the tests
 
@@ -88,13 +121,13 @@ can be stored there or referenced from the environment.
 python tests/test_core.py
 ```
 
-(On Windows, prefix with `PYTHONUTF8=1` to avoid console-encoding errors on log
-output. On Linux, UTF-8 is already the default — no prefix needed.)
+On Windows, prefix with `PYTHONUTF8=1` to avoid console-encoding errors on log output.
+On Linux, UTF-8 is already the default.
 
 ## Windows
 
 Mapache also runs on Windows. Use a normal `py -m venv` / `pip install -r
-requirements.txt`, and note that many offensive binaries aren't available on
-Windows — routing the agent's shell through an attacker container
-(`--attacker-container`) or a remote Kali box (SSH backend) gives it the real
-toolchain. See `tests/lab/isolated_lab.sh` for a contained lab.
+requirements.txt`. Many offensive binaries are unavailable on Windows, so route the
+agent's shell through an attacker container (`--exec-backend docker`) or a remote Kali
+box (SSH backend) for the real toolchain. See `tests/lab/isolated_lab.sh` for a
+contained lab.

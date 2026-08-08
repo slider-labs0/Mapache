@@ -1,5 +1,5 @@
 """
-integration_catalog.py — known third-party services for just-in-time setup.
+integration_catalog.py - known third-party services for just-in-time setup.
 
 When the operator says "search this in Shodan" or "run this hash through
 VirusTotal" and that integration isn't configured yet, the CLI recognises the
@@ -36,13 +36,13 @@ CATALOG: tuple[IntegrationRecipe, ...] = (
     IntegrationRecipe(
         key="shodan", display="Shodan", env_var="SHODAN_API_KEY",
         signup_url="https://account.shodan.io/",
-        blurb="Passive host recon — open ports, services, banners, and known CVEs.",
+        blurb="Passive host recon - open ports, services, banners, and known CVEs.",
         triggers=("shodan",),
         specs=(
             {"name": "shodan_host", "kind": "http", "method": "GET",
              "url": "https://api.shodan.io/shodan/host/{ip}?key=${SHODAN_API_KEY}",
              "description": "Shodan: open ports, services, banners, and known CVEs "
-                            "for an IP (passive — no packets to the target).",
+                            "for an IP (passive - no packets to the target).",
              "params": {"ip": {"type": "string", "description": "target IPv4",
                                 "required": True}},
              "permission": "network"},
@@ -123,7 +123,7 @@ def detect_missing_integration(
     """The first catalog service named in the input that isn't fully READY, or None.
 
     'Ready' = its tool(s) are registered AND its API-key env var is set. So we also
-    prompt when the spec exists but the key is missing (a call would just 401) —
+    prompt when the spec exists but the key is missing (a call would just 401) -
     offering to add only the key in that case. An already-ready service never
     re-prompts."""
     environ = environ if environ is not None else os.environ
@@ -135,7 +135,7 @@ def detect_missing_integration(
         specs_present = recipe.spec_names() <= names
         key_set = bool(environ.get(recipe.env_var))
         if specs_present and key_set:
-            continue  # fully ready — nothing to do
+            continue  # fully ready - nothing to do
         return recipe
     return None
 

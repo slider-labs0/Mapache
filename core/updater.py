@@ -1,5 +1,5 @@
 """
-updater.py — version stamp + update manager (feature D)
+updater.py - version stamp + update manager (feature D)
 
 Keeps an installed Mapache current: a `VERSION` stamp at the repo root, a
 `mapache --version` / `mapache update` entry, and a non-blocking "update
@@ -69,7 +69,7 @@ def local_version(path: Path = VERSION_FILE) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Remote lookup (explicit command only — never at startup)
+# Remote lookup (explicit command only - never at startup)
 # --------------------------------------------------------------------------- #
 
 
@@ -129,7 +129,7 @@ def read_cached_latest(*, environ: Optional[dict] = None) -> Optional[str]:
 
 def update_notice(*, environ: Optional[dict] = None,
                   current: Optional[str] = None) -> Optional[str]:
-    """A one-line startup notice if the cached latest is newer than local — no
+    """A one-line startup notice if the cached latest is newer than local - no
     network, so it never delays startup. None when up to date / nothing cached."""
     current = current or local_version()
     latest = read_cached_latest(environ=environ)
@@ -214,7 +214,7 @@ def apply_update(*, repo: Path = REPO_ROOT, do_pull: bool = True,
         else:
             lines.append("Pulled latest:\n" + out.strip())
             if REQUIREMENTS_FILE.is_file():
-                lines.append("Dependencies may have changed — run: "
+                lines.append("Dependencies may have changed - run: "
                              "pip install -r requirements.txt")
     return "\n".join(lines)
 

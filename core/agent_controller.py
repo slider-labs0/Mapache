@@ -1,5 +1,5 @@
 """
-agent_controller.py — Mapache agent controller
+agent_controller.py - Mapache agent controller
 
 Central orchestrator. Owns the main agent loop and wires together
 all subsystems. Phase 7 version includes ConversationChain for
@@ -50,7 +50,7 @@ DELEGATE_PARALLEL_TOOL = "delegate_parallel"
 class SubAgentContext:
     """Identity of a sub-agent about to be spawned, handed to a
     `subagent_backend_factory` so it can mint (and name) that agent's own
-    execution terminal — e.g. one container per operator, or per target host."""
+    execution terminal - e.g. one container per operator, or per target host."""
     operator: str          # operator name, or "generalist"
     target: Optional[str]  # the host this child targets (its isolated state's target)
     session_id: str        # the child's session id (parent:suffix)
@@ -122,18 +122,18 @@ class AgentController:
     # the whole iteration budget (observed: 101 dup calls on one benchmark; 10/12 dup
     # on another). After STALL_NUDGE_STEPS tool steps with no new finding, inject a
     # course-correct nudge. Abort the turn on ABORT_DUP consecutive ALL-duplicate
-    # steps (unambiguous spam — a capable model doing real work won't trip this), or
+    # steps (unambiguous spam - a capable model doing real work won't trip this), or
     # ABORT_NOPROG steps with no discovery at all (bounded backstop; the nudge fires
     # first so real multi-step work gets a chance).
     STALL_NUDGE_STEPS = 4
     STALL_ABORT_DUP = 4
     STALL_ABORT_NOPROG = 8
     # Response-grounded acting (P0): the top failure mode was blind endpoint/credential
-    # spraying — hitting invented URLs/paths that never appeared in any response. A web
+    # spraying - hitting invented URLs/paths that never appeared in any response. A web
     # call whose target path is absent from all prior tool output is an "ungrounded
     # probe"; after this many in a row the loop nudges the model to act on what a real
     # response actually contained (a surfaced form/link/endpoint), not a guess. Advisory
-    # only — the first recon call and deliberate fuzzing aren't blocked.
+    # only - the first recon call and deliberate fuzzing aren't blocked.
     GROUNDING_WEB_TOOLS = {"http_request", "web_fetch", "browser"}
     GROUNDING_NUDGE_STREAK = 3
     # When the final answer contains a flag that never appeared in tool output
@@ -185,7 +185,7 @@ class AgentController:
         self.opsec = opsec_policy or OpsecPolicy()
         # User-editable persona (feature E). Called each turn to re-read soul.md
         # so edits hot-reload. None → no persona (backwards-compatible). Not
-        # propagated to sub-agents — operators carry their own focused prompts.
+        # propagated to sub-agents - operators carry their own focused prompts.
         # Operation plan (OPPLAN) table, injected into the lead's context each turn
         # so it drives objectives through pending→in_progress→passed|blocked. Not
         # propagated to sub-agents (they get their one focused objective).
@@ -209,7 +209,7 @@ class AgentController:
         self.subagent_backend_factory = subagent_backend_factory
         # The current turn's overall objective, captured at run(). Propagated into
         # every delegated sub-agent's task (their context is otherwise isolated), so
-        # a child knows the concrete success criteria — e.g. which file to read —
+        # a child knows the concrete success criteria - e.g. which file to read -
         # instead of guessing them.
         self.mission: Optional[str] = None
         # Rules-of-Engagement guardrails (feature J). An absent/inactive scope
@@ -278,7 +278,7 @@ class AgentController:
                     "subtask (e.g. 'enumerate the web service on port 80 and "
                     "report findings'), then return only its conclusion. Pass "
                     "`operator` to run the subtask as a specialist (a tighter "
-                    "prompt + tools — e.g. web_operator for a web app, "
+                    "prompt + tools - e.g. web_operator for a web app, "
                     "iot_operator for an embedded device); omit it for a "
                     "generalist. The sub-agent shares the live attack state but "
                     "has its own scratch context. See /operators."
@@ -310,7 +310,7 @@ class AgentController:
             self.context.register_tool(ToolSchema(
                 name=DELEGATE_PARALLEL_TOOL,
                 description=(
-                    "Run SEVERAL operator subtasks at once — multiple angles on one "
+                    "Run SEVERAL operator subtasks at once - multiple angles on one "
                     "host, OR several hosts in parallel. Each entry is "
                     "{task, operator?, target?}. Give each host its own `target` to "
                     "run them against isolated per-host attack states; omit `target` "
@@ -341,8 +341,8 @@ class AgentController:
 
         self._sessions: dict[str, dict[str, Any]] = {}
         # Per-host sub-states (feature P): when a delegated task targets a host
-        # other than the lead's, it gets its own isolated AttackState here —
-        # created once, reused — so concurrent multi-host delegations don't
+        # other than the lead's, it gets its own isolated AttackState here -
+        # created once, reused - so concurrent multi-host delegations don't
         # collide on one blackboard and findings attribute to the right host.
         self._host_states: dict[str, AttackState] = {}
         # Only the bus owner registers the shared error handler, so a shared bus
@@ -389,7 +389,7 @@ class AgentController:
         on_token: Optional[Callable[[str], None]] = None,
     ) -> AgentResponse:
         session_id = session_id or self._new_session()
-        logger.info("Turn start — session=%s input=%r", session_id, user_input[:80])
+        logger.info("Turn start - session=%s input=%r", session_id, user_input[:80])
 
         # Remember this turn's objective so delegated sub-agents inherit it as
         # mission context (they can't see the lead's conversation otherwise).
@@ -662,7 +662,7 @@ class AgentController:
                         session_id=session_id,
                     )
                     continue
-                # Budget exhausted — accept the raw text as the final answer.
+                # Budget exhausted - accept the raw text as the final answer.
                 parsed = {"type": "response", "content": parsed.get("content", "")}
 
             # Persist any plan the model supplied onto the conversation chain
@@ -700,7 +700,7 @@ class AgentController:
                 if stalled:
                     reason = ("repeating identical tool calls" if dup_streak >= self.STALL_ABORT_DUP
                               else f"no new findings in {noprog_streak} steps")
-                    logger.warning("Turn aborted — stalled (%s)", reason)
+                    logger.warning("Turn aborted - stalled (%s)", reason)
                     await self.bus.emit(
                         "agent.stall",
                         {"action": "abort", "reason": reason, "dup_streak": dup_streak,
@@ -708,7 +708,7 @@ class AgentController:
                         source="controller", session_id=session_id,
                     )
                     content = await self._guard_fabricated_flags(
-                        "Stopped without completing the objective — the agent stalled "
+                        "Stopped without completing the objective - the agent stalled "
                         f"({reason}). No further progress was being made.", session_id)
                     return AgentResponse(
                         content=content, session_id=session_id,
@@ -735,8 +735,8 @@ class AgentController:
 
             # Empty final answer: the model ended the turn without acting and
             # without saying anything (observed with some local models on the
-            # very first step). Treat it like a malformed reply — nudge the model
-            # to either act or answer — rather than silently terminating the
+            # very first step). Treat it like a malformed reply - nudge the model
+            # to either act or answer - rather than silently terminating the
             # engagement with a blank result. Bounded by the same reask budget.
             if not (content or "").strip():
                 if reasks_left > 0:
@@ -747,7 +747,7 @@ class AgentController:
                         "the next concrete step now by calling a tool: reply with "
                         'ONLY {"type":"tool_call","tool":"<name>","args":{...}}. '
                         'If you are truly done, reply with {"type":"response",'
-                        '"content":"<your final answer>"} — never an empty message.'
+                        '"content":"<your final answer>"} - never an empty message.'
                     )
                     await self.bus.emit(
                         "agent.reask",
@@ -756,7 +756,7 @@ class AgentController:
                         session_id=session_id,
                     )
                     continue
-                # Budget exhausted — fall through and return what we have.
+                # Budget exhausted - fall through and return what we have.
 
             # Opt-in verifier: judge the final answer; on a failed verdict with
             # retries left, resume the loop with the verifier's suggestion.
@@ -774,7 +774,7 @@ class AgentController:
                     logger.info("Verifier rejected answer: %s → %s", reason, suggestion)
                     self.context.add_user_message(
                         f"[verifier] Your answer may be incomplete: {reason}. "
-                        f"Next step: {suggestion}. Continue — call a tool if needed."
+                        f"Next step: {suggestion}. Continue - call a tool if needed."
                     )
                     await self.bus.emit(
                         "agent.verify.retry",
@@ -785,7 +785,7 @@ class AgentController:
                     continue
 
             # Anti-fabrication ENFORCEMENT: if the final answer reports a flag that
-            # never appeared in tool output, don't accept it — send the model back to
+            # never appeared in tool output, don't accept it - send the model back to
             # actually obtain it (bounded), instead of ending on a hallucination.
             unverified = self._unverified_flags(content)
             if unverified and fabrication_reasks_left > 0:
@@ -799,11 +799,11 @@ class AgentController:
                 )
                 self.context.add_user_message(
                     f"You reported the flag {', '.join(unverified)}, but it NEVER appeared "
-                    "in any tool output this session — that is a fabricated/guessed flag "
+                    "in any tool output this session - that is a fabricated/guessed flag "
                     "and is not acceptable. Do NOT invent, guess, or reformat a flag. Go "
                     "back to the target and ACTUALLY obtain the real flag by completing "
                     "the exploit; only report a flag string that a tool literally returned. "
-                    "Continue working now — take the next concrete action."
+                    "Continue working now - take the next concrete action."
                 )
                 continue
 
@@ -878,7 +878,7 @@ class AgentController:
 
         Fails open: any error leaves history untouched, and `_trim_history`
         still keeps the model call within budget by dropping the oldest
-        messages — i.e. the pre-compaction behavior.
+        messages - i.e. the pre-compaction behavior.
         """
         if not self.enable_compaction or not self.context.needs_compaction():
             return
@@ -916,7 +916,7 @@ class AgentController:
             raw = await self.model.chat(messages=prompt)
             summary = self._parse_model_response(raw).get("content", "").strip()
         except Exception as exc:
-            logger.warning("Compaction failed (%s) — leaving history intact", exc)
+            logger.warning("Compaction failed (%s) - leaving history intact", exc)
             return
 
         if not summary:
@@ -947,7 +947,7 @@ class AgentController:
         Make one model call, streaming tokens to `on_token` when possible.
 
         Streaming is used only when a callback is given, the model exposes
-        `chat_stream`, and we are in native tool-calling mode — JSON-mode
+        `chat_stream`, and we are in native tool-calling mode - JSON-mode
         models would otherwise stream raw protocol JSON to the user. The
         streamed pieces are reassembled into the same dict shape `chat`
         returns, so the rest of the loop (parse, todos, reask, verifier,
@@ -976,7 +976,7 @@ class AgentController:
                 if piece.get("type") == "tool_call":
                     tool_call = piece
                     break
-                continue  # unknown control dict — ignore
+                continue  # unknown control dict - ignore
             token = str(piece)
             text_parts.append(token)
             try:
@@ -1030,7 +1030,7 @@ class AgentController:
             if tool_calls:
                 calls = [c for c in (self._normalize_call(tc) for tc in tool_calls) if c]
                 if not calls:
-                    # Native tool call(s) with no usable tool name — ask again.
+                    # Native tool call(s) with no usable tool name - ask again.
                     return {"type": "malformed", "content": str(raw),
                             "reason": "tool call had no tool name"}
                 if len(calls) == 1:
@@ -1045,7 +1045,7 @@ class AgentController:
 
         data = self._extract_json_object(raw)
         if data is None:
-            # No JSON — but tool-native models (esp. "thinking" ones) sometimes
+            # No JSON - but tool-native models (esp. "thinking" ones) sometimes
             # emit a bare `tool(args)` call as prose in the content instead of a
             # structured tool_call. Recover it when the whole message is one call
             # naming a currently-exposed tool. Otherwise it's a plain answer.
@@ -1086,7 +1086,7 @@ class AgentController:
             except json.JSONDecodeError:
                 return None
             return {"tool": name, "args": obj} if isinstance(obj, dict) else None
-        # Form B: name(key=val, ...) — literals only, via ast (no execution).
+        # Form B: name(key=val, ...) - literals only, via ast (no execution).
         try:
             call = ast.parse(s, mode="eval").body
         except (SyntaxError, ValueError):
@@ -1107,7 +1107,7 @@ class AgentController:
     def _interpret_json_response(self, data: dict, raw: str) -> dict[str, Any]:
         rtype = data.get("type")
 
-        # Infer a missing/unknown type from the keys present — local models
+        # Infer a missing/unknown type from the keys present - local models
         # frequently emit the right shape without the "type" tag.
         if rtype not in ("tool_call", "tool_calls", "plan", "todo_update", "response"):
             if isinstance(data.get("calls"), list):
@@ -1120,7 +1120,7 @@ class AgentController:
                 rtype = "todo_update"
             elif rtype is not None:
                 # An explicit but unrecognized "type" with no usable keys means
-                # the model tried to use the protocol and got it wrong — reask.
+                # the model tried to use the protocol and got it wrong - reask.
                 return {"type": "malformed", "content": raw,
                         "reason": f"unknown response type {rtype!r}"}
             else:
@@ -1155,7 +1155,7 @@ class AgentController:
         if rtype == "plan":
             # A plan seeds/updates the persistent todo list and carries the
             # first concrete action in first_tool/first_args. Dispatch that
-            # action instead of treating the plan text as a final answer — the
+            # action instead of treating the plan text as a final answer - the
             # ReAct loop re-plans next turn after seeing the real result (one
             # tool per step). `todos` is surfaced so the loop can persist the
             # list on the conversation chain.
@@ -1261,7 +1261,7 @@ class AgentController:
             if fallback:
                 tool_args["target"] = fallback
                 logger.info(
-                    "nmap_scan called without target — auto-filled from attack state: %s",
+                    "nmap_scan called without target - auto-filled from attack state: %s",
                     fallback,
                 )
         return tool_args
@@ -1280,7 +1280,7 @@ class AgentController:
 
     @classmethod
     def _web_call_path(cls, tool_name: str, args: dict[str, Any]) -> Optional[str]:
-        """The URL path (+query) of a web call, lowercased, for grounding — or None if
+        """The URL path (+query) of a web call, lowercased, for grounding - or None if
         this isn't a groundable web call."""
         if tool_name not in cls.GROUNDING_WEB_TOOLS:
             return None
@@ -1308,11 +1308,11 @@ class AgentController:
         Run one or more tool calls the model issued in a single turn.
 
         Returns (dispatched, duplicates): how many calls were actually run vs.
-        short-circuited as exact repeats — the loop uses this for stall detection.
+        short-circuited as exact repeats - the loop uses this for stall detection.
 
         Dangerous-op confirmation is handled sequentially up front (it may
-        prompt the user). The actual dispatches then run concurrently — the
-        model chose to batch these, so they are treated as independent — while
+        prompt the user). The actual dispatches then run concurrently - the
+        model chose to batch these, so they are treated as independent - while
         results are folded back into the conversation chain and context
         serially, in the model's stated order, to keep state updates
         deterministic.
@@ -1333,13 +1333,13 @@ class AgentController:
             # dispatcher exposes an enumerable registry so we can be authoritative
             # about what exists; otherwise fail open (dispatch handles it). Hand
             # back the phase-scoped list of tools the model can actually use right
-            # now — shorter and more relevant than the full registry dump — so the
+            # now - shorter and more relevant than the full registry dump - so the
             # next step self-corrects instead of looping on the bad name.
             if (getattr(self.tool_dispatcher, "registry", None) is not None
                     and tool_name not in self._known_tool_names()):
                 offered = ", ".join(self.context.active_tool_names()
                                     or sorted(self._known_tool_names()))
-                logger.info("Unknown tool '%s' — returning available list", tool_name)
+                logger.info("Unknown tool '%s' - returning available list", tool_name)
                 self.context.add_tool_result(
                     tool_call_id, tool_name,
                     f"There is no tool named '{tool_name}'. It was NOT executed. "
@@ -1365,7 +1365,7 @@ class AgentController:
                 self.context.add_tool_result(
                     tool_call_id, tool_name,
                     f"REFUSED by engagement scope: {decision.reason}.\n"
-                    "This action was NOT executed. Do not retry it — choose an "
+                    "This action was NOT executed. Do not retry it - choose an "
                     "in-scope target, or tell the operator the task is out of scope.",
                 )
                 await self.bus.emit(
@@ -1412,7 +1412,7 @@ class AgentController:
 
         # Response-grounded acting: classify the approved WEB calls as grounded (their
         # path appeared in prior output) or blind probes (invented paths), against the
-        # corpus from EARLIER steps — before this step's own results are folded in.
+        # corpus from EARLIER steps - before this step's own results are folded in.
         web_calls = [(n, a) for (_id, n, a) in approved
                      if self._web_call_path(n, a) is not None]
         ungrounded = [(n, a) for (n, a) in web_calls
@@ -1509,7 +1509,7 @@ class AgentController:
                     source="controller", session_id=session_id)
                 self.context.add_user_message(
                     "Several of your recent web requests targeted paths that never "
-                    "appeared in any response — that is blind guessing, the top reason "
+                    "appeared in any response - that is blind guessing, the top reason "
                     "engagements stall. STOP inventing URLs. GROUND your next action in "
                     "the most recent response: act on a form action, a link, a "
                     "referenced endpoint, a parameter name, or an error message it "
@@ -1568,7 +1568,7 @@ class AgentController:
 
         If `operator` names a specialist (feature P), the child gets that
         operator's focused system prompt and a small curated tool subset instead
-        of the lead's generalist prompt + full toolset — the local-model win.
+        of the lead's generalist prompt + full toolset - the local-model win.
         """
         task = (args.get("task") or args.get("goal") or "").strip()
         if not task:
@@ -1615,7 +1615,7 @@ class AgentController:
             f"[{op or 'generalist'}{f' @ {tgt}' if tgt else ''}] {t}\n{res}"
             for (t, op, tgt), res in zip(tasks, results)
         )
-        out = f"[delegate_parallel — {len(tasks)} operators]\n\n{joined}"
+        out = f"[delegate_parallel - {len(tasks)} operators]\n\n{joined}"
         host_summary = self._render_host_states()
         return f"{out}\n\n{host_summary}" if host_summary else out
 
@@ -1665,8 +1665,8 @@ class AgentController:
         # its own isolated AttackState; otherwise it shares the lead's blackboard.
         child_state, isolated = self._host_state_for(target)
 
-        # Hybrid OPSEC routing (feature O): pin a sensitive operator — or any
-        # delegation once credentials are captured — to a local model even when
+        # Hybrid OPSEC routing (feature O): pin a sensitive operator - or any
+        # delegation once credentials are captured - to a local model even when
         # the lead is allowed to route to cloud, so loot/creds never leave the
         # host. Falls back gracefully if the model provider can't pin local.
         opsec = self.opsec.decide(operator=operator, attack_state=child_state)
@@ -1676,19 +1676,19 @@ class AgentController:
             can_pin = getattr(self.model, "can_pin_local", lambda: True)()
             if can_pin:
                 child_model = self.model.local_variant()
-                logger.info("OPSEC: pinning %s to local — %s", who, opsec.reason)
+                logger.info("OPSEC: pinning %s to local - %s", who, opsec.reason)
             else:
                 # Wanted to keep this sub-agent on-box but no local model is
-                # installed/reachable — proceed on the current model rather than
+                # installed/reachable - proceed on the current model rather than
                 # crash on a missing Ollama model. Surface it: data may leave the host.
                 logger.warning(
                     "OPSEC wanted to pin %s to a local model (%s) but none is "
-                    "available; running on the current model — its data will leave "
+                    "available; running on the current model - its data will leave "
                     "the host. Install an Ollama model or run with --allow-cloud off "
                     "for sensitive work.", who, opsec.reason)
 
         # Per-operator model routing (feature P): run the operator's loop under
-        # the model role its work calls for — reasoning-heavy specialists as
+        # the model role its work calls for - reasoning-heavy specialists as
         # PLANNER (the quality model), action specialists as EXECUTOR (the fast
         # one). Applied after the OPSEC pin, so it routes within the local models
         # when pinned. No-op for a generalist or a provider without role routing.
@@ -1704,7 +1704,7 @@ class AgentController:
         # mint this child its OWN backend and rebind a private dispatcher onto it,
         # so its shell/nmap/msf run in an isolated container/host. The factory may
         # be sync (a ready backend) or async (spins one up). Falls back to sharing
-        # the lead's dispatcher on any failure — never blocks the delegation.
+        # the lead's dispatcher on any failure - never blocks the delegation.
         child_dispatcher = self.tool_dispatcher
         child_backend = None
         if self.subagent_backend_factory is not None and self.tool_dispatcher is not None:
@@ -1744,12 +1744,12 @@ class AgentController:
             scope=self.scope,                 # sub-agents stay in scope too
             # Blackboard: the child shares the resolved AttackState by reference
             # (the lead's, or an isolated per-host one), so its findings are live
-            # there — no merge-back. It may not reset/reassign the target from its
+            # there - no merge-back. It may not reset/reassign the target from its
             # task wording (the host is fixed by the delegation).
             shared_state=child_state,
             allow_state_reset=False,
             # Share the event bus so the child's tool calls, findings, and RoE
-            # refusals land in the same engagement log (feature K) as the lead's —
+            # refusals land in the same engagement log (feature K) as the lead's -
             # wrapped in a ScopedBus that tags each event with this sub-agent's
             # identity/depth, so the UI can attribute and stream its full trace
             # (not just the delegate start/end banners).
@@ -1789,7 +1789,7 @@ class AgentController:
         )
 
         # Mission propagation: a sub-agent's context is isolated, so it only knows
-        # its narrow task unless we hand it the overall objective — which names the
+        # its narrow task unless we hand it the overall objective - which names the
         # concrete success artifacts (e.g. the exact proof-file path) it would
         # otherwise have to guess. Prepend the lead's mission plus an honesty
         # directive so a child that gains execution but can't find a named artifact
@@ -1797,20 +1797,20 @@ class AgentController:
         child_task = task
         if self.mission and self.mission.strip() and self.mission.strip() != task.strip():
             child_task = (
-                "MISSION CONTEXT — the overall objective you are helping accomplish. "
+                "MISSION CONTEXT - the overall objective you are helping accomplish. "
                 "Honor any specific target files, paths, or success criteria named "
                 f"here:\n{self.mission.strip()}\n\n"
                 f"YOUR ASSIGNED SUBTASK:\n{task}\n\n"
                 "Report only what you actually obtained from tool output. If you gain "
                 "execution but cannot retrieve a named target artifact, say so "
-                "explicitly — never invent it."
+                "explicitly - never invent it."
             )
 
         try:
             result = await child.run(child_task, session_id=f"{session_id}:{suffix}")
         finally:
             # Dispose the child's private backend (e.g. stop the container it
-            # started) — factories opt in by exposing `aclose` on the backend.
+            # started) - factories opt in by exposing `aclose` on the backend.
             await self._teardown_backend(child_backend)
 
         # No merge-back: the child shared the lead's AttackState by reference, so
@@ -1825,7 +1825,7 @@ class AgentController:
         content = (result.content or "").strip()
         if result.error and not content:
             content = f"[subagent error: {result.error}]"
-        header = (f"[subagent result — host {child_state.target}]" if isolated
+        header = (f"[subagent result - host {child_state.target}]" if isolated
                   else "[subagent result]")
         return f"{header}\n{content[:4000]}"
 
@@ -1846,7 +1846,7 @@ class AgentController:
 
     def _unverified_flags(self, content: str) -> list[str]:
         """Flag tokens in `content` that never appeared in this session's tool output
-        (attack_state.flags) — i.e. fabricated/guessed rather than actually captured."""
+        (attack_state.flags) - i.e. fabricated/guessed rather than actually captured."""
         if not content:
             return []
         found = list(dict.fromkeys(self.chain._FLAG_BRACE_RE.findall(content)))
@@ -1882,7 +1882,7 @@ class AgentController:
             )
         except Exception:
             pass
-        return (content.rstrip() + "\n\n⚠ UNVERIFIED — the token(s) below never "
+        return (content.rstrip() + "\n\n[!] UNVERIFIED - the token(s) below never "
                 "appeared in this session's tool output and may be fabricated; do not "
                 "trust them: " + ", ".join(unverified))
 
@@ -1938,7 +1938,7 @@ class AgentController:
             return ToolCallResult(
                 tool_name=tool_name,
                 tool_call_id=tool_call_id,
-                output=f"[STUB] Tool '{tool_name}' — dispatcher not connected.",
+                output=f"[STUB] Tool '{tool_name}' - dispatcher not connected.",
             )
         try:
             output = await self.tool_dispatcher.dispatch(tool_name, tool_args, session_id)
@@ -2032,7 +2032,7 @@ class AgentController:
                 "suggestion": str(data.get("suggestion", "")),
             }
         except Exception as exc:
-            logger.warning("Verifier unavailable/unparsable — passing: %s", exc)
+            logger.warning("Verifier unavailable/unparsable - passing: %s", exc)
             return {"ok": True, "reason": "", "suggestion": ""}
 
     # ------------------------------------------------------------------ #

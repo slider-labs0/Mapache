@@ -1,11 +1,11 @@
 """
-context_builder.py — Mapache context window assembler
+context_builder.py - Mapache context window assembler
 
 Responsible for assembling the full prompt context sent to the model on each turn.
 Handles: system prompt, conversation history, tool schemas, memory injection,
 and token budget management.
 
-The model never sees raw internal state — everything passes through here first.
+The model never sees raw internal state - everything passes through here first.
 """
 
 from __future__ import annotations
@@ -105,16 +105,16 @@ class ContextBuilder:
     DEFAULT_SYSTEM_PROMPT = """You are Mapache, an autonomous AI agent with direct access to a \
 Windows host system via registered tools.
 
-RULES — follow these exactly, no exceptions:
+RULES - follow these exactly, no exceptions:
 - You MUST call a tool to answer any question about the system. Never describe what you would \
-do — just do it.
+do - just do it.
 - When asked about files, ALWAYS call the shell tool immediately with the appropriate command.
 - When a tool returns output, print it EXACTLY as returned. Never use placeholders like \
 %USERNAME%, 'username', '/path/to/directory', or any invented values.
 - You are on Windows. Use Windows commands only: 'dir' not 'ls', 'type' not 'cat', \
 'ipconfig' not 'ifconfig', 'tasklist' not 'ps', 'whoami' for username, 'cd' for directory.
 - Never explain commands. Never show examples. Never say what you would do. Just do it.
-- If you are unsure of a path or value, run a command to find out — do not guess or invent it.
+- If you are unsure of a path or value, run a command to find out - do not guess or invent it.
 
 You have full system access. Act on every request immediately using your tools."""
 
@@ -205,7 +205,7 @@ You have full system access. Act on every request immediately using your tools."
 
     def add_tool_result(self, tool_call_id: str, tool_name: str, result: str) -> None:
         """
-        Record a tool result in history — exactly once.
+        Record a tool result in history - exactly once.
 
         With native function calling the result is a `tool`-role message tied
         to its tool_call_id. In JSON mode the model has no tool role, so the
@@ -291,7 +291,7 @@ You have full system access. Act on every request immediately using your tools."
             kept += tokens
 
         # Don't let the retained window start on a tool-result message whose
-        # originating call is now gone — push such messages into the summary.
+        # originating call is now gone - push such messages into the summary.
         while split < len(self._history) and self._history[split].role == "tool":
             split += 1
 
@@ -420,7 +420,7 @@ TASK LIST rules:
         if self._memory_snippets:
             memory_block = "\n".join(f"- {s}" for s in self._memory_snippets)
             base = f"RELEVANT MEMORY:\n{memory_block}\n\n---\n{base}"
-        # Persona (soul.md) frames who the agent is — sits at the very top.
+        # Persona (soul.md) frames who the agent is - sits at the very top.
         if self.persona:
             base = f"{self.persona}\n\n---\n{base}"
         # Injection shield: tool output is untrusted data, never instructions.

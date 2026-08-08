@@ -1,12 +1,12 @@
 """
-tor_controller.py — Mapache Tor controller
+tor_controller.py - Mapache Tor controller
 
 Manages the Tor process and provides circuit control.
 Uses the stem library for programmatic Tor control.
 
 Two modes:
-    1. System Tor   — 'tor' daemon running as a service (port 9050)
-    2. Tor Browser  — Tor Browser Bundle running (port 9150)
+    1. System Tor   - 'tor' daemon running as a service (port 9050)
+    2. Tor Browser  - Tor Browser Bundle running (port 9150)
 
 Capabilities:
     - Start/stop Tor process
@@ -256,7 +256,7 @@ class TorController:
         )
 
     # ------------------------------------------------------------------ #
-    # Process management (optional — for launching Tor directly)
+    # Process management (optional - for launching Tor directly)
     # ------------------------------------------------------------------ #
 
     async def start(self, tor_cmd: str = "tor") -> tuple[bool, str]:
@@ -276,7 +276,7 @@ class TorController:
             )
 
         if not HAS_STEM:
-            # Start without stem — just subprocess
+            # Start without stem - just subprocess
             try:
                 proc = await asyncio.create_subprocess_exec(
                     tor_path,
@@ -327,7 +327,7 @@ class TorController:
 
     @staticmethod
     def _check_port(host: str, port: int) -> None:
-        """Blocking port check — run in executor."""
+        """Blocking port check - run in executor."""
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(3)
         try:

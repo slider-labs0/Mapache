@@ -1,5 +1,5 @@
 """
-vector_store.py — Mapache vector store
+vector_store.py - Mapache vector store
 
 Semantic search over notes, findings, and session history.
 Converts text to embeddings and finds similar content by meaning.

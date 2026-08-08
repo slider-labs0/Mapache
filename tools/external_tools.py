@@ -1,16 +1,16 @@
 """
-external_tools.py — bring-your-own tools (integrations).
+external_tools.py - bring-your-own tools (integrations).
 
 Let an operator route their OWN tools into Mapache from config, without writing a
 plugin, in two flavours:
 
-  * HTTP/API tools  — wrap a REST endpoint (Shodan, Censys, VirusTotal, GreyNoise,
+  * HTTP/API tools  - wrap a REST endpoint (Shodan, Censys, VirusTotal, GreyNoise,
     an internal service …). Declared with a URL template + params; the agent calls
     it like any tool. API keys go in via ${ENV} refs so they never sit in the spec.
     Requests honor the egress profile (proxy/Tor), so lookups aren't attributable
     to the operator either.
 
-  * Command tools   — wrap a CLI or a GitHub repo (a tool the operator cloned or
+  * Command tools   - wrap a CLI or a GitHub repo (a tool the operator cloned or
     wants auto-cloned). Declared with a command template; runs through the execution
     backend, so it lands in the sandbox/pivot like the rest of the toolchain, and
     through the egress wrapper for anonymity.
@@ -72,7 +72,7 @@ def _rmtree_force(path: Path) -> None:
 
 
 def _resolve_env(text: str) -> str:
-    """Substitute ${VAR} from the environment (belt-and-suspenders — config already
+    """Substitute ${VAR} from the environment (belt-and-suspenders - config already
     interpolates, but a spec passed directly should resolve too). Unknown → empty."""
     return _ENV_RE.sub(lambda m: os.environ.get(m.group(1), ""), text or "")
 
@@ -96,7 +96,7 @@ def _param_schema(spec: dict) -> dict:
     """Build a valid JSON-Schema object from a param spec.
 
     A param may carry a convenience `"required": true` flag; that's promoted to the
-    object-level `required` array and STRIPPED from the property itself — an inline
+    object-level `required` array and STRIPPED from the property itself - an inline
     `required` boolean is invalid JSON Schema and strict validators (e.g. the xAI
     API) reject the whole tool with a 400.
     """
@@ -146,7 +146,7 @@ class HttpApiTool(BaseTool):
                 resp = await client.request(self._method, url, extra_headers=headers,
                                             content=body)
         except Exception as exc:
-            return ToolResult.fail(f"{self.name}: request failed — {exc}")
+            return ToolResult.fail(f"{self.name}: request failed - {exc}")
         text = (resp.text or "")[:8000]
         if not resp.success:
             return ToolResult.fail(
@@ -217,13 +217,13 @@ class CommandTool(BaseTool):
             self._clone_dir = d
             return d
         # Local: check for the checkout in Python and clone via argv (no shell), so
-        # it's correct on Windows cmd.exe too — POSIX shell quoting / `[ -d ]` don't
+        # it's correct on Windows cmd.exe too - POSIX shell quoting / `[ -d ]` don't
         # survive there.
         dest = Path.home() / ".mapache" / "tools" / self.name
         if not self._has_checkout(dest):
             # A stale/partial dir (e.g. an interrupted clone, or a `.git`-only
             # remnant a failed cleanup left behind) would otherwise wedge the tool
-            # forever — remove it so the clone lands in a clean path.
+            # forever - remove it so the clone lands in a clean path.
             if dest.exists():
                 _rmtree_force(dest)
             err = await self._clone_local(dest)
@@ -234,7 +234,7 @@ class CommandTool(BaseTool):
 
     @staticmethod
     def _has_checkout(dest: Path) -> bool:
-        """True only if dest looks like a COMPLETED clone — a working tree with real
+        """True only if dest looks like a COMPLETED clone - a working tree with real
         files, not an empty dir or a `.git`-only partial clone."""
         try:
             return dest.is_dir() and any(p.name != ".git" for p in dest.iterdir())
@@ -312,7 +312,7 @@ def build_external_tools(
             continue
         err = _valid(spec)
         if err:
-            warnings.append(f"integration skipped — {err}")
+            warnings.append(f"integration skipped - {err}")
             continue
         try:
             if str(spec["kind"]).lower() == "http":

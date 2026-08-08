@@ -1,5 +1,5 @@
 """
-kg_tools.py — agent-callable knowledge-graph tools (fresh-context state store).
+kg_tools.py - agent-callable knowledge-graph tools (fresh-context state store).
 
 A sub-agent spawned with a clean context uses these to pull what earlier agents
 found (`kg_query`) and to record its own findings for the next stage (`kg_add`),
@@ -71,7 +71,7 @@ class KGAddTool(_KGMixin, BaseTool):
     name = "kg_add"
     description = (
         "Record a finding in the shared knowledge graph so later agents (and the "
-        "lead) can use it. Persists to disk — survives across objectives and fresh "
+        "lead) can use it. Persists to disk - survives across objectives and fresh "
         "context windows."
     )
     parameters = {

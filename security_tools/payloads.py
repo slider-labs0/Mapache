@@ -1,10 +1,10 @@
 """
-payloads.py — offline payload + technique corpus (the "look it up, don't invent it" fix).
+payloads.py - offline payload + technique corpus (the "look it up, don't invent it" fix).
 
 Decepticon's biggest edge is that its agents QUERY a curated offensive knowledge base
 mid-attack instead of improvising payloads (Mapache's observed failure: it invents a
 wrong login/SSTI/XSS string). This is a compact, curated PayloadsAllTheThings-style
-subset — the critical 20% needed in most engagements — searchable by vuln class +
+subset - the critical 20% needed in most engagements - searchable by vuln class +
 keyword, fully offline. Each entry: vuln_class, title, payload, notes (bypass/when),
 source.
 

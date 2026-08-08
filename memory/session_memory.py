@@ -1,5 +1,5 @@
 """
-session_memory.py — Mapache session memory
+session_memory.py - Mapache session memory
 
 Tracks everything that happens within a single conversation session:
 - All tool calls and their outputs
@@ -7,7 +7,7 @@ Tracks everything that happens within a single conversation session:
 - Task history and outcomes
 - Variable store for passing data between turns
 
-This is the short-term memory — it lives for one session then gets
+This is the short-term memory - it lives for one session then gets
 summarized and written to the knowledge store for long-term recall.
 """
 
@@ -43,7 +43,7 @@ class TurnRecord:
 
 class SessionMemory:
     """
-    In-session memory — tracks the full history of one conversation.
+    In-session memory - tracks the full history of one conversation.
 
     Features:
     - Complete tool call log with outputs

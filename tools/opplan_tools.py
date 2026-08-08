@@ -1,5 +1,5 @@
 """
-opplan_tools.py — agent-callable OPPLAN tools (operation-plan management).
+opplan_tools.py - agent-callable OPPLAN tools (operation-plan management).
 
 The lead orchestrator seeds objectives, then transitions each one through
 pending → in_progress → passed | blocked as it dispatches specialists and reads

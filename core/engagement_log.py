@@ -1,15 +1,15 @@
 """
-engagement_log.py — auditable engagement log (feature K)
+engagement_log.py - auditable engagement log (feature K)
 
 A structured, timestamped, append-only trail of everything the agent did during
 an engagement: every tool call and its outcome, every finding (flag / credential
 / vuln / open port), every Rules-of-Engagement refusal, and delegation/verifier
-events. It is pure infrastructure — it subscribes to the existing `EventBus` and
+events. It is pure infrastructure - it subscribes to the existing `EventBus` and
 writes records; it never drives behavior.
 
 Why it earns its place: Hermes-style assistants give you a chat history; a
 security engagement needs a *deliverable* and an *audit trail*. This log is the
-raw material both for compliance/debrief and for the features that build on it —
+raw material both for compliance/debrief and for the features that build on it -
 automated reporting (L) reads it, and skill-synthesis (N) mines successful tool
 chains out of it. It is also where feature J's `agent.scope_refused` events land,
 turning "the guardrail fired" into a record someone can review.
@@ -125,7 +125,7 @@ class EngagementLog:
     # ------------------------------------------------------------------ #
 
     def record(self, kind: str, fields: dict[str, Any]) -> None:
-        """Append one record. Never raises — an audit log must not crash a turn."""
+        """Append one record. Never raises - an audit log must not crash a turn."""
         if self._closed:
             return
         rec = {"ts": _now(), "kind": kind, **fields}
@@ -161,7 +161,7 @@ class EngagementLog:
 
     def summary(self) -> str:
         c = self.counts()
-        return (f"{len(self._records)} records — "
+        return (f"{len(self._records)} records - "
                 f"{c.get('tool_call', 0)} tool calls, "
                 f"{c.get('finding', 0)} findings, "
                 f"{c.get('scope_refused', 0)} RoE refusals  →  {self.path}")
@@ -169,7 +169,7 @@ class EngagementLog:
     def export_markdown(self, out_path: Optional[str | Path] = None) -> Path:
         """Render the trail as a human-readable Markdown timeline (seeds L)."""
         out_path = Path(out_path) if out_path else self.path.with_suffix(".md")
-        lines = [f"# Engagement log — {self.session_id or self.path.stem}", ""]
+        lines = [f"# Engagement log - {self.session_id or self.path.stem}", ""]
         c = self.counts()
         lines.append(f"- Tool calls: {c.get('tool_call', 0)}")
         lines.append(f"- Findings: {c.get('finding', 0)}")
@@ -194,7 +194,7 @@ class EngagementLog:
             elif kind == "finding":
                 detail = f"finding {r.get('finding_type')}: {r.get('value')}"
             elif kind == "scope_refused":
-                detail = f"⛔ RoE refused `{r.get('tool')}` — {r.get('reason')}"
+                detail = f"[blocked] RoE refused `{r.get('tool')}` - {r.get('reason')}"
             elif kind in ("session_start", "session_end"):
                 detail = kind.replace("_", " ")
             else:

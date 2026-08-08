@@ -1,5 +1,5 @@
 """
-cve_grounding.py — turn recon into a prioritized attack plan (feature M)
+cve_grounding.py - turn recon into a prioritized attack plan (feature M)
 
 Discovered service versions are correlated to known CVEs with real CVSS scores
 and exploit availability, so the agent (and the report, L) work from *grounded*
@@ -8,11 +8,11 @@ it ranks the whole service inventory into a prioritized plan (version-confirmed 
 exploit-available rises to the top) and feeds high-confidence hits straight into
 the attack-state vulnerabilities and the suggested-next-step logic.
 
-Design — **offline and deterministic**, matching L's reporting and the project's
+Design - **offline and deterministic**, matching L's reporting and the project's
 local-first OPSEC stance: a curated catalog of high-signal CVEs ships in-process,
 so grounding is reproducible, testable, and never phones home. A live NVD /
 ExploitDB feed and RAG over the vector store are layered enhancements that can
-drop in behind `ground_services()` / `lookup()` later — they are not prerequisites
+drop in behind `ground_services()` / `lookup()` later - they are not prerequisites
 for the mechanism, and keeping the default offline means scan output never leaves
 the box just to be scored (the same guarantee feature O makes for routing).
 """
@@ -177,7 +177,7 @@ def lookup(cve_id: str) -> Optional[CVEEntry]:
 
 
 def severity_for_cve(value: str) -> str:
-    """Severity for a CVE id, from its CVSS — High is the safe default for a
+    """Severity for a CVE id, from its CVSS - High is the safe default for a
     named-but-uncatalogued vulnerability (used by the report builder, L)."""
     entry = lookup(value)
     return entry.severity if entry else "High"
@@ -227,7 +227,7 @@ def attack_plan(matches: list[CVEMatch]) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Live enrichment (optional layer over the offline catalog) — deferred M item
+# Live enrichment (optional layer over the offline catalog) - deferred M item
 # --------------------------------------------------------------------------- #
 
 NVD_API = "https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch="
@@ -298,7 +298,7 @@ class CVELookupTool(BaseTool):
     description = (
         "Correlate the discovered services/versions in the current attack state "
         "to known CVEs (offline catalog with CVSS + exploit availability), "
-        "returning a prioritized attack plan — deeper than a single searchsploit "
+        "returning a prioritized attack plan - deeper than a single searchsploit "
         "call. Optionally pass `cve` to look up one id, or `service` (+ optional "
         "`version`) for an ad-hoc query."
     )

@@ -1,5 +1,5 @@
 """
-web_weapons.py — specialized web-attack tools (broken-authz is 24% of XBOW).
+web_weapons.py - specialized web-attack tools (broken-authz is 24% of XBOW).
 
   - search_payloads : query the offline payload/technique corpus (don't invent).
   - jwt_tool        : parse / forge / alg-confusion / crack JWTs (RFC 7519).
@@ -96,7 +96,7 @@ class JwtTool(BaseTool):
         "- 'forge': re-sign a token with modified claims (json) using a known 'secret' "
         "(HS256/384/512), or 'alg_none' to strip the signature (alg=none attack).\n"
         "- 'crack': dictionary-attack an HS256/384/512 secret with a wordlist (list of "
-        "candidate secrets) — confirms a weak signing key.\n"
+        "candidate secrets) - confirms a weak signing key.\n"
         "Classic wins: alg=none, a weak HMAC secret, or (for RS256 servers that also "
         "accept HS256) signing with the RSA public key as the HMAC secret."
     )
@@ -106,7 +106,7 @@ class JwtTool(BaseTool):
             "action": {"type": "string", "description": "parse | forge | crack", "default": "parse"},
             "token": {"type": "string", "description": "The JWT to operate on"},
             "claims": {"type": "object", "description": "forge: claim overrides to merge (e.g. {\"role\":\"admin\"})"},
-            "secret": {"type": "string", "description": "forge/crack: the HMAC secret (forge) — omit with alg_none"},
+            "secret": {"type": "string", "description": "forge/crack: the HMAC secret (forge) - omit with alg_none"},
             "alg_none": {"type": "boolean", "description": "forge: produce an alg=none token", "default": False},
             "wordlist": {"type": "array", "items": {"type": "string"},
                          "description": "crack: candidate secrets to try"},
@@ -159,7 +159,7 @@ class JwtTool(BaseTool):
             for cand in (wordlist or ["secret", "password", "123456", "admin", "key",
                                       "changeme", "jwt", "s3cr3t"]):
                 if _sign_hs(alg, si, cand.encode()) == sig:
-                    return ToolResult.ok(f"CRACKED — secret is {cand!r}. Forge with "
+                    return ToolResult.ok(f"CRACKED - secret is {cand!r}. Forge with "
                                          f"action=forge secret={cand!r}.",
                                          metadata={"secret": cand})
             return ToolResult.ok("No candidate secret matched. Provide a larger wordlist.")
@@ -184,7 +184,7 @@ class GraphqlTool(BaseTool):
         "- 'analyze': given introspection JSON (schema), enumerate fields and flag "
         "ID-SHAPED arguments (id, *Id, uuid) that are classic IDOR candidates.\n"
         "Introspection is often left enabled; ID-typed args are where broken access "
-        "control lives — then test them with http_request/http_repeater."
+        "control lives - then test them with http_request/http_repeater."
     )
     parameters = {
         "type": "object",
@@ -214,7 +214,7 @@ class GraphqlTool(BaseTool):
                                             json={"query": _INTROSPECTION})
             if resp.status_code and resp.status_code >= 400:
                 return ToolResult.ok(
-                    f"Introspection returned {resp.status_code} — it may be disabled. "
+                    f"Introspection returned {resp.status_code} - it may be disabled. "
                     f"Body: {(resp.text or '')[:500]}")
             try:
                 data = json.loads(resp.text)
@@ -250,6 +250,6 @@ class GraphqlTool(BaseTool):
                             idor.append(f"{f.get('name')}.{a.get('name')}")
         out = ["GraphQL schema fields:"] + (lines or ["  (none found)"])
         if idor:
-            out.append("\nID-shaped args (IDOR candidates — fuzz these):")
+            out.append("\nID-shaped args (IDOR candidates - fuzz these):")
             out += [f"  - {x}" for x in idor]
         return "\n".join(out)

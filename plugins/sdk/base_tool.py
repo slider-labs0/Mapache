@@ -1,7 +1,7 @@
 """
-base_tool.py — Mapache tool SDK base class
+base_tool.py - Mapache tool SDK base class
 
-Every tool in Mapache — built-in or user-uploaded — extends BaseTool.
+Every tool in Mapache - built-in or user-uploaded - extends BaseTool.
 This defines the contract the tool dispatcher expects.
 
 A tool is:
@@ -74,15 +74,15 @@ class BaseTool(ABC):
     Abstract base for all Mapache tools.
 
     Subclasses must define:
-        name        — unique identifier (snake_case)
-        description — shown to the model, be specific
-        parameters  — JSON schema (OpenAI function calling format)
+        name        - unique identifier (snake_case)
+        description - shown to the model, be specific
+        parameters  - JSON schema (OpenAI function calling format)
 
     Subclasses should define (optional):
-        permissions     — set of Permission flags required
-        timeout         — override default execution timeout
-        version         — semver string
-        tags            — list of category strings
+        permissions     - set of Permission flags required
+        timeout         - override default execution timeout
+        version         - semver string
+        tags            - list of category strings
 
     Subclasses must implement:
         execute(**kwargs) → ToolResult
@@ -110,7 +110,7 @@ class BaseTool(ABC):
         """
         Execute the tool with the given arguments.
         kwargs are validated against self.parameters before this is called.
-        Always return a ToolResult — never raise from here.
+        Always return a ToolResult - never raise from here.
         """
         ...
 

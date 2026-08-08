@@ -1,5 +1,5 @@
 """
-operators.py — specialist sub-agent roster (feature P)
+operators.py - specialist sub-agent roster (feature P)
 
 Decepticon-style operator specialists for Mapache's delegation. The lead agent
 dispatches a bounded objective to one of these via `delegate(task, operator=…)`;
@@ -8,14 +8,14 @@ the chosen operator runs as a sub-agent with a *focused* system prompt and a
 
 Why this shape on a local-first agent: a generalist with the full 180-line
 offensive prompt and 30+ tools drifts and overflows small-model context. A
-`web_operator` with a tight prompt and ~6 tools makes far better decisions —
+`web_operator` with a tight prompt and ~6 tools makes far better decisions -
 specialization shrinks both the payload and the decision space. The domain
 tooling a specialist names (frida, binwalk, semgrep, evilginx2, modbus clients…)
 is driven through `kali_run`/`shell`, or the operator authors a wrapper with
 `create_tool`; the expertise lives in the prompt, not in bespoke tool code.
 
-Each Operator also carries the engagement constraints the roles imply — read-only
-roles, RoE-gating, hardware/remote requirements, blue-team deconfliction — which
+Each Operator also carries the engagement constraints the roles imply - read-only
+roles, RoE-gating, hardware/remote requirements, blue-team deconfliction - which
 are rendered into the prompt and (for read-only/gated roles) reinforce feature J.
 """
 
@@ -24,15 +24,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
-OPERATOR_PREAMBLE = """You are the {title} — a specialist sub-agent in an authorized \
+OPERATOR_PREAMBLE = """You are the {title} - a specialist sub-agent in an authorized \
 penetration test. You have ONE objective; pursue only it, then hand back a concise report.
 
 Operating discipline:
 - Act by emitting ONE tool call at a time; wait for the real result before the next step.
-- Never fabricate output. Quote exact artifacts — ports, versions, hashes, paths, flags.
+- Never fabricate output. Quote exact artifacts - ports, versions, hashes, paths, flags.
 - The CURRENT ATTACK STATE block is the shared source of truth. Read it. Anything you
   discover (flags, creds, vulns, ports) is recorded there automatically for the lead and
-  the other operators — you do not need to repeat it back.
+  the other operators - you do not need to repeat it back.
 - Stay within the engagement scope; an out-of-scope or forbidden action will be refused.
 - When the objective is met, or you are blocked and need the lead, stop and report plainly.
 {constraints}
@@ -60,7 +60,7 @@ class Operator:
     # effect when several models are installed under a routing strategy.
     model_role: str = "executor"
     # Cost/quality tier for model routing (Decepticon-style): "high" = the strong
-    # model (default — never downgrade a hacking-critical operator by accident);
+    # model (default - never downgrade a hacking-critical operator by accident);
     # "low" = a cheaper/faster model for high-volume, low-stakes discovery work
     # (recon/OSINT/broad scanning). Only takes effect with a tiered model provider.
     tier: str = "high"
@@ -120,8 +120,8 @@ def _add(op: Operator) -> None:
 
 _add(Operator(
     name="recon_operator", title="Recon Operator", phase="recon", tier="low",
-    prefer_local=False,  # early, low-sensitivity host/service discovery — cloud OK
-    description="Active host/service discovery — port and version scanning.",
+    prefer_local=False,  # early, low-sensitivity host/service discovery - cloud OK
+    description="Active host/service discovery - port and version scanning.",
     tools=_RECON,
     expertise="nmap sweeps (standard → version → vuln scripts) over in-scope hosts; "
               "map open ports to services and versions; hand the service inventory to "
@@ -129,9 +129,9 @@ _add(Operator(
 ))
 _add(Operator(
     name="osint_operator", title="OSINT Operator", phase="recon", read_only=True, tier="low",
-    prefer_local=False,  # works over public open-source intel — cloud OK
-    model_role="planner",  # research/correlation — reasoning-heavy
-    description="Passive open-source intel — domains, emails, employees, breaches, leaks.",
+    prefer_local=False,  # works over public open-source intel - cloud OK
+    model_role="planner",  # research/correlation - reasoning-heavy
+    description="Passive open-source intel - domains, emails, employees, breaches, leaks.",
     tools={"web_fetch", "web_search", "tor_fetch", "shell", "memory_save"},
     triggers=set(),
     expertise="passive footprinting only: domain/subdomain, email and employee "
@@ -140,12 +140,12 @@ _add(Operator(
 ))
 _add(Operator(
     name="web_operator", title="Web Operator", phase="enumeration",
-    prefer_local=False,  # web enumeration over the target's public surface — cloud OK
-    description="Web application attacks — content discovery, vuln scanning, exploitation.",
+    prefer_local=False,  # web enumeration over the target's public surface - cloud OK
+    description="Web application attacks - content discovery, vuln scanning, exploitation.",
     tools=_WEB, triggers={"80", "443", "8080", "8000", "http", "https"},
     expertise="RECON FIRST: before guessing endpoints or credentials, web_fetch the "
               "target and READ its 'Attack surface' (real form actions + field names, "
-              "referenced endpoints, HTML comments) — act on what the app actually "
+              "referenced endpoints, HTML comments) - act on what the app actually "
               "exposes, never on invented routes/params. Then: directory/content brute "
               "force (gobuster/ffuf), nikto/burp vuln scanning, parameter and auth "
               "testing, common web classes (injection, IDOR, SSRF, file upload, "
@@ -153,7 +153,7 @@ _add(Operator(
 ))
 _add(Operator(
     name="exploit_operator", title="Exploit Operator", phase="exploitation",
-    description="Service exploitation — match a vuln to a working exploit and land access.",
+    description="Service exploitation - match a vuln to a working exploit and land access.",
     tools=_EXPLOIT,
     expertise="correlate discovered service+version to exploits (msf_search/searchsploit), "
               "select and run the right module/PoC against the in-scope target, and confirm "
@@ -161,7 +161,7 @@ _add(Operator(
 ))
 _add(Operator(
     name="post_operator", title="Post-Exploit Operator", phase="post",
-    description="Post-exploitation — privesc, looting, credential and flag capture.",
+    description="Post-exploitation - privesc, looting, credential and flag capture.",
     tools=_POST,
     expertise="on a foothold: enumerate for privilege escalation (SUID, sudo, kernel, "
               "cron), dump and crack credentials (john), pivot, and capture flags. Linux "
@@ -172,7 +172,7 @@ _add(Operator(
 
 _add(Operator(
     name="cloud_hunter", title="Cloud Hunter", phase="exploitation",
-    description="Cloud infrastructure attacks — IAM, storage exposure, k8s, metadata abuse.",
+    description="Cloud infrastructure attacks - IAM, storage exposure, k8s, metadata abuse.",
     # http_request/http_repeater: raw calls to the metadata service (169.254.169.254 /
     # 169.254.170.2) for credential theft, and to cloud REST APIs.
     tools={"shell", "kali_run", "web_fetch", "http_request", "http_repeater",
@@ -205,9 +205,9 @@ _add(Operator(
 ))
 _add(Operator(
     name="analyst", title="Analyst", phase="analysis",
-    prefer_local=False,  # reasoning over already-collected findings — cloud OK
+    prefer_local=False,  # reasoning over already-collected findings - cloud OK
     model_role="planner",  # vuln research / exploit-chain construction
-    description="Vuln research & reporting — code review, SAST, dependency CVE sweeps.",
+    description="Vuln research & reporting - code review, SAST, dependency CVE sweeps.",
     tools=_ANALYSIS,
     expertise="source-code review, static analysis (semgrep/bandit/gitleaks), dependency "
               "CVE sweeps, and multi-hop exploit-chain construction from the collected "
@@ -243,7 +243,7 @@ _add(Operator(
 ))
 _add(Operator(
     name="iot_operator", title="IoT Operator", phase="exploitation", requires_remote=True,
-    description="IoT / embedded device attacks — firmware, hardcoded creds, radios.",
+    description="IoT / embedded device attacks - firmware, hardcoded creds, radios.",
     # web_fetch/http_request: the device's web UI / REST API; file_list/file_search:
     # walk the binwalk-extracted firmware root for creds/keys/configs.
     tools={"shell", "kali_run", "searchsploit", "file_read", "file_list", "file_search",
@@ -261,22 +261,22 @@ _add(Operator(
     tools={"shell", "kali_run", "web_fetch", "http_request", "create_tool"},
     triggers={"502", "20000", "102", "44818", "47808", "modbus", "s7", "bacnet", "dnp3"},
     expertise="Modbus/DNP3/S7comm/BACnet/OPC-UA enumeration. OT is fragile: read-only "
-              "enumeration first, and writes only against an explicit in-scope lab/canary — "
+              "enumeration first, and writes only against an explicit in-scope lab/canary - "
               "never a production controller.",
 ))
 _add(Operator(
     name="forensicator", title="Forensicator", phase="analysis", read_only=True,
     model_role="planner",  # timeline/IOC analysis + detection mapping
-    description="DFIR / purple-team validation — timelines, IOCs, attack→detection mapping.",
+    description="DFIR / purple-team validation - timelines, IOCs, attack→detection mapping.",
     tools={"shell", "kali_run", "file_read", "file_list", "file_search"},
     expertise="disk/memory/log/network timeline analysis, IOC extraction, and mapping the "
-              "engagement's actions to the detections they should have triggered — the "
+              "engagement's actions to the detections they should have triggered - the "
               "purple-team validation pass.",
 ))
 _add(Operator(
     name="supply_chain_operator", title="Supply Chain Operator", phase="exploitation",
     model_role="planner",  # dependency/pipeline analysis
-    description="Supply-chain attacks — dependencies, build pipelines, package integrity.",
+    description="Supply-chain attacks - dependencies, build pipelines, package integrity.",
     # web_fetch/http_request: query package-registry APIs (npm/pypi) for typosquat /
     # dependency-confusion checks and provenance metadata.
     tools={"shell", "kali_run", "file_read", "web_search", "web_fetch",
@@ -288,7 +288,7 @@ _add(Operator(
 
 
 # --------------------------------------------------------------------------- #
-# Vulnerability-research pipeline (Vulnresearch) — five staged specialists that
+# Vulnerability-research pipeline (Vulnresearch) - five staged specialists that
 # run in order, passing state exclusively through the knowledge graph (each stage
 # spawns with a fresh context, reads prior findings via kg_query, records its own
 # via kg_add). VULN_PIPELINE is the canonical stage order.
@@ -296,18 +296,18 @@ _add(Operator(
 
 _add(Operator(
     name="scanner", title="Scanner", phase="enumeration", model_role="executor", tier="low",
-    description="Vuln-research stage 1 — surface vulnerability candidates (CVE/CVSS).",
+    description="Vuln-research stage 1 - surface vulnerability candidates (CVE/CVSS).",
     tools={"nmap_scan", "kali_run", "searchsploit", "web_fetch", "http_request",
            "cve_lookup", "web_search"},
     expertise="broad discovery: enumerate services/versions and surface VULNERABILITY "
               "CANDIDATES with CVE/CVSS where known. Record each candidate to the "
               "knowledge graph (kg_add type=vulnerability) with the affected service; "
-              "do NOT confirm or exploit — that is later stages' job.",
+              "do NOT confirm or exploit - that is later stages' job.",
 ))
 _add(Operator(
     name="detector", title="Detector", phase="analysis", model_role="planner",
     read_only=True,
-    description="Vuln-research stage 2 — analyze candidates into confidence-rated findings.",
+    description="Vuln-research stage 2 - analyze candidates into confidence-rated findings.",
     tools={"file_read", "kali_run", "cve_lookup", "web_search", "searchsploit"},
     expertise="read the scanner's candidates from the knowledge graph, analyze each "
               "(version match, exposure, preconditions) and RATE CONFIDENCE. READ-ONLY: "
@@ -316,15 +316,15 @@ _add(Operator(
 ))
 _add(Operator(
     name="verifier", title="Verifier", phase="analysis", model_role="planner",
-    description="Vuln-research stage 3 — confirm findings (2+ methods for CRITICAL/HIGH).",
+    description="Vuln-research stage 3 - confirm findings (2+ methods for CRITICAL/HIGH).",
     tools={"kali_run", "shell", "http_request", "msf_search", "searchsploit"},
-    expertise="confirm detector findings with concrete evidence — for CRITICAL/HIGH use "
+    expertise="confirm detector findings with concrete evidence - for CRITICAL/HIGH use "
               "TWO independent methods. Quote the exact proof. Mark each finding verified "
               "or refuted in the knowledge graph; only verified findings proceed.",
 ))
 _add(Operator(
     name="patcher", title="Patcher", phase="report", model_role="planner",
-    description="Vuln-research stage 4 — produce a patch or configuration fix.",
+    description="Vuln-research stage 4 - produce a patch or configuration fix.",
     tools={"file_read", "file_write", "file_edit", "shell", "kali_run"},
     expertise="for each verified finding, produce a concrete remediation: a code patch "
               "or configuration change with exact file/line/setting. Write the fix to the "
@@ -332,7 +332,7 @@ _add(Operator(
 ))
 _add(Operator(
     name="exploiter", title="Exploiter", phase="exploitation", model_role="executor",
-    description="Vuln-research stage 5 — build a working proof-of-concept.",
+    description="Vuln-research stage 5 - build a working proof-of-concept.",
     tools={"msf_search", "msf_run", "kali_run", "shell", "searchsploit"},
     expertise="for a verified finding, build a WORKING proof-of-concept against the "
               "in-scope target and capture the exact evidence (session, output, artifact). "
@@ -349,20 +349,20 @@ VULN_PIPELINE = ("scanner", "detector", "verifier", "patcher", "exploiter")
 _add(Operator(
     name="soundwave", title="Engagement Planner", phase="recon", model_role="planner",
     read_only=True,
-    description="Engagement planner — turn the mission into an OPPLAN + engagement brief.",
+    description="Engagement planner - turn the mission into an OPPLAN + engagement brief.",
     tools={"opplan_add", "opplan_update", "opplan_show", "file_write", "web_search"},
     expertise="translate the operator's mission into a concrete plan BEFORE any "
               "offensive action: (1) seed the OPPLAN with ordered objectives via "
               "opplan_add, each owned by the right specialist (recon_operator → "
               "exploit_operator → post_operator, or the Vulnresearch stages); (2) write "
               "a short engagement brief to the workspace covering rules of engagement, "
-              "scope, objectives, and abort/cleanup notes. Do not scan or exploit — "
+              "scope, objectives, and abort/cleanup notes. Do not scan or exploit - "
               "planning only.",
 ))
 
 
 # Every specialist can read prior findings and record its own in the shared
-# knowledge graph — the durable channel between fresh-context objectives — and
+# knowledge graph - the durable channel between fresh-context objectives - and
 # record an evidence-first finding into the engagement report (the deliverable).
 for _op in _OPERATORS.values():
     _op.tools |= {"kg_query", "kg_add", "report_finding"}
@@ -390,7 +390,7 @@ def suggest_operators(ports: list[str], services: dict | None = None) -> list[st
     """Operators whose triggers match the discovered ports/services.
 
     Used to nudge the lead (in the attack-state 'next step') toward the right
-    specialist once recon reveals what's listening — e.g. port 80 → web_operator,
+    specialist once recon reveals what's listening - e.g. port 80 → web_operator,
     a Modbus/502 service → ics_operator.
     """
     tokens: set[str] = set()

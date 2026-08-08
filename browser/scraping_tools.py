@@ -1,13 +1,13 @@
 """
-scraping_tools.py — Mapache web scraping utilities
+scraping_tools.py - Mapache web scraping utilities
 
 Structured content extraction from web pages.
 Works with both surface web and .onion pages via HttpClient.
 
 Tools exposed to the agent:
-    web_fetch      — fetch a URL and return readable content
-    web_search     — search the web (DuckDuckGo, no API key needed)
-    extract_links  — extract all links from a page
+    web_fetch      - fetch a URL and return readable content
+    web_search     - search the web (DuckDuckGo, no API key needed)
+    extract_links  - extract all links from a page
 """
 
 from __future__ import annotations
@@ -85,7 +85,7 @@ def format_response(response: HttpResponse, max_content: int = 6000) -> str:
 # ------------------------------------------------------------------ #
 
 def _extract_forms(html: str) -> list[dict]:
-    """Forms with their REAL action/method and input field names — so the agent
+    """Forms with their REAL action/method and input field names - so the agent
     submits the actual field names (not a guessed 'username'/'password') and posts
     to the real endpoint instead of an invented one."""
     forms = []
@@ -105,7 +105,7 @@ def _extract_forms(html: str) -> list[dict]:
 
 
 def _extract_comments(html: str) -> list[str]:
-    """HTML comments — CTF apps routinely leak hints, paths, or creds in them."""
+    """HTML comments - CTF apps routinely leak hints, paths, or creds in them."""
     out = []
     for c in re.findall(r"<!--(.*?)-->", html, re.DOTALL):
         c = " ".join(c.split())
@@ -120,7 +120,7 @@ _ENDPOINT_HINTS = ("/api", "/rest", "/graphql", "/admin", "/user", "/account",
 
 def _extract_endpoints(html: str) -> list[str]:
     """Path-like strings the page references (in scripts, links, actions) that look
-    like real endpoints — the true routes, instead of ones the model invents."""
+    like real endpoints - the true routes, instead of ones the model invents."""
     eps: set[str] = set()
     for m in re.finditer(r'["\'](/[A-Za-z0-9_\-./?=&]{2,})["\']', html):
         p = m.group(1)
@@ -132,7 +132,7 @@ def _extract_endpoints(html: str) -> list[str]:
 
 def format_attack_surface(html: str, base_url: str = "") -> str:
     """A compact recon block: forms (with real field names), referenced endpoints,
-    and HTML comments — so the agent grounds its actions in the actual app instead
+    and HTML comments - so the agent grounds its actions in the actual app instead
     of blind-guessing routes and parameters (the observed failure mode)."""
     forms = _extract_forms(html)
     endpoints = _extract_endpoints(html)
@@ -141,7 +141,7 @@ def format_attack_surface(html: str, base_url: str = "") -> str:
     if forms:
         lines.append("Forms:")
         for f in forms[:6]:
-            lines.append(f"  {f['method']} {f['action'] or '(self)'} — fields: "
+            lines.append(f"  {f['method']} {f['action'] or '(self)'} - fields: "
                          f"{', '.join(f['fields']) or '(none)'}")
     if endpoints:
         lines.append("Referenced endpoints: " + ", ".join(endpoints))
@@ -159,7 +159,7 @@ class WebSession:
     login on one request authenticates the next.
 
     The web tools build a fresh HttpClient per call, so without this a Set-Cookie
-    from a login was thrown away and the very next request was unauthenticated —
+    from a login was thrown away and the very next request was unauthenticated -
     the root cause of the auth / IDOR / privilege-escalation failures. Share one
     WebSession between the web tools (e.g. web_fetch + http_request) and the login
     state carries across every call. httpx scopes cookies by domain, so a single
@@ -185,7 +185,7 @@ class WebSession:
         httpx (0.28) COPIES a passed jar into the client rather than sharing it, so
         a response's Set-Cookie lands in the client's throwaway jar, not ours. We
         therefore round-trip: seed each HttpClient from this jar, then absorb the
-        client's jar back here after the request — so login state survives across
+        client's jar back here after the request - so login state survives across
         the fresh client built for every tool call."""
         if self.cookies is None or client_cookies is None:
             return
@@ -286,8 +286,8 @@ class HttpRequestTool(BaseTool):
     name = "http_request"
     description = (
         "Send an arbitrary HTTP request (GET/POST/PUT/DELETE/PATCH) to a URL and "
-        "return the status, response headers, and raw body. Use this — NOT shell "
-        "curl — for web-API testing: authentication, injection, and access-control "
+        "return the status, response headers, and raw body. Use this - NOT shell "
+        "curl - for web-API testing: authentication, injection, and access-control "
         "attacks. The body and headers are sent as structured data, so payloads "
         "that contain quotes (e.g. a SQL injection like ' OR 1=1--) are transported "
         "verbatim with no shell-escaping problems. Provide a JSON body via "
@@ -332,7 +332,7 @@ class HttpRequestTool(BaseTool):
         # Egress/OPSEC: route the request through the configured proxy/Tor so the
         # target's web logs show that IP, not the operator's.
         self.egress = egress
-        # Persistent cookie jar shared with the other web tools (see WebSession) —
+        # Persistent cookie jar shared with the other web tools (see WebSession) -
         # a login here authenticates every later http_request/web_fetch call.
         self.session = session or WebSession()
         # Shared Burp-lite history: every request is recorded so http_repeater can
@@ -384,7 +384,7 @@ class HttpRequestTool(BaseTool):
         lines = [f"{method.upper()} {response.url}",
                  f"Status: {response.status_code} ({response.elapsed_ms:.0f}ms)"]
         if ex_id:
-            lines.append(f"[recorded as {ex_id} — replay/tamper/diff it with http_repeater]")
+            lines.append(f"[recorded as {ex_id} - replay/tamper/diff it with http_repeater]")
         for h in self._KEY_HEADERS:
             if h in {k.lower() for k in response.headers}:
                 val = next(v for k, v in response.headers.items() if k.lower() == h)
@@ -424,7 +424,7 @@ class HttpRepeaterTool(BaseTool):
         "USE THIS FOR IDOR / BROKEN ACCESS CONTROL: replay an authenticated request "
         "changing ONE id/param (e.g. account?id=123 -> 124) and it auto-DIFFS the two "
         "responses. A DIFFERENT body = you read another user's object (a CONFIRMED "
-        "IDOR — the flag is often there). An IDENTICAL body = the param is ignored "
+        "IDOR - the flag is often there). An IDENTICAL body = the param is ignored "
         "(dead vector; change approach). Session cookies are reused automatically.\n"
         "actions: 'history' (list recorded requests), 'show' (full request+response "
         "of one id), 'replay' (re-send id N with optional tamper overrides + auto-diff "
@@ -440,7 +440,7 @@ class HttpRepeaterTool(BaseTool):
                    "description": "Exchange id to show/replay (e.g. 'r3')"},
             "id_b": {"type": "string",
                      "description": "Second exchange id for action='diff'"},
-            # Tamper overrides for action='replay' — any omitted field reuses the
+            # Tamper overrides for action='replay' - any omitted field reuses the
             # original request's value. This is how you flip the IDOR id.
             "url": {"type": "string", "description": "replay: override the URL"},
             "method": {"type": "string", "description": "replay: override the method"},
@@ -482,7 +482,7 @@ class HttpRepeaterTool(BaseTool):
         if action == "history":
             items = self.history.search(search) if search else self.history.recent(25)
             if not items:
-                return ToolResult.ok("(no requests recorded yet — send some with http_request)")
+                return ToolResult.ok("(no requests recorded yet - send some with http_request)")
             return ToolResult.ok("Recorded HTTP exchanges:\n"
                                  + "\n".join("  " + e.summary() for e in items))
 
@@ -550,11 +550,11 @@ class HttpRepeaterTool(BaseTool):
         head = (f"diff {a.id} (status {a.status}, {len(a.resp_body)}B) "
                 f"vs {b.id} (status {b.status}, {len(b.resp_body)}B)")
         if not changed and a.status == b.status:
-            return (head + "\nIDENTICAL response — the changed input had NO effect "
+            return (head + "\nIDENTICAL response - the changed input had NO effect "
                     "(dead vector). Try a different parameter/technique.")
-        verdict = ("DIFFERENT response — the change altered the output. If you swapped "
+        verdict = ("DIFFERENT response - the change altered the output. If you swapped "
                    "an id/owner, you likely accessed another principal's data (possible "
-                   "IDOR / broken access control) — inspect it for the flag.")
+                   "IDOR / broken access control) - inspect it for the flag.")
         return f"{head}\n{verdict}\n--- body diff ---\n{rendered}"
 
 
@@ -718,7 +718,7 @@ class TorFetchTool(BaseTool):
             return ToolResult.fail(f"Fetch failed: {response.error}")
 
         output = format_response(response, max_content=max_length)
-        output = f"[Routed via Tor — External IP: {ip}]\n\n" + output
+        output = f"[Routed via Tor - External IP: {ip}]\n\n" + output
 
         return ToolResult.ok(
             output,
@@ -732,7 +732,7 @@ class EgressCheckTool(BaseTool):
         "OPSEC leak test: report the PUBLIC IP a target would see for your traffic, "
         "by fetching an IP-echo service through the configured egress (proxy/Tor). "
         "Run this before attacking to confirm your real IP is hidden. If egress is "
-        "'direct', the target sees your REAL IP — this warns you of that."
+        "'direct', the target sees your REAL IP - this warns you of that."
     )
     parameters = {"type": "object", "properties": {}}
     permissions = {Permission.NETWORK}
@@ -745,7 +745,7 @@ class EgressCheckTool(BaseTool):
     async def execute(self, **kwargs: Any) -> ToolResult:
         proxy = self.egress.httpx_proxy() if self.egress is not None else None
         desc = self.egress.describe() if self.egress is not None else \
-            "direct — no egress configured"
+            "direct - no egress configured"
         active = bool(self.egress and self.egress.active)
         try:
             async with HttpClient(timeout=15.0, proxy=proxy) as client:
@@ -761,7 +761,7 @@ class EgressCheckTool(BaseTool):
         lines = [f"Egress        : {desc}",
                  f"Apparent IP   : {ip}  (this is what a target sees)"]
         if not active:
-            lines.append("⚠ WARNING: egress is DIRECT — this is your REAL IP. Set an "
+            lines.append("[!] WARNING: egress is DIRECT - this is your REAL IP. Set an "
                          "egress proxy/Tor or attack from a pivot to hide it.")
         return ToolResult.ok("\n".join(lines),
                              metadata={"apparent_ip": ip, "active": active})

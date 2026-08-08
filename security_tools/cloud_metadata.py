@@ -1,5 +1,5 @@
 """
-cloud_metadata.py — dedicated cloud metadata-service (IMDS) tool.
+cloud_metadata.py - dedicated cloud metadata-service (IMDS) tool.
 
 Metadata-service abuse is THE cloud credential-theft primitive. A generic
 http_request can reach it, but the versions/headers/paths are fiddly and cloud-
@@ -24,7 +24,7 @@ _AZURE = "http://169.254.169.254/metadata"
 class CloudMetadataTool(BaseTool):
     name = "cloud_metadata"
     description = (
-        "Query a cloud instance metadata service (IMDS) for credentials/identity — the "
+        "Query a cloud instance metadata service (IMDS) for credentials/identity - the "
         "core cloud credential-theft technique. provider: aws | gcp | azure | ecs | auto. "
         "For AWS it does IMDSv2 correctly (PUT a token, then GET the role + its temporary "
         "keys). Also prints the exact URLs+headers so you can replay them through an SSRF "

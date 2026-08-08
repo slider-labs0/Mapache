@@ -1,10 +1,10 @@
 """
-skill_format.py — author skills as SKILL.md files (Decepticon-parity #6)
+skill_format.py - author skills as SKILL.md files (Decepticon-parity #6)
 
 Mapache's just-in-time playbooks (`core/skills_playbook.py`) were code-only: each
 `Skill` is a Python object with a hand-written predicate. Decepticon packages skills
 as **SKILL.md files with YAML-ish frontmatter** so a technique can be authored,
-shared, and versioned as plain Markdown — no code change to add one.
+shared, and versioned as plain Markdown - no code change to add one.
 
 This module is that formatter: it parses a SKILL.md into a `SkillSpec`, renders a
 spec back to SKILL.md (round-trips), turns a spec into a runtime `Skill` whose
@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SkillSpec:
-    """The parsed contents of a SKILL.md — frontmatter fields plus the body."""
+    """The parsed contents of a SKILL.md - frontmatter fields plus the body."""
     name: str
     description: str = ""
     when_to_use: str = ""
@@ -63,7 +63,7 @@ class SkillSpec:
 
 def _split_frontmatter(text: str) -> "tuple[str, str]":
     """Return (frontmatter, body). A document that doesn't open with a `---` fence
-    has no frontmatter — the whole thing is the body."""
+    has no frontmatter - the whole thing is the body."""
     t = (text or "").lstrip("﻿")            # tolerate a BOM
     if not t.startswith("---"):
         return "", text or ""
@@ -167,7 +167,7 @@ TEMPLATE = format_skill_md(SkillSpec(
     target_scheme=["http", "https"],
     phase="exploitation",
     tools=["http_request"],
-    body=("ACTIVE PLAYBOOK — describe the technique here. This body is injected "
+    body=("ACTIVE PLAYBOOK - describe the technique here. This body is injected "
           "into the model's context verbatim whenever the skill matches, so write "
           "it as concrete, imperative guidance (tools, endpoints, payloads, proof)."),
 ))
@@ -220,7 +220,7 @@ def load_skill_file(path: str) -> Optional[Skill]:
         return None
     spec = parse_skill_md(text)
     if not spec.name or not spec.body:
-        logger.warning("Skipping %s — a SKILL.md needs a `name` and a body.", path)
+        logger.warning("Skipping %s - a SKILL.md needs a `name` and a body.", path)
         return None
     skill = spec_to_skill(spec)
     register_skill(skill)

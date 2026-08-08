@@ -1,10 +1,10 @@
 """
-note_store.py — Mapache note store
+note_store.py - Mapache note store
 
 Persistent structured notes that survive across sessions.
 The agent can read, write, search, and tag notes autonomously.
 
-Think of it as the agent's notebook — it stores:
+Think of it as the agent's notebook - it stores:
 - Recon findings (open ports, discovered services)
 - Target information
 - Credentials and secrets found

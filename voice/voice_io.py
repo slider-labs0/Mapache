@@ -1,17 +1,17 @@
 """
-voice_io.py — speech I/O providers (Phase 9)
+voice_io.py - speech I/O providers (Phase 9)
 
 Lets Mapache speak its responses and transcribe audio, behind a provider
 abstraction so the heavy/optional dependencies stay optional:
 
-- `TTSProvider` — `speak(text)` (out loud) / `synthesize(text, path)` (to a file).
-- `STTProvider` — `transcribe(path) -> str`.
+- `TTSProvider` - `speak(text)` (out loud) / `synthesize(text, path)` (to a file).
+- `STTProvider` - `transcribe(path) -> str`.
 
 The defaults are `NullTTS` / `NullSTT`: dependency-free no-ops that make the whole
 subsystem safe to wire in unconditionally (voice simply does nothing until enabled
 with a real backend). Real backends are constructed only when their package is
-importable — `pyttsx3` for offline local TTS, `faster-whisper`/`openai-whisper`
-for STT — so the default install needs nothing and tests run offline. Backend
+importable - `pyttsx3` for offline local TTS, `faster-whisper`/`openai-whisper`
+for STT - so the default install needs nothing and tests run offline. Backend
 selection mirrors the H/I pattern: a config dict picks the provider, and an
 unavailable choice degrades to the null provider with a warning rather than
 crashing. Local backends keep voice on-box (OPSEC); a cloud TTS (e.g. ElevenLabs)

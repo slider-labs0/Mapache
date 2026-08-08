@@ -1,5 +1,5 @@
 """
-smoke_cli.py — live CLI smoke harness (Tier 2)
+smoke_cli.py - live CLI smoke harness (Tier 2)
 
 Drives the real `python -m cli` end-to-end against a running Ollama model by
 scripting a stdin session, waiting for the `you >` prompt to return between
@@ -7,7 +7,7 @@ lines (so a command is never injected mid-turn as steering), and asserting on
 the captured output.
 
 This closes the gap the unit suite can't: it exercises the actual CLI entrypoint
-+ a real model. It is NOT part of `test_core.py` (that stays Ollama-free) — run
++ a real model. It is NOT part of `test_core.py` (that stays Ollama-free) - run
 it explicitly when a model is up:
 
     $env:PYTHONUTF8=1; python tests/smoke_cli.py --model qwen2.5:32b
@@ -96,7 +96,7 @@ def run_create_tool_scenario(model: str, boot_timeout: float, turn_timeout: floa
     s = CliSession(model, REPO)
     try:
         if not s.wait_for_prompt(1, boot_timeout):
-            print("[smoke] FAIL — CLI never reached the first prompt")
+            print("[smoke] FAIL - CLI never reached the first prompt")
             print(s.text[-800:])
             return 1
 
@@ -110,7 +110,7 @@ def run_create_tool_scenario(model: str, boot_timeout: float, turn_timeout: floa
         print("[smoke] prompt sent; waiting for the turn to finish (model is slow) …")
 
         if not s.wait_for_prompt(2, turn_timeout):
-            print("[smoke] FAIL — turn did not complete before timeout")
+            print("[smoke] FAIL - turn did not complete before timeout")
             print(s.text[-1500:])
             return 1
 
@@ -123,12 +123,12 @@ def run_create_tool_scenario(model: str, boot_timeout: float, turn_timeout: floa
     out = s.text
 
     # --- assertions --------------------------------------------------- #
-    # GATE: what the create_tool *feature* guarantees — the model can author and
+    # GATE: what the create_tool *feature* guarantees - the model can author and
     # persist a working tool. These are deterministic.
     # INFO: whether the model then *invokes* it this turn is model behavior we
     # can't control (and which the offensive system prompt actively fights by
     # pulling the model into memory_recall / a stale engagement). Reported, not
-    # gated — invocation was proven separately in earlier runs.
+    # gated - invocation was proven separately in earlier runs.
     import json
     import re
 
@@ -162,7 +162,7 @@ def run_create_tool_scenario(model: str, boot_timeout: float, turn_timeout: floa
         print(f"  {'ok' if passed else '--'}  {label}")
     if not (use_count >= 1):
         print("  note: model drifted into memory/other tools instead of calling "
-              "add_one — tracked as the system-prompt instruction-drift issue.")
+              "add_one - tracked as the system-prompt instruction-drift issue.")
 
     return 0 if ok else 1
 
@@ -179,7 +179,7 @@ def _clean(text: str) -> str:
 def run_broad_scenario(model: str, boot_timeout: float, turn_timeout: float) -> int:
     """
     Drive a realistic multi-feature session like a user would, and dump the
-    transcript for qualitative review. Exploratory — exits non-zero only on a
+    transcript for qualitative review. Exploratory - exits non-zero only on a
     hang/crash, not on model wording.
     """
     shutil.rmtree(REPO / "plugins" / "generated" / "hex_encode", ignore_errors=True)
@@ -204,7 +204,7 @@ def run_broad_scenario(model: str, boot_timeout: float, turn_timeout: float) -> 
     results: list[tuple[str, bool]] = []
     try:
         if not s.wait_for_prompt(1, boot_timeout):
-            print("[broad] FAIL — CLI never reached the first prompt")
+            print("[broad] FAIL - CLI never reached the first prompt")
             print(_clean(s.text)[-800:])
             return 1
         count = 1

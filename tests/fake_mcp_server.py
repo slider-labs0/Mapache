@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-fake_mcp_server.py — a minimal MCP server over stdio, for tests.
+fake_mcp_server.py - a minimal MCP server over stdio, for tests.
 
 Speaks just enough of the protocol (newline-delimited JSON-RPC 2.0) to exercise
 Mapache's MCP client: initialize, tools/list, tools/call. Exposes one tool,

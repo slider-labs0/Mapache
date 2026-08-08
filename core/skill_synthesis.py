@@ -1,5 +1,5 @@
 """
-skill_synthesis.py — learn a reusable skill from a successful chain (feature N)
+skill_synthesis.py - learn a reusable skill from a successful chain (feature N)
 
 Closes the self-improvement loop, the offensive way. After an engagement reaches
 a flag/foothold, the sequence of tool calls that got there (recorded by the
@@ -7,7 +7,7 @@ engagement log, K) is a *proven attack chain*. This module turns that concrete,
 target-specific run into a **parameterized, reusable tool** authored through the
 existing `create_tool` path (A): the same chain, re-runnable against a new target.
 
-That is Hermes-style "learn from experience", specialized to attack techniques —
+That is Hermes-style "learn from experience", specialized to attack techniques -
 and the synthesized skill is a normal generated-tool package, so it is curated by
 the same lifecycle (A) and will be shareable through the hub (I). Provenance:
 each synthesized skill is signed with the local key (`core/provenance.py`), so it
@@ -150,7 +150,7 @@ def synthesize_from_log(
                list((getattr(attack_state, "services", {}) or {}).values()) or ["chain"])[0]
     description = (f"Replays the proven attack chain ({primary}) that reached "
                   f"{'a flag' if flags else 'a foothold'} during session "
-                  f"{session_id or '?'} — pass a new target to re-run it.")
+                  f"{session_id or '?'} - pass a new target to re-run it.")
 
     if commands:
         code = (
@@ -167,7 +167,7 @@ def synthesize_from_log(
         )
         runnable = len(commands)
     else:
-        # No runnable steps — return the proven playbook so the agent can follow it.
+        # No runnable steps - return the proven playbook so the agent can follow it.
         code = f'return {json.dumps(methodology)}\n'
         runnable = 0
 
@@ -228,7 +228,7 @@ class SynthesizeSkillTool(BaseTool):
     description = (
         "After you have completed an attack chain (reached a flag or a foothold), "
         "call this to save the proven sequence of steps as a reusable, signed tool "
-        "you can re-run against a new target later. No arguments — it reads the "
+        "you can re-run against a new target later. No arguments - it reads the "
         "current engagement."
     )
     parameters = {"type": "object", "properties": {}}

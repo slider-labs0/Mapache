@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-mapache_cli.py — Mapache CLI (Phase 7 — Optimized for full-scale attacks)
+mapache_cli.py - Mapache CLI (Phase 7 - Optimized for full-scale attacks)
 """
 
 from __future__ import annotations
@@ -126,7 +126,7 @@ every target you are given. Your job is to EXECUTE, not to discuss.
 ═══════════════════════════════════════════
 MATCH THE SCOPE OF THE REQUEST (read this first):
 ═══════════════════════════════════════════
-- Do EXACTLY what the operator asked — no more. Match the breadth of your actions to the breadth
+- Do EXACTLY what the operator asked - no more. Match the breadth of your actions to the breadth
   of the request. A narrow request gets a narrow response.
 - NAMED SINGLE ACTION → run that one tool, report the result, then STOP and wait. Do NOT auto-
   advance the workflow, do NOT delegate to other operators, do NOT run extra tools.
@@ -146,20 +146,20 @@ TOOL-CALL DISCIPLINE (most important):
 - To act, emit ONE tool call. Do not narrate, do not explain, do not ask permission first.
 - After a tool call, STOP and wait for the real result. Never write a tool's output yourself.
 - Use ONLY the result the tool actually returns. If you have not called a tool, you do not know
-  its output — call it. Never invent ports, hashes, files, paths, or flags.
+  its output - call it. Never invent ports, hashes, files, paths, or flags.
 - One tool per step. Read the result, then decide the next single step. Chain steps until the
   objective is met.
 - Provide a plain-text answer ONLY when the task is complete or you are blocked and need the
   operator. Otherwise, keep calling tools.
-- EXCEPTION — general knowledge: if the operator asks something you already know (a definition,
+- EXCEPTION - general knowledge: if the operator asks something you already know (a definition,
   what an acronym stands for, a fact), ANSWER IT DIRECTLY in plain text. Do NOT use tools for
   facts you already know. Tools are for acting on the target/system, not for looking up trivia.
   (e.g. "what does VM stand for?" → answer "Virtual Machine"; no tool call.)
-- Never call the SAME tool with the SAME arguments twice — you already have that result. If a
+- Never call the SAME tool with the SAME arguments twice - you already have that result. If a
   lookup is blocked, fails, or returns nothing useful, fall back to your own knowledge and
   answer; never report a tool's error/refusal text as your final answer.
 - Required arguments are mandatory. nmap_scan ALWAYS needs target=<ip>; never call it without
-  one. The active target and known facts are in the CURRENT ATTACK STATE block — use them.
+  one. The active target and known facts are in the CURRENT ATTACK STATE block - use them.
 
 ═══════════════════════════════════════════
 ADAPTIVE TOOLSET:
@@ -197,9 +197,9 @@ TOOL MAPPING (intent → call):
 "what do you know"            → memory_recall(query=<target>)
 
 ═══════════════════════════════════════════
-ATTACK WORKFLOW (ONLY for full-engagement requests — see MATCH THE SCOPE above):
+ATTACK WORKFLOW (ONLY for full-engagement requests - see MATCH THE SCOPE above):
 ═══════════════════════════════════════════
-When — and only when — the operator asks for a broad objective (pentest / compromise / get root /
+When - and only when - the operator asks for a broad objective (pentest / compromise / get root /
 find the flag / full assessment), work these phases in order. For a named single action, do NOT
 enter this workflow; run the one tool and stop.
 1. RECON      → nmap_scan standard, then nmap_scan version on the open ports
@@ -209,7 +209,7 @@ enter this workflow; run the one tool and stop.
 4. POST       → find flags, escalate privileges, dump credentials
 5. REPORT     → the DELIVERABLE. The moment you CONFIRM a weakness (not just a flag), call
                 report_finding with title, severity, asset, and EVIDENCE (the actual
-                request+response / command output that proves it) — impact + remediation
+                request+response / command output that proves it) - impact + remediation
                 auto-fill. A proven finding IS success on a real target; the flag is optional.
                 Also memory_target_store the facts.
 Do not skip ahead: do not attempt exploitation before a scan has returned open ports.
@@ -217,7 +217,7 @@ Do not skip ahead: do not attempt exploitation before a scan has returned open p
 ═══════════════════════════════════════════
 EXECUTION RULES:
 ═══════════════════════════════════════════
-- Reason over each tool's output and decide the next action from it — do not merely echo it
+- Reason over each tool's output and decide the next action from it - do not merely echo it
   back. Never fabricate results; quote specific artifacts (ports, versions, hashes, paths,
   flags) exactly as the tool returned them.
 - The agent host is Windows: in shell use dir, type, ipconfig, whoami, tasklist. Once you have a
@@ -256,14 +256,14 @@ class MapacheCLI:
         # Presentation layer (feature B): rich UI on a TTY when `rich` is
         # installed and --plain wasn't passed; otherwise the plain line printer.
         self.render = make_renderer(getattr(args, "plain", False))
-        self.exec_backend = None  # feature H — built in setup() from config
-        self.egress = None        # operator anonymity — built in setup() from config
-        self._integrations = []   # bring-your-own tools — built in setup()
-        self.hub_client = None    # feature I — built in setup() if a registry is set
-        self.voice = None         # Phase 9 — built in setup() from config
+        self.exec_backend = None  # feature H - built in setup() from config
+        self.egress = None        # operator anonymity - built in setup() from config
+        self._integrations = []   # bring-your-own tools - built in setup()
+        self.hub_client = None    # feature I - built in setup() if a registry is set
+        self.voice = None         # Phase 9 - built in setup() from config
 
         # Config layer (C0/C1). Resolve the effective settings across the full
-        # precedence chain — CLI flag > project > global > env > default — by
+        # precedence chain - CLI flag > project > global > env > default - by
         # handing load_config ONLY the flags the operator explicitly passed
         # (sparse overrides). This is what makes `mapache setup`'s saved
         # default_model / strategy / allow_cloud actually take effect on a bare
@@ -305,8 +305,8 @@ class MapacheCLI:
         """Pick the working dir (holds plugins/generated, engagements, project config).
 
         An explicit --dir always wins. Otherwise use the current directory when it's
-        writable; when it isn't — e.g. `mapache serve` launched from C:\\Windows\\
-        System32 as a global command — fall back to a stable per-user workspace so
+        writable; when it isn't - e.g. `mapache serve` launched from C:\\Windows\\
+        System32 as a global command - fall back to a stable per-user workspace so
         the app doesn't crash trying to write where it can't. Returns (dir, note)."""
         if arg_dir:
             return os.path.abspath(arg_dir), None
@@ -318,7 +318,7 @@ class MapacheCLI:
             os.makedirs(home, exist_ok=True)
         except OSError:
             pass
-        return home, f"cwd not writable ({cwd}) — using {home}"
+        return home, f"cwd not writable ({cwd}) - using {home}"
 
     @staticmethod
     def _cli_overrides(args: argparse.Namespace) -> dict:
@@ -381,11 +381,11 @@ class MapacheCLI:
 
         if primary_is_cloud:
             if not allow_cloud:
-                print(f"\n  ✗  '{self.model}' is a cloud model "
+                print(f"\n  x  '{self.model}' is a cloud model "
                       f"({primary_prov.name}); re-run with --allow-cloud.\n")
                 return False
             if not primary_prov.is_usable:
-                print(f"\n  ✗  Cloud provider '{primary_prov.name}' has no API key.")
+                print(f"\n  x  Cloud provider '{primary_prov.name}' has no API key.")
                 print(f"     Set it in ~/.mapache/config.json or its env var.\n")
                 return False
             primary = pool.get(self.model)  # OpenAICompatibleProvider
@@ -394,13 +394,13 @@ class MapacheCLI:
             primary = OllamaProvider(model=self.model, base_url=self.ollama_url)
             pool.register(self.model, primary)  # reuse the built client
             if not await primary.is_available():
-                print(f"\n  ✗  Cannot reach Ollama at {self.ollama_url}")
+                print(f"\n  x  Cannot reach Ollama at {self.ollama_url}")
                 print(f"     Run: ollama serve\n")
                 return False
             local_models = await primary.list_models()
             model_base = self.model.split(":")[0]
             if local_models and not any(model_base in m for m in local_models):
-                print(f"\n  ⚠  Model '{self.model}' not found.")
+                print(f"\n  [!]  Model '{self.model}' not found.")
                 pull = input(f"     Pull it now? [y/N] ").strip().lower()
                 if pull == "y":
                     await primary.pull_model(self.model)
@@ -414,7 +414,7 @@ class MapacheCLI:
         async def confirm_cb(tool_name: str, args: dict) -> bool:
             if not self.confirm:
                 return True
-            print(f"\n  ⚠ Confirm {tool_name}({str(args)[:100]})? [Y/n] ", end="", flush=True)
+            print(f"\n  [!] Confirm {tool_name}({str(args)[:100]})? [Y/n] ", end="", flush=True)
             # Read the answer via the single stdin reader (the steering loop
             # routes the next typed line to this future) so we don't open a
             # second competing reader on stdin.
@@ -427,7 +427,7 @@ class MapacheCLI:
                 self._pending_confirm = None
             return ans != "n"
 
-        # Phase 7 — per-role model routing. RoutedModel consults the
+        # Phase 7 - per-role model routing. RoutedModel consults the
         # RoutingEngine on every call and dispatches to the best installed
         # model for the role (the agent loop runs as EXECUTOR). With one
         # model installed this collapses to that single model.
@@ -443,7 +443,7 @@ class MapacheCLI:
         routing.set_available_models(available or [self.model])
 
         def _opsec_warn(model_id: str) -> None:
-            print(f"\n  ⚠ OPSEC: routing to CLOUD model '{model_id}' — target/scan/"
+            print(f"\n  [!] OPSEC: routing to CLOUD model '{model_id}' - target/scan/"
                   f"cred context is leaving this machine.\n", flush=True)
 
         self.routed = RoutedModel(routing, pool, primary_model_id=self.model,
@@ -459,14 +459,14 @@ class MapacheCLI:
         # operator, injected as a compact summary each turn.
         self.user_profile = UserProfile()
 
-        # Execution backend (feature H): where `shell` runs — local / ssh /
+        # Execution backend (feature H): where `shell` runs - local / ssh /
         # docker. From config.execution; --exec-backend overrides the kind.
         exec_spec = dict(getattr(self.config, "execution", None) or {"backend": "local"})
         if getattr(self.args, "exec_backend", None):
             exec_spec["backend"] = self.args.exec_backend
         self.exec_backend, exec_warn = backend_from_config(exec_spec)
         if exec_warn:
-            print(f"  ⚠ {exec_warn}")
+            print(f"  [!] {exec_warn}")
 
         # Egress / operator anonymity: how attack traffic exits (hide the operator
         # IP). From config.egress; --egress overrides (direct | tor | a proxy URL).
@@ -484,7 +484,7 @@ class MapacheCLI:
             voice_spec["enabled"] = True
         self.voice, voice_warns = voice_from_config(voice_spec)
         for w in voice_warns:
-            print(f"  ⚠ {w}")
+            print(f"  [!] {w}")
 
         # Opt-in verifier (--verify): route the verification call to the
         # VERIFIER-role model so it can use a higher-quality model than the loop.
@@ -556,7 +556,7 @@ class MapacheCLI:
         # Self-consistency (#5): announce each fresh attempt.
         async def _on_attempt(event) -> None:
             d = event.data or {}
-            print(f"\n  ↻ attempt {d.get('attempt')}/{d.get('of')} — fresh approach\n",
+            print(f"\n  ↻ attempt {d.get('attempt')}/{d.get('of')} - fresh approach\n",
                   flush=True)
         self.controller.bus.subscribe("attempt.start", _on_attempt)
 
@@ -571,7 +571,7 @@ class MapacheCLI:
                 Permission.UNRESTRICTED,
             })
 
-            # Core — `shell` dispatches through the execution backend (feature H:
+            # Core - `shell` dispatches through the execution backend (feature H:
             # local / ssh / docker), built from config (--exec-backend overrides).
             self.registry.register(ShellTool(backend=self.exec_backend, egress=self.egress))
 
@@ -585,7 +585,7 @@ class MapacheCLI:
             # Recon
             self.registry.register(NmapTool(egress=self.egress))
 
-            # Browser — HTTP tools route through the egress proxy/Tor when active,
+            # Browser - HTTP tools route through the egress proxy/Tor when active,
             # and share one persistent cookie jar so a login carries across calls.
             from browser.scraping_tools import WebSession, HttpRepeaterTool
             from browser.http_history import HTTPHistory
@@ -598,7 +598,7 @@ class MapacheCLI:
             self.registry.register(HttpRepeaterTool(egress=self.egress, session=web_session,
                                                     history=http_history))
             # Evidence-first deliverable: the agent records confirmed findings (title,
-            # severity, evidence, impact, remediation) into a shared report — success
+            # severity, evidence, impact, remediation) into a shared report - success
             # is a finding with proof, not a flag.
             from core.findings import FindingsStore
             from tools.reporting_tools import ReportFindingTool
@@ -619,7 +619,7 @@ class MapacheCLI:
                        AdAttackTool(), BinaryAnalyzeTool()):
                 self.registry.register(_t)
             # Real headless browser (capability #1): renders JavaScript/SPAs that the
-            # raw HTTP tools can't. Safe to register even without Playwright — it
+            # raw HTTP tools can't. Safe to register even without Playwright - it
             # reports install steps at call time. Kept for teardown at shutdown.
             from browser.browser_tool import BrowserTool
             self._browser_tool = BrowserTool(egress=self.egress)
@@ -628,7 +628,7 @@ class MapacheCLI:
             self.registry.register(TorFetchTool())
             self.registry.register(EgressCheckTool(egress=self.egress))
 
-            # Phase 6 — Advanced security
+            # Phase 6 - Advanced security
             self.registry.register(MetasploitSearchTool())
             self.registry.register(MetasploitRunTool())
             self.registry.register(MetasploitSessionsTool())
@@ -654,18 +654,18 @@ class MapacheCLI:
                 getattr(self.config, "integrations", None),
                 backend=self.exec_backend, egress=self.egress)
             for _w in ext_warn:
-                print(f"  ⚠ {_w}")
+                print(f"  [!] {_w}")
             registered_ext = []
             for _t in ext_tools:
                 try:  # an integration must not shadow a built-in of the same name
                     self.registry.register(_t)
                     registered_ext.append(_t)
                 except ToolNameCollisionError as _e:
-                    print(f"  ⚠ integration '{_t.name}' skipped — {_e}")
+                    print(f"  [!] integration '{_t.name}' skipped - {_e}")
             self._integrations = registered_ext
             if registered_ext:
                 # Pin integrations so phase-based subsetting exposes them (they're
-                # phase-agnostic, like MCP tools) — otherwise the model never sees them.
+                # phase-agnostic, like MCP tools) - otherwise the model never sees them.
                 self.controller.chain.always_tools |= {t.name for t in registered_ext}
                 print(f"  Tools+   : {len(registered_ext)} integration(s): "
                       f"{', '.join(t.name for t in registered_ext)}")
@@ -741,7 +741,7 @@ class MapacheCLI:
             if prof is not None and not prof.is_local:
                 cloud.append((role.value, mid))
         if cloud:
-            print("\n  ⚠ OPSEC: cloud model(s) active — data will leave this machine:")
+            print("\n  [!] OPSEC: cloud model(s) active - data will leave this machine:")
             for role, mid in cloud:
                 print(f"      {role:9s} → {mid}")
 
@@ -749,14 +749,14 @@ class MapacheCLI:
         """Print a visible line whenever the RoE gate refuses a call (feature J).
 
         The refusal is also fed to the model as a tool result, but the operator
-        should see it live — it's the signal that the guardrail is doing its job.
+        should see it live - it's the signal that the guardrail is doing its job.
         """
         if self.controller is None:
             return
 
         async def _on_refused(event) -> None:
             data = event.data or {}
-            print(f"\n  ⛔ RoE: refused {data.get('tool_name')} — "
+            print(f"\n  [blocked] RoE: refused {data.get('tool_name')} - "
                   f"{data.get('reason')}\n", flush=True)
 
         self.controller.bus.subscribe("agent.scope_refused", _on_refused)
@@ -856,7 +856,7 @@ class MapacheCLI:
             if getattr(st, "flags", None):
                 bits.append(f"flags={len(st.flags)}")
             snap = "  ·  ".join(bits)
-        print(f"\n  ⏸ HITL checkpoint — {reason}", flush=True)
+        print(f"\n  ⏸ HITL checkpoint - {reason}", flush=True)
         if snap:
             print(f"     state: {snap}", flush=True)
         print("     [Enter]=approve · 'q'=stop · or type guidance to steer ▸ ",
@@ -894,7 +894,7 @@ class MapacheCLI:
         self.controller.add_middleware(VaccineMiddleware(
             make_model_vaccine_generator(self.controller),
             sink=self._vaccine_sink, per_step_cap=cap))
-        print("  💉 Vaccine loop: on — a detection+remediation is generated for each "
+        print("   Vaccine loop: on - a detection+remediation is generated for each "
               "confirmed vuln (→ vaccines/)", flush=True)
 
     def _profile_with_learning(self) -> str:
@@ -932,7 +932,7 @@ class MapacheCLI:
 
     async def _maybe_autoreport(self) -> None:
         """At session end, auto-generate the engagement report if anything worth
-        reporting was found (agent findings OR blackboard vulns/creds) — so a real
+        reporting was found (agent findings OR blackboard vulns/creds) - so a real
         user always leaves with a deliverable, not just a chat log."""
         if self.controller is None:
             return
@@ -981,7 +981,7 @@ class MapacheCLI:
 
     async def _vaccine_sink(self, ctx, vaccine) -> None:
         """Persist a generated vaccine to <workspace>/vaccines/ and announce it."""
-        print(f"\n  💉 Vaccine generated — {vaccine.vulnerability}", flush=True)
+        print(f"\n   Vaccine generated - {vaccine.vulnerability}", flush=True)
         try:
             vdir = os.path.join(self.working_dir, "vaccines")
             os.makedirs(vdir, exist_ok=True)
@@ -1016,7 +1016,7 @@ class MapacheCLI:
             try:  # an MCP tool must not shadow a built-in / another server's tool
                 self.registry.register(tool)
             except ToolNameCollisionError as exc:
-                print(f"  ⚠ MCP tool '{tool.name}' skipped — {exc}")
+                print(f"  [!] MCP tool '{tool.name}' skipped - {exc}")
         if mcp_tools:
             # Pin MCP tool names so phase-based subsetting keeps them exposed.
             self.controller.chain.always_tools |= set(self.mcp.tool_names)
@@ -1064,7 +1064,7 @@ class MapacheCLI:
         # Community skill hub (feature I): build a client when a registry is
         # configured; install generated tools into the same dir the manager loads
         # from, and MCP servers into mcp.json. Tools register regardless and report
-        # cleanly when no hub is configured. trusted_key stays None — the checksum
+        # cleanly when no hub is configured. trusted_key stays None - the checksum
         # is the integrity gate; foreign signatures are noted, not trusted.
         registry_path = str((getattr(self.config, "hub", None) or {}).get("registry", "")).strip()
         if registry_path:
@@ -1101,7 +1101,7 @@ class MapacheCLI:
 
         # Natural-language front door: install a GitHub repo as a tool on request,
         # registered live (same live-register path as generated tools) + persisted.
-        # An explicit install WINS (replace=True) — a reinstall/refresh, and it
+        # An explicit install WINS (replace=True) - a reinstall/refresh, and it
         # supersedes any same-named self-authored tool (retiring its package so it
         # can't reclaim the name on restart). This is the deliberate asymmetry to the
         # registry guard: implicit create_tool must not shadow; explicit install may.
@@ -1112,7 +1112,7 @@ class MapacheCLI:
                               ignore_errors=True)
             self.registry.register(tool, replace=True)
             self.controller.register_tool(tool.to_context_schema())
-            # Pin into always_tools so phase-based subsetting exposes it — without
+            # Pin into always_tools so phase-based subsetting exposes it - without
             # this the freshly installed tool is filtered out of the model's tool
             # list (like MCP tools, integrations are phase-agnostic).
             self.controller.chain.always_tools.add(tool.name)
@@ -1160,7 +1160,7 @@ class MapacheCLI:
                 from core.asciicast import AsciicastRecorder
                 self.cast = AsciicastRecorder(
                     os.path.join(self.working_dir, "engagements", f"engagement-{stamp}.cast"),
-                    title=f"Mapache — {self.session_id}")
+                    title=f"Mapache - {self.session_id}")
                 self.cast.attach(self.controller.bus)
 
         # Full-screen TUI (--tui): a bordered input box pinned to the bottom with a
@@ -1199,7 +1199,7 @@ class MapacheCLI:
                             pass
             else:
                 tui_mode = False  # init failed → classic CLI
-                print("  ⚠ full-screen TUI couldn't start in this terminal — using "
+                print("  [!] full-screen TUI couldn't start in this terminal - using "
                       "the classic CLI. (Try a standalone Windows Terminal/PowerShell "
                       "window if you want the --tui layout.)")
 
@@ -1217,7 +1217,7 @@ class MapacheCLI:
         sep = theme.paint("   ·   ", "dgrey", color=c)
         tools_n = len(self.registry.list_names()) if self.registry else 0
         in_scope = bool(self.scope and self.scope.active)
-        roe = (f"ENFORCED — in-scope {self.scope.targets_summary()}"
+        roe = (f"ENFORCED - in-scope {self.scope.targets_summary()}"
                if in_scope else "off (no scope.json)")
         box_rows = [
             sep.join([_kv("Model", self.model),
@@ -1234,7 +1234,7 @@ class MapacheCLI:
             box_rows.append(_kv("Log", str(self.engagement_log.path), "grey"))
         print(theme.box(box_rows, color=c))
         if self._workdir_note:
-            print(theme.paint(f"  ⚠ {self._workdir_note}", "amber", color=c))
+            print(theme.paint(f"  [!] {self._workdir_note}", "amber", color=c))
 
         if self.routed:
             print(f"\n{self.routed.explain()}")
@@ -1276,7 +1276,7 @@ class MapacheCLI:
 
         # Input: prompt_toolkit (when available on a real TTY) gives a live slash-
         # command dropdown + ↑ history; otherwise the persistent background line
-        # reader below is used unchanged — the byte-for-byte path pipes/tests rely on.
+        # reader below is used unchanged - the byte-for-byte path pipes/tests rely on.
         # The TUI owns its own input widget, so neither path is set up in TUI mode.
         self._ptk = None
         self._input_q = None
@@ -1371,7 +1371,7 @@ class MapacheCLI:
             raw = f"search the web for: {raw[1:].strip()}"
 
         # Just-in-time integration setup asks for an API key on stdin, which can't
-        # run under the full-screen TUI — skip the prompt there (still available in
+        # run under the full-screen TUI - skip the prompt there (still available in
         # the classic CLI). The turn itself runs the same in both.
         if self.tui is None:
             await self._maybe_setup_integration(raw)
@@ -1414,7 +1414,7 @@ class MapacheCLI:
                     fanout=getattr(self.args, "fanout", False),
                 ).run(user_input, session_id=self.session_id)
                 await self._stop_ticker(ticker, clear=True)
-                summary = (f"swarm complete — {sres.stop_reason}\n"
+                summary = (f"swarm complete - {sres.stop_reason}\n"
                            f"        operators: {', '.join(sres.operators_run) or '(none)'}"
                            f"  ·  rounds: {len(sres.rounds)}  ·  solved: {sres.solved}")
                 self.render.agent_result(summary, sres.operators_run,
@@ -1485,7 +1485,7 @@ class MapacheCLI:
     async def _drive_turn(self, turn_task: asyncio.Task):
         """
         Await a turn. In the fallback (queue) input mode, typed lines are consumed
-        as live steering — routed to a pending confirmation prompt if one is open,
+        as live steering - routed to a pending confirmation prompt if one is open,
         else handed to controller.steer(); lines that arrive after the turn ends
         stay buffered for the next REPL prompt.
 
@@ -1505,7 +1505,7 @@ class MapacheCLI:
             )
             if get_task in done:
                 line = get_task.result()
-                if line is None:  # EOF mid-turn — stop steering, let turn finish
+                if line is None:  # EOF mid-turn - stop steering, let turn finish
                     continue
                 line = line.strip()
                 if self._pending_confirm is not None and not self._pending_confirm.done():
@@ -1514,7 +1514,7 @@ class MapacheCLI:
                     self.controller.steer(line)
                     self.render.steering(line)
             else:
-                # Turn finished first; don't strand the pending read — its item
+                # Turn finished first; don't strand the pending read - its item
                 # (if any) remains buffered for the REPL.
                 get_task.cancel()
         return turn_task.result()
@@ -1605,7 +1605,7 @@ class MapacheCLI:
         name = data.get("tool_name", "")
         args = data.get("args") or {}
         # Delegated sub-agent step: stream it as an attributed, indented line and
-        # return — never clobber the lead's live spinner state with a child's tool.
+        # return - never clobber the lead's live spinner state with a child's tool.
         prefix = self._agent_trace_prefix(data)
         if prefix is not None:
             if name not in ("delegate", "delegate_parallel"):
@@ -1638,7 +1638,7 @@ class MapacheCLI:
         prefix = self._agent_trace_prefix(data)
         if prefix is not None:
             secs = (data.get("duration_ms") or 0.0) / 1000.0
-            mark = "✗" if data.get("error") else "✓"
+            mark = "x" if data.get("error") else "ok"
             print(f"{prefix}{mark} {name} · {secs:.1f}s", flush=True)
             return
         self._running_tool = None
@@ -1667,7 +1667,7 @@ class MapacheCLI:
         """The command line to render as a Kali block, or None for a plain tool line.
 
         `shell` carries the command in cmd/command; `kali_run` names a tool plus its
-        args ({tool: 'gobuster', args: 'dir -u …'}) — reconstruct the invocation so
+        args ({tool: 'gobuster', args: 'dir -u …'}) - reconstruct the invocation so
         it reads like a real prompt line instead of a generic '● kali_run (…)'."""
         if name == "kali_run":
             tool = str(args.get("tool") or "").strip()
@@ -1679,7 +1679,7 @@ class MapacheCLI:
         return None
 
     def _shell_context(self, args: dict) -> "tuple[str, str, str]":
-        """(user, host, cwd) for the Kali command block — the real exec context."""
+        """(user, host, cwd) for the Kali command block - the real exec context."""
         import getpass
         import socket
         cwd = str(args.get("working_dir") or self.working_dir)
@@ -1725,7 +1725,7 @@ class MapacheCLI:
         return (operator_name or "sub-agent").replace("_", " ").title()
 
     async def _on_delegate_start(self, event) -> None:
-        """Work is routing to a specialist — switch the transcript accent + banner."""
+        """Work is routing to a specialist - switch the transcript accent + banner."""
         name = event.data.get("operator")
         if name:
             getattr(self, "_ran_operators", set()).add(name)  # for cross-engagement learning
@@ -1736,10 +1736,10 @@ class MapacheCLI:
         self._accent_stack.append(getattr(self.render, "accent", "green"))
         self.render.accent = accent
         self.render.handoff(self._operator_title(name), accent,
-                            detail=(f"— {task[:60]}" if task else ""))
+                            detail=(f"- {task[:60]}" if task else ""))
 
     async def _on_delegate_end(self, event) -> None:
-        """Control returns to the caller — banner, then restore the prior accent."""
+        """Control returns to the caller - banner, then restore the prior accent."""
         if self.tui is None:
             return
         accent = getattr(self.render, "accent", "green")
@@ -1805,7 +1805,7 @@ class MapacheCLI:
             print(f"     {recipe.blurb}")
         print(f"     Get a key: {recipe.signup_url}")
         if (await self._ask("  Set it up now? [Y/n] ")).lower() in ("n", "no"):
-            print("  Skipped — add it anytime under config.integrations.\n")
+            print("  Skipped - add it anytime under config.integrations.\n")
             return
         key = await self._ask(f"  Paste your {recipe.env_var} (blank to cancel): ")
         if not key:
@@ -1826,21 +1826,21 @@ class MapacheCLI:
                         ints.append(spec)
                 save_global_config(raw)
             except Exception as exc:
-                print(f"  ⚠ couldn't persist the spec ({exc}); added this session only.")
+                print(f"  [!] couldn't persist the spec ({exc}); added this session only.")
             tools, warns = build_external_tools(
                 list(recipe.specs), backend=self.exec_backend, egress=self.egress)
             for w in warns:
-                print(f"  ⚠ {w}")
+                print(f"  [!] {w}")
             for t in tools:
                 self.registry.register(t, replace=True)  # re-running setup refreshes
                 self.controller.register_tool(t.to_context_schema())
                 self.controller.chain.always_tools.add(t.name)  # pin for subsetting
                 if t not in self._integrations:
                     self._integrations.append(t)
-            print(f"  ✓ {recipe.display} ready — tools: "
+            print(f"  ok {recipe.display} ready - tools: "
                   f"{', '.join(t.name for t in tools)}")
         else:
-            print(f"  ✓ {recipe.env_var} set — {recipe.display} is ready to use.")
+            print(f"  ok {recipe.env_var} set - {recipe.display} is ready to use.")
 
         # Offer to persist the key across sessions (else it's just this session).
         if (await self._ask(f"  Remember {recipe.env_var} for future sessions? [y/N] ")
@@ -1854,12 +1854,12 @@ class MapacheCLI:
             if sys.platform == "win32":
                 import subprocess
                 subprocess.run(["setx", name, value], capture_output=True, check=False)
-                print(f"  ✓ {name} saved to your user environment (new shells pick it up).")
+                print(f"  ok {name} saved to your user environment (new shells pick it up).")
             else:
                 print(f"  To persist, add to your shell profile:\n"
                       f"     export {name}='<your key>'")
         except Exception as exc:
-            print(f"  ⚠ couldn't persist {name} ({exc}); set it manually to keep it.")
+            print(f"  [!] couldn't persist {name} ({exc}); set it manually to keep it.")
 
     async def _curate(self) -> None:
         """
@@ -1873,12 +1873,12 @@ class MapacheCLI:
         self.gen_manager.refresh_states()
         candidates = self.gen_manager.stale_candidates()
         if not candidates:
-            print("  No stale tools — the generated-tool library is clean.")
+            print("  No stale tools - the generated-tool library is clean.")
             return
         print(f"\n  {len(candidates)} stale tool(s). Archiving is reversible "
               f"(/restore <name>).")
         for name, reason in candidates:
-            print(f"\n  • {name} — {reason}")
+            print(f"\n  - {name} - {reason}")
             print(f"    archive '{name}'? [y/N] ", end="", flush=True)
             ans = (await self._read_line()).strip().lower()
             if ans == "y":
@@ -1937,7 +1937,7 @@ class MapacheCLI:
 
         counts = report.severity_counts()
         sev = ", ".join(f"{n} {s.lower()}" for s, n in counts.items() if n) or "no findings"
-        print(f"\n  Report ({len(report.findings)} findings — {sev}):")
+        print(f"\n  Report ({len(report.findings)} findings - {sev}):")
         for path in written:
             print(f"    {path}")
         print()
@@ -1967,7 +1967,7 @@ class MapacheCLI:
         if result.output:
             print(result.output.rstrip())
         if result.error:
-            print(f"✗ {result.error}")
+            print(f"x {result.error}")
         print()
 
     async def _handle_command(self, cmd: str) -> bool:
@@ -2020,7 +2020,7 @@ class MapacheCLI:
                 ok = self.user_profile.remove(fact)
                 print(f"\n  {'Removed' if ok else 'Not found'}: {fact}\n")
             elif self.user_profile.facts():
-                print(f"\n  User profile — {self.user_profile.path}:\n")
+                print(f"\n  User profile - {self.user_profile.path}:\n")
                 print("  " + self.user_profile.render_markdown().replace("\n", "\n  "))
             else:
                 print("\n  User profile is empty. The agent records durable facts via "
@@ -2035,7 +2035,7 @@ class MapacheCLI:
                 src = soul_file(self.working_dir)
                 persona = load_soul(self.working_dir)
                 origin = str(src) if src else "built-in default (/soul init to create one)"
-                print(f"\n  Active persona — {origin}:\n")
+                print(f"\n  Active persona - {origin}:\n")
                 print("  " + persona.replace("\n", "\n  "))
                 print()
 
@@ -2071,8 +2071,8 @@ class MapacheCLI:
                               if arg == "search" else self.hub_client.list_skills())
                     print(f"\n  Hub skills ({len(skills)}):")
                     for m in skills:
-                        sig = " ✓signed" if m.signature else ""
-                        print(f"    {m.name} v{m.version} [{m.skill_type}]{sig} — {m.description}")
+                        sig = " oksigned" if m.signature else ""
+                        print(f"    {m.name} v{m.version} [{m.skill_type}]{sig} - {m.description}")
                     print()
 
         elif command == "/backend":
@@ -2106,10 +2106,10 @@ class MapacheCLI:
                       "config.integrations (http API like Shodan, or a command / "
                       "GitHub-repo CLI). See tools/external_tools.py for the shape.\n")
             else:
-                print(f"\n  Integrations ({len(tools)}) — bring-your-own tools:")
+                print(f"\n  Integrations ({len(tools)}) - bring-your-own tools:")
                 for t in tools:
                     kind = "http" if t.__class__.__name__ == "HttpApiTool" else "cmd"
-                    print(f"    [{kind}] {t.name} — {t.description[:60]}")
+                    print(f"    [{kind}] {t.name} - {t.description[:60]}")
                 print()
 
         elif command == "/hosts":
@@ -2145,14 +2145,14 @@ class MapacheCLI:
                 print("  " + attack_plan(
                     ground_services(st.services, st.versions)).replace("\n", "\n  "))
             else:
-                print("  No attack state yet — run a scan first.")
+                print("  No attack state yet - run a scan first.")
             print()
 
         elif command == "/scope":
             if self.scope and self.scope.active:
                 print(f"\n{self.scope.summary()}\n")
             else:
-                print("\n  RoE scope: off — no scope.json loaded. Create one in the "
+                print("\n  RoE scope: off - no scope.json loaded. Create one in the "
                       "working dir to\n  restrict targets/actions. Example:")
                 print('    {"name": "engagement", "targets": ["10.10.10.0/24"],')
                 print('     "forbidden_tools": ["msf_run"]}\n')
@@ -2195,7 +2195,7 @@ class MapacheCLI:
             else:
                 self.swarm = not self.swarm
             state = "ON" if self.swarm else "off"
-            print(f"  Multi-agent swarm: {state} — the supervisor autonomously routes "
+            print(f"  Multi-agent swarm: {state} - the supervisor autonomously routes "
                   f"specialist operators (recon → web → exploit → post) based on "
                   f"findings, instead of the single lead agent.\n")
 
@@ -2268,7 +2268,7 @@ class MapacheCLI:
                 for t in targets:
                     data = self.memory.knowledge.get_target(t) or {}
                     summary = ", ".join(f"{k}={v}" for k, v in list(data.items())[:3])
-                    print(f"    {t} — {summary}")
+                    print(f"    {t} - {summary}")
                 print()
 
         elif command == "/history":
@@ -2321,7 +2321,7 @@ class MapacheCLI:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Mapache — Offensive security AI agent",
+        description="Mapache - Offensive security AI agent",
         epilog="Subcommands: `mapache setup` (interactive config), "
                "`mapache config show|path` (inspect config), "
                "`mapache update [--check]` (update manager), "
@@ -2331,7 +2331,7 @@ def parse_args() -> argparse.Namespace:
     # "explicitly passed" from "unset". When unset they fall through to the
     # project/global/env/default layers (env vars like MAPACHE_MODEL / OLLAMA_URL
     # are handled by the config env layer, not baked in here as argparse
-    # defaults — that keeps the precedence CLI > project > global > env right).
+    # defaults - that keeps the precedence CLI > project > global > env right).
     parser.add_argument("--model", "-m", default=None,
                         help="Primary model id (default: from config / "
                              "MAPACHE_MODEL env / built-in default)")
@@ -2382,7 +2382,7 @@ def parse_args() -> argparse.Namespace:
                         help="Self-consistency: if the objective isn't reached, retry "
                              "with a fresh approach up to N times (stops on first solve)")
     parser.add_argument("--flag-format", default=None, metavar="REGEX",
-                        help="Expected flag format (regex) — the verifier flags a "
+                        help="Expected flag format (regex) - the verifier flags a "
                              "captured token that doesn't match it as unverified")
     parser.add_argument("--fanout", action="store_true",
                         help="Swarm (/swarm): when a single operator stalls, deploy "
@@ -2426,7 +2426,7 @@ def parse_args() -> argparse.Namespace:
                              "(written to engagements/ by default).")
     parser.add_argument("--cast", action="store_true",
                         help="Record the engagement as a replayable asciicast "
-                             "(engagements/*.cast) — court-ready session evidence.")
+                             "(engagements/*.cast) - court-ready session evidence.")
     parser.add_argument("--confirm", action="store_true")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--log-dir", default=os.environ.get("MAPACHE_LOG_DIR"))

@@ -1,12 +1,12 @@
 """
-enhanced_input.py — as-you-type slash-command completion for the REPL.
+enhanced_input.py - as-you-type slash-command completion for the REPL.
 
 The completion *logic* (`complete_slash`, `suggest_commands`) is pure and
 dependency-free, so it is unit-tested without a terminal and also powers the
 no-`prompt_toolkit` fallback ("did you mean" after Enter). When `prompt_toolkit`
 IS installed and stdin is a real TTY, `make_session()` returns a PromptSession
 whose `SlashCompleter` shows a live dropdown, filtered per keystroke, plus
-↑ history — everything the user asked for. Absent the package, the CLI keeps its
+↑ history - everything the user asked for. Absent the package, the CLI keeps its
 existing line-based reader untouched.
 """
 
@@ -88,7 +88,7 @@ def complete_slash(text: str) -> list[tuple[str, str, int]]:
 
 
 def suggest_commands(text: str, n: int = 3) -> list[tuple[str, str]]:
-    """Closest command matches for an unknown/partial slash command — used for
+    """Closest command matches for an unknown/partial slash command - used for
     the 'did you mean' hint (fallback mode and unknown-command errors)."""
     if not text.startswith("/"):
         return []
@@ -137,7 +137,7 @@ def make_session(history_path: Optional[str] = None):
 
     PromptSession builds its terminal Application eagerly, which raises in a TTY
     that isn't a real console (e.g. Git Bash/mintty on Windows). Returning None on
-    any failure makes the CLI fall back to its plain line reader — never crash."""
+    any failure makes the CLI fall back to its plain line reader - never crash."""
     if not ptk_available():
         return None
     try:

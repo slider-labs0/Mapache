@@ -1,5 +1,5 @@
 """
-Mapache MCP integration — client side.
+Mapache MCP integration - client side.
 
 Connects out to Model Context Protocol servers over stdio and exposes their
 tools to the agent as ordinary Mapache tools. See `mcp_client.py`.

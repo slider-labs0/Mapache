@@ -1,13 +1,13 @@
 """
-routing_engine.py — Mapache model routing engine
+routing_engine.py - Mapache model routing engine
 
 Decides which model handles which task in the pipeline.
 
 Routing strategies:
-    AUTO      — best model per role from registry
-    SINGLE    — one model does everything
-    PIPELINE  — dedicated planner + executor + verifier
-    HYBRID    — cloud planner + local executor
+    AUTO      - best model per role from registry
+    SINGLE    - one model does everything
+    PIPELINE  - dedicated planner + executor + verifier
+    HYBRID    - cloud planner + local executor
 """
 
 from __future__ import annotations
@@ -87,7 +87,7 @@ class RoutingEngine:
         self.local_only = local_only
         self.max_vram_gb = max_vram_gb
         self._available: list[str] = []
-        self._chat_capable: list[str] = []  # filtered list — no embedding models
+        self._chat_capable: list[str] = []  # filtered list - no embedding models
         self._overrides: dict[ModelRole, str] = {}
 
         logger.info(
@@ -99,7 +99,7 @@ class RoutingEngine:
         """Tell the engine which models are installed. Filters out embedding-only models."""
         self._available = model_ids
 
-        # Build chat-capable list — exclude embedding-only models
+        # Build chat-capable list - exclude embedding-only models
         self._chat_capable = []
         for model_id in model_ids:
             profile = self.registry.get(model_id)
@@ -126,7 +126,7 @@ class RoutingEngine:
         return any(_is_local(m) for m in self._chat_capable)
 
     def local_clone(self) -> "RoutingEngine":
-        """A local-only sibling of this engine (feature O — OPSEC pinning).
+        """A local-only sibling of this engine (feature O - OPSEC pinning).
 
         Shares the registry but forces `local_only=True` AND prunes the candidate
         lists down to local models, so even strategies that don't honor
@@ -292,7 +292,7 @@ class RoutingEngine:
                     final_score = role_score
                 speed = profile.speed_score
             else:
-                # Unknown model — give it a default score
+                # Unknown model - give it a default score
                 final_score = 0.5
                 speed = 0.5
 
@@ -349,7 +349,7 @@ class RoutingEngine:
 
     def explain(self) -> str:
         """Show routing decisions for all roles."""
-        lines = [f"Routing Engine — strategy={self.strategy.value}\n"]
+        lines = [f"Routing Engine - strategy={self.strategy.value}\n"]
         for role in [ModelRole.PLANNER, ModelRole.EXECUTOR, ModelRole.VERIFIER]:
             decision = self.route(role)
             lines.append(

@@ -1,10 +1,10 @@
 """
-reporting_tools.py — the agent's evidence-first deliverable tool.
+reporting_tools.py - the agent's evidence-first deliverable tool.
 
 `report_finding` is how the agent turns a confirmed weakness into a real report
 entry: title, severity, affected asset, the EVIDENCE that proves it, impact, and
 remediation (auto-filled from the category if the agent omits it). This is the
-engagement's deliverable — a finding with proof is success on a real target,
+engagement's deliverable - a finding with proof is success on a real target,
 whether or not a CTF flag exists.
 """
 
@@ -19,7 +19,7 @@ from core.findings import FindingsStore, Finding, SEVERITIES
 class ReportFindingTool(BaseTool):
     name = "report_finding"
     description = (
-        "Record a CONFIRMED security finding into the engagement report — the real "
+        "Record a CONFIRMED security finding into the engagement report - the real "
         "deliverable. Call this whenever you prove a weakness (an IDOR that returned "
         "another user's data, an injection that executed, exposed credentials, a "
         "misconfig), NOT just when you capture a flag. Provide the EVIDENCE: the actual "
@@ -65,7 +65,7 @@ class ReportFindingTool(BaseTool):
             return ToolResult.fail("A finding needs a title.")
         if not evidence.strip():
             return ToolResult.fail(
-                "A finding needs evidence — the request/response, output, or observation "
+                "A finding needs evidence - the request/response, output, or observation "
                 "that proves it. Don't report unproven or guessed findings.")
         f = self.store.record(
             title=title.strip(), severity=severity, category=category or "other",

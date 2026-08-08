@@ -1,16 +1,16 @@
 """
-heavy_tools.py — disciplined wrappers for heavy exploitation tools (capability #3)
+heavy_tools.py - disciplined wrappers for heavy exploitation tools (capability #3)
 
 The agent could already shell out to sqlmap / ffuf via `kali_run`, but nothing GUIDED
 it: it hand-sprayed payloads and guessed endpoints instead of driving the real tools
 with correct flags. These wrappers turn structured arguments into a correct invocation,
 run it through the execution backend (local subprocess or a remote Kali box/container,
-feature H) with egress-native proxying, and summarise the output — so the model reaches
+feature H) with egress-native proxying, and summarise the output - so the model reaches
 for the right instrument for the injection / discovery classes.
 
-  - SqlmapTool — automated SQL injection (blind/boolean/time/UNION), DBMS fingerprint,
+  - SqlmapTool - automated SQL injection (blind/boolean/time/UNION), DBMS fingerprint,
     optional dump. Finds SQLi the model can't hand-craft.
-  - FuzzTool — ffuf content/parameter fuzzing to DISCOVER real endpoints/params instead
+  - FuzzTool - ffuf content/parameter fuzzing to DISCOVER real endpoints/params instead
     of guessing (grounds later requests; pairs with response-grounded acting).
 
 Both require the underlying tool on the execution host; absent, they return install
@@ -77,7 +77,7 @@ class SqlmapTool(BaseTool):
     description = (
         "Automated SQL injection with sqlmap. Use this when a parameter (query, POST "
         "field, header, or cookie) might be injectable and manual payloads are "
-        "inconclusive — sqlmap finds blind / boolean / time-based / UNION SQLi you can't "
+        "inconclusive - sqlmap finds blind / boolean / time-based / UNION SQLi you can't "
         "reliably hand-craft, fingerprints the DBMS, and can dump data. Give the `url`; "
         "for a POST target also give `data`. Runs non-interactively (--batch). Narrow it "
         "with `param`, and raise `level`/`risk` only if a quick pass finds nothing."
@@ -86,7 +86,7 @@ class SqlmapTool(BaseTool):
         "type": "object",
         "properties": {
             "url": {"type": "string", "description": "Target URL (http/https), including any query string."},
-            "data": {"type": "string", "description": "POST body, e.g. 'user=x&pass=y' — triggers a POST test."},
+            "data": {"type": "string", "description": "POST body, e.g. 'user=x&pass=y' - triggers a POST test."},
             "param": {"type": "string", "description": "Test only this parameter (sqlmap -p)."},
             "level": {"type": "integer", "description": "Test depth 1-5 (default 1).", "default": 1},
             "risk": {"type": "integer", "description": "Risk 1-3 (default 1).", "default": 1},
@@ -163,7 +163,7 @@ class SqlmapTool(BaseTool):
 class FuzzTool(BaseTool):
     name = "fuzz"
     description = (
-        "Content and parameter fuzzing with ffuf — DISCOVER real endpoints, files, and "
+        "Content and parameter fuzzing with ffuf - DISCOVER real endpoints, files, and "
         "parameters instead of guessing them. Put the keyword FUZZ where you want to "
         "fuzz: a path segment (mode=dir, e.g. https://t/FUZZ), a filename with "
         "extensions, or a query value/param name (mode=param, e.g. https://t/api?FUZZ=1). "
@@ -220,7 +220,7 @@ class FuzzTool(BaseTool):
             return ToolResult.fail("Invalid URL: must start with http:// or https://")
         if "FUZZ" not in url:
             return ToolResult.fail(
-                "The url must contain the keyword FUZZ where you want to fuzz — e.g. "
+                "The url must contain the keyword FUZZ where you want to fuzz - e.g. "
                 "https://target/FUZZ (paths) or https://target/api?FUZZ=1 (params).")
         if not _tool_available("ffuf", self.backend):
             return ToolResult.fail(
@@ -231,5 +231,5 @@ class FuzzTool(BaseTool):
                               filter_codes, filter_size, threads)
         code, out, timed = await run_command(cmd, backend=self.backend, timeout=self.timeout)
         head = f"$ {cmd[:120]}\nexit {code}{' (timed out)' if timed else ''}\n\n"
-        body = out.strip() or "(no matches — try a different wordlist, or relax the filters)"
+        body = out.strip() or "(no matches - try a different wordlist, or relax the filters)"
         return ToolResult.ok(head + body, metadata={"exit_code": code, "timed_out": timed})

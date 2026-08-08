@@ -1,5 +1,5 @@
 """
-exporters.py — additional report formats for real-world deliverables.
+exporters.py - additional report formats for real-world deliverables.
 
 Beyond the Markdown/HTML engagement report, real users need machine + platform
 formats: SARIF (CI/CD & GitHub code-scanning), a representative CVSS band, and a
@@ -64,7 +64,7 @@ def to_bounty_markdown(f: Any) -> str:
     L = [f"# {f.title}", "",
          f"**Severity:** {f.severity.capitalize()} (CVSS ~{cvss_band(f.severity)})  ",
          f"**Weakness:** {f.category}"
-         + (f" — {f.references}" if f.references else ""), ""]
+         + (f" - {f.references}" if f.references else ""), ""]
     if f.asset:
         L += [f"**Affected asset:** `{f.asset}`", ""]
     L += ["## Summary", "",

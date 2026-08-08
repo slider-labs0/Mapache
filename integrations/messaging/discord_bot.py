@@ -1,5 +1,5 @@
 """
-discord_bot.py — Mapache Discord integration
+discord_bot.py - Mapache Discord integration
 
 Connects Mapache to Discord. Operates via DMs or a designated channel.
 
@@ -142,7 +142,7 @@ class DiscordBot:
                 # Try cache first (fast)
                 channel = self._client.get_channel(int(msg.chat_id))
 
-                # Not in cache — fetch directly (works for DM channels)
+                # Not in cache - fetch directly (works for DM channels)
                 if channel is None:
                     try:
                         channel = await self._client.fetch_channel(int(msg.chat_id))

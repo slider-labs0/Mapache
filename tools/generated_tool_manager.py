@@ -1,5 +1,5 @@
 """
-generated_tool_manager.py — lifecycle owner for self-authored tools
+generated_tool_manager.py - lifecycle owner for self-authored tools
 
 Owns the on-disk library of generated tools and their active -> stale -> archived
 lifecycle (the "curator"). Also defines the model-callable meta-tools that drive
@@ -16,13 +16,13 @@ A new tool is registered into BOTH the executable ToolRegistry (so the dispatche
 can run it) and the controller's context (so the model sees it) and tagged with a
 phase on the ConversationChain (so phase-based subsetting exposes it). Because the
 controller refreshes its active tool set every loop iteration, a tool created this
-turn becomes callable on the *next* turn — never dispatched in the same response
+turn becomes callable on the *next* turn - never dispatched in the same response
 that created it.
 
 The curator is the GC for this library: it moves unused tools active -> stale
 automatically (a non-destructive label; using a stale tool promotes it back), and
 stale -> archived only with per-tool user permission (archiving unregisters the
-tool and moves its folder out of the load path; nothing is lost — restore() and a
+tool and moves its folder out of the load path; nothing is lost - restore() and a
 deliberate purge() round out the lifecycle).
 """
 
@@ -145,7 +145,7 @@ class GeneratedToolManager:
                 self._expose(tool)
             except ToolNameCollisionError as exc:
                 # A generated tool must not shadow a built-in / installed tool of
-                # the same name — skip it rather than crash startup.
+                # the same name - skip it rather than crash startup.
                 failed += 1
                 logger.warning("Generated tool '%s' not loaded: %s", tool.name, exc)
                 continue
@@ -203,7 +203,7 @@ class GeneratedToolManager:
             self._expose(tool)
         except ToolNameCollisionError:
             # The registry guard catches a name taken between the has() check above
-            # and now (e.g. an install_github_tool running in the same turn) — roll
+            # and now (e.g. an install_github_tool running in the same turn) - roll
             # back the just-written package so no orphan shadows the real tool.
             shutil.rmtree(tool_dir, ignore_errors=True)
             return (f"Error: a tool named '{name}' already exists (registered by "
@@ -294,7 +294,7 @@ class GeneratedToolManager:
             self._expose(tool)
         except Exception as exc:
             return f"Error: failed to restore '{name}': {exc}"
-        return f"Restored '{name}' — active again."
+        return f"Restored '{name}' - active again."
 
     def purge(self, name: str) -> str:
         """Hard-delete an *archived* tool. Refuses to touch a live tool."""
@@ -350,7 +350,7 @@ class CreateToolTool(BaseTool):
         "and returns its output. Return a string. The tool persists and becomes "
         "callable on your next step. Do not recreate a tool that already exists. "
         "If the user points you at a GitHub repo (a URL or owner/repo) to add/install "
-        "as a tool, do NOT author a wrapper here — use `install_github_tool`, which "
+        "as a tool, do NOT author a wrapper here - use `install_github_tool`, which "
         "clones and wires the repo itself."
     )
     parameters = {
@@ -362,7 +362,7 @@ class CreateToolTool(BaseTool):
             },
             "description": {
                 "type": "string",
-                "description": "What the tool does — shown to you when choosing tools.",
+                "description": "What the tool does - shown to you when choosing tools.",
             },
             "parameters": {
                 "type": "object",
@@ -430,7 +430,7 @@ class DeleteGeneratedToolTool(BaseTool):
     name = "tool_delete"
     description = (
         "Archive a tool you authored (e.g. one you just created with a mistake). "
-        "Archiving is reversible — it unregisters the tool and moves it aside; the "
+        "Archiving is reversible - it unregisters the tool and moves it aside; the "
         "user can restore it. Use only on generated tools, by name."
     )
     parameters = {

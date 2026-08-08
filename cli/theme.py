@@ -1,5 +1,5 @@
 """
-theme.py — Mapache's visual identity for the CLI (pure, dependency-free).
+theme.py - Mapache's visual identity for the CLI (pure, dependency-free).
 
 Everything here is a plain string/function so it is unit-testable without a TTY
 and works whether or not `rich`/`prompt_toolkit` are installed. Colour is applied
@@ -54,7 +54,7 @@ def paint(text: str, *styles: str, color: bool = True) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Pixel logo — a masked trash-panda + block wordmark
+# Pixel logo - a masked trash-panda + block wordmark
 # --------------------------------------------------------------------------- #
 
 # Kept as an art grid; the raccoon's mask (the eye band) is coloured darker than
@@ -78,7 +78,7 @@ _WORDMARK = r"""
 
 TAGLINE = "autonomous offensive-security agent"
 
-# Truecolor pixel mascot — a raster raccoon shipped as an ANSI asset next to this
+# Truecolor pixel mascot - a raster raccoon shipped as an ANSI asset next to this
 # module (24-bit fg/bg half-blocks). Loaded once; the file stores ESC as a literal
 # "\e" so it's easy to edit, and we swap it for a real escape here.
 def _load_mascot() -> str:
@@ -94,7 +94,7 @@ _MASCOT = _load_mascot()
 
 
 def _visible(line: str) -> str:
-    """A line with its ANSI escapes stripped — used to test emptiness/width."""
+    """A line with its ANSI escapes stripped - used to test emptiness/width."""
     return _ANSI_RE.sub("", line)
 
 
@@ -197,7 +197,7 @@ def box(lines: list[str], *, color: bool = True, accent: str = "lavdim") -> str:
 
 
 # --------------------------------------------------------------------------- #
-# "Thinking" words — shown while the agent works (raccoon-flavoured + hacker)
+# "Thinking" words - shown while the agent works (raccoon-flavoured + hacker)
 # --------------------------------------------------------------------------- #
 
 THINKING_WORDS: list[str] = [
@@ -207,12 +207,12 @@ THINKING_WORDS: list[str] = [
     "Conjuring payloads", "Dumpster-diving", "Prying", "Snooping",
 ]
 
-# Braille spinner frames — smooth and monospace-safe; ASCII fallback for cp1252.
+# Braille spinner frames - smooth and monospace-safe; ASCII fallback for cp1252.
 SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _ASCII_SPINNER = "|/-\\"
 
 
-# Gradient endpoints for the live "thinking" word — the mascot's lavender warming
+# Gradient endpoints for the live "thinking" word - the mascot's lavender warming
 # into a bright teal, so the word shimmers left-to-right like Claude Code's.
 _GRAD_START = (176, 165, 222)  # lavender (mascot body, brightened)
 _GRAD_END = (86, 204, 201)     # teal
@@ -344,8 +344,8 @@ _ACTIVITY_BY_NAME = {
 
 
 def action_phrase(name: str, args: "dict | None" = None) -> str:
-    """A short natural-language description of what a tool call is about to do —
-    'Scanning ports with nmap', 'Searching the web', 'Reading a file' — used to
+    """A short natural-language description of what a tool call is about to do -
+    'Scanning ports with nmap', 'Searching the web', 'Reading a file' - used to
     narrate the agent's next step before the tool runs.
 
     `kali_run` and `shell` resolve to the underlying command (nmap, gobuster, …);
@@ -382,13 +382,13 @@ def format_duration(seconds: float) -> str:
 
 def step_done_line(label: str, seconds: float, *, error: bool = False,
                    color: bool = True) -> str:
-    """Completion line shown when a tool finishes: '⏺ ran <label> · 3s'
-    (or '✗ <label> failed · 3s'). Degrades to ASCII glyphs on a cp1252 console."""
+    """Completion line shown when a tool finishes: ' ran <label> · 3s'
+    (or 'x <label> failed · 3s'). Degrades to ASCII glyphs on a cp1252 console."""
     dur = format_duration(seconds)
     if error:
-        glyph = "✗" if _can_encode("✗") else "x"
+        glyph = "x" if _can_encode("x") else "x"
         return paint(f"  {glyph} {label} failed · {dur}", "amber", color=color)
-    glyph = "⏺" if _can_encode("⏺") else "*"
+    glyph = "" if _can_encode("") else "*"
     return paint(f"  {glyph} ran {label} · {dur}", "grey", color=color)
 
 
@@ -412,7 +412,7 @@ def format_tokens(n: int) -> str:
 
 
 def user_bar(text: str, *, color: bool = True) -> str:
-    """The operator's message: a dim-grey '> …' line (Claude-Code style — quiet
+    """The operator's message: a dim-grey '> …' line (Claude-Code style - quiet
     prompt echo, no loud background bar)."""
     return paint(f"> {text}", "grey", color=color)
 
@@ -435,14 +435,14 @@ def tool_call_line(name: str, summary: str = "", *, accent: str = "teal",
 def shell_command_block(cmd: str, *, user: str = "root", host: str = "sandbox",
                         cwd: str = "~", accent: str = "green", color: bool = True) -> str:
     """A Kali-style two-line prompt over the command:
-        ┌──(user💀host)-[cwd]
+        ┌──(userhost)-[cwd]
         └─# cmd
     The frame takes the active agent's accent (green = lead). Degrades to
     'user@host:cwd$ cmd' where box-drawing/emoji can't render."""
     if not _can_encode("┌─"):
         return paint(f"{user}@{host}:{cwd}$ ", accent, color=color) + \
             paint(cmd, "white", color=color)
-    skull = "💀 " if _can_encode("💀") else "@"
+    skull = " " if _can_encode("") else "@"
     top = (paint("┌──(", accent, color=color)
            + paint(user, "red", color=color) + skull
            + paint(host, accent, color=color)
@@ -480,7 +480,7 @@ def shell_result_line(exit_code: int, *, empty: bool = False, color: bool = True
 
 def status_line(word: str, elapsed_s: float, tokens: int = 0, *, color: bool = True) -> str:
     """The live bottom status, Claude-Code style:
-    '● Hacking… (10s · ↑ 46.3k tokens · ctrl-c to interrupt)' — dim, unobtrusive."""
+    '● Hacking… (10s · ↑ 46.3k tokens · ctrl-c to interrupt)' - dim, unobtrusive."""
     ell = "…" if _can_encode("…") else "..."
     up = "↑" if _can_encode("↑") else "^"
     parts = [format_duration(elapsed_s)]

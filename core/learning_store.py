@@ -1,5 +1,5 @@
 """
-learning_store.py — cross-engagement learning (gets smarter over many runs)
+learning_store.py - cross-engagement learning (gets smarter over many runs)
 
 Skill synthesis (feature N) learns a reusable tool from ONE successful chain. This is
 the complementary loop across MANY engagements: record each engagement's outcome keyed
@@ -116,8 +116,8 @@ class LearningStore:
         for o in solved[-limit:]:
             ops = ", ".join(o.operators[:4]) or "?"
             vulns = ("; ".join(o.vuln_classes[:3])) if o.vuln_classes else ""
-            lines.append(f"  • [{o.fingerprint}] worked via {ops}"
-                         + (f" — {vulns}" if vulns else ""))
+            lines.append(f"  - [{o.fingerprint}] worked via {ops}"
+                         + (f" - {vulns}" if vulns else ""))
         return "\n".join(lines)
 
     def __len__(self) -> int:

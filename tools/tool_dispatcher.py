@@ -1,5 +1,5 @@
 """
-tool_dispatcher.py — Mapache tool dispatcher
+tool_dispatcher.py - Mapache tool dispatcher
 
 Sits between the agent controller and the tool registry.
 Every tool call from the model passes through here.
@@ -46,7 +46,7 @@ class ToolDispatcher:
         self.registry = registry
         # Rules-of-Engagement gate (feature J), defense-in-depth: the controller
         # already gates the model's calls, but generated tools dispatch shell
-        # directly through here, bypassing that gate — so re-check at the choke
+        # directly through here, bypassing that gate - so re-check at the choke
         # point every tool actually flows through. Inactive scope → no-op.
         self.scope = scope or EngagementScope()
         self._call_count: int = 0
@@ -54,7 +54,7 @@ class ToolDispatcher:
         self._refused_count: int = 0
 
     def with_backend(self, backend: Any) -> "ToolDispatcher":
-        """A sibling dispatcher whose backend-aware tools run on `backend` — used
+        """A sibling dispatcher whose backend-aware tools run on `backend` - used
         to give a delegated sub-agent its own execution terminal (feature H + P).
         Shares the same RoE scope; call-count stats start fresh for the child."""
         return ToolDispatcher(self.registry.clone_with_backend(backend), scope=self.scope)
@@ -68,7 +68,7 @@ class ToolDispatcher:
         """
         Dispatch a tool call and return string output for the model.
 
-        Never raises — all errors are returned as descriptive strings
+        Never raises - all errors are returned as descriptive strings
         so the model can reason about what went wrong.
         """
         self._call_count += 1

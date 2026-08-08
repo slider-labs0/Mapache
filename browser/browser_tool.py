@@ -1,14 +1,14 @@
 """
-browser_tool.py — a real headless-browser tool for the agent (capability #1)
+browser_tool.py - a real headless-browser tool for the agent (capability #1)
 
 Mapache's web tools (`web_fetch` / `http_request`) speak raw HTTP: fast, but they
 can't run JavaScript, so a single-page app (React/Vue/Angular), a client-side route,
-or DOM-based XSS is invisible to them — a hard ceiling on the modern-web-app class.
+or DOM-based XSS is invisible to them - a hard ceiling on the modern-web-app class.
 `browser/chromium_controller.py` already drives a real headless Chromium via
 Playwright; this exposes it to the agent as the `browser` tool.
 
 The controller is kept ALIVE across calls (one persistent context), so a login in
-one call carries its cookies into the next — the auth/IDOR continuity a fresh page
+one call carries its cookies into the next - the auth/IDOR continuity a fresh page
 per call would lose. Playwright is an optional dependency: absent, the tool returns
 install instructions instead of crashing, so it is always safe to register.
 """
@@ -25,7 +25,7 @@ from browser.scraping_tools import format_attack_surface
 class BrowserTool(BaseTool):
     name = "browser"
     description = (
-        "Render a URL in a REAL headless Chromium browser — JavaScript executes, the "
+        "Render a URL in a REAL headless Chromium browser - JavaScript executes, the "
         "DOM builds, and client-side routes work. Use this when `web_fetch` returns an "
         "empty page or a JS shell, for single-page apps (React/Vue/Angular), DOM-based "
         "XSS, or any flow that needs scripts to run. The browser SESSION PERSISTS across "
@@ -130,7 +130,7 @@ class BrowserTool(BaseTool):
             return ToolResult.fail(result.error or "Unknown browser error")
 
         lines = [f"[{result.url}] {result.title}".strip(), "", result.text or "(no text)"]
-        # Recon grounding on the RENDERED DOM — after JS has built the page, so forms /
+        # Recon grounding on the RENDERED DOM - after JS has built the page, so forms /
         # endpoints that only exist client-side are surfaced too.
         if result.html:
             surface = format_attack_surface(result.html, result.url)
@@ -139,7 +139,7 @@ class BrowserTool(BaseTool):
         if result.links:
             lines.append("\n--- Links ---\n" + "\n".join(result.links[:20]))
         if result.screenshot_b64:
-            lines.append(f"\n[screenshot captured — {len(result.screenshot_b64)} b64 chars]")
+            lines.append(f"\n[screenshot captured - {len(result.screenshot_b64)} b64 chars]")
 
         return ToolResult.ok("\n".join(lines),
                              metadata={"url": result.url, "rendered": True})

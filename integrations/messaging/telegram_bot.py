@@ -1,5 +1,5 @@
 """
-telegram_bot.py — Mapache Telegram integration
+telegram_bot.py - Mapache Telegram integration
 
 Connects Mapache to Telegram so you can operate the agent
 entirely from your phone via a Telegram bot.
@@ -18,7 +18,7 @@ Usage:
     bot = TelegramBot(token="...", allowed_users=["123456789"])
     await bot.start(gateway)
 
-Then message your bot on Telegram — it routes to Mapache.
+Then message your bot on Telegram - it routes to Mapache.
 """
 
 from __future__ import annotations

@@ -1,5 +1,5 @@
 """
-publish.py — turn a GitHub repo into an installable hub manifest (feature I).
+publish.py - turn a GitHub repo into an installable hub manifest (feature I).
 
 This is the "upload your own GitHub tool" ligament: the community-hub site (a
 separate project) fetches a repo's declaration and calls `manifest_from_github`
@@ -73,7 +73,7 @@ def _validate(spec: dict, repo_url: str) -> None:
         raise PublishError(f"tool {name!r} needs a 'command' template")
     if "{dir}" not in command:
         raise PublishError(
-            f"tool {name!r} command must reference {{dir}} (the clone path) — "
+            f"tool {name!r} command must reference {{dir}} (the clone path) - "
             f"a repo tool runs from its checkout")
     perm = str(spec.get("permission", "shell"))
     if perm not in _PERMISSIONS:
@@ -146,7 +146,7 @@ def install_to_config(m: SkillManifest, config_path: str | Path) -> Path:
     """Write an external_tool manifest into a config's `integrations` (verbatim edit,
     preserving other entries' ${ENV}); replaces a same-name entry. Returns the path.
 
-    Verifies the manifest first — a bad checksum refuses to install."""
+    Verifies the manifest first - a bad checksum refuses to install."""
     from core.config import load_global_raw, save_global_config
     ok, reason = verify_manifest(m)
     if not ok:

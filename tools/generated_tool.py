@@ -1,5 +1,5 @@
 """
-generated_tool.py — self-authored tool support (Hermes-style)
+generated_tool.py - self-authored tool support (Hermes-style)
 
 A GeneratedTool is a BaseTool whose body was written by the model at runtime via
 the `create_tool` meta-tool, persisted to disk, and reloaded on startup. The
@@ -7,14 +7,14 @@ on-disk package is **hub-installable** from day one (feature I distributes the
 exact same folder):
 
     plugins/generated/<name>/
-        tool.py        # `async def run(args, shell): ...` — the model's code
+        tool.py        # `async def run(args, shell): ...` - the model's code
         manifest.json  # name, version, description, parameters (JSON schema),
                        # origin, author, created, last_used, use_count, state,
                        # state_changed, phase, deps, sha256(tool.py)
 
 Trust model: `origin == "self"` tools were written locally by the agent and are
 trusted at the same level as the rest of Mapache (which already runs arbitrary
-shell). `origin == "hub"` tools are third-party code — their tool.py is verified
+shell). `origin == "hub"` tools are third-party code - their tool.py is verified
 against `sha256` in the manifest before it is ever compiled, and a tampered or
 unverified hub tool refuses to load.
 
@@ -69,7 +69,7 @@ def _name_ok(name: str) -> bool:
 # --------------------------------------------------------------------------- #
 # Code template
 #
-# The model supplies the *body* of run(), not a whole file — local models mangle
+# The model supplies the *body* of run(), not a whole file - local models mangle
 # full class/file output, and a fixed contract keeps validation + the hub format
 # uniform. We indent the body under a canonical signature so the surface the model
 # writes against is always exactly: `args` (dict of validated arguments) and
@@ -105,7 +105,7 @@ def compile_run(source: str, name: str) -> Callable:
     """
     namespace: dict[str, Any] = {}
     compiled = compile(source, f"<generated:{name}>", "exec")
-    exec(compiled, namespace)  # noqa: S102 — trusted/self-origin or hub-verified
+    exec(compiled, namespace)  # noqa: S102 - trusted/self-origin or hub-verified
     run = namespace.get("run")
     if run is None or not callable(run):
         raise ValueError("generated code must define `async def run(args, shell)`")
@@ -223,7 +223,7 @@ def write_generated_tool(
     """
     Write a generated tool package to disk and return its directory.
 
-    Does not register or compile — callers validate + compile first so a bad
+    Does not register or compile - callers validate + compile first so a bad
     tool never lands on disk.
     """
     tool_dir = Path(base_dir) / name
@@ -260,7 +260,7 @@ def load_generated_tool(
     Load and compile a generated tool package.
 
     For `origin == "hub"`, the on-disk tool.py is verified against the manifest
-    sha256 *before* it is compiled — a tampered or unverified hub tool refuses
+    sha256 *before* it is compiled - a tampered or unverified hub tool refuses
     to load. Self-origin tools skip the check (they were written locally).
     """
     tool_dir = Path(tool_dir)
@@ -273,7 +273,7 @@ def load_generated_tool(
         if not expected or expected != actual:
             raise ValueError(
                 f"hub tool '{manifest.get('name')}' failed checksum "
-                f"(expected {expected}, got {actual}) — refusing to load"
+                f"(expected {expected}, got {actual}) - refusing to load"
             )
 
     run = compile_run(source, manifest.get("name", "unknown"))

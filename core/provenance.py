@@ -1,8 +1,8 @@
 """
-provenance.py — local signing for synthesized skills (feature N)
+provenance.py - local signing for synthesized skills (feature N)
 
 Feature A's trust model verifies a *hub* tool's code against a sha256 in its
-manifest; provenance adds the next layer — a signature proving WHO authored a
+manifest; provenance adds the next layer - a signature proving WHO authored a
 skill and that its code is untampered. It is where feature N's "signed packages"
 requirement lives, ahead of the community hub (I) that will distribute them.
 
@@ -10,7 +10,7 @@ v1 is deliberately dependency-free: an HMAC-SHA256 over the code's sha256, keyed
 by a per-machine secret in `~/.mapache/skill_key` (created on first use, 0600).
 That gives Mapache a stable signer identity and tamper-evidence for the skills it
 synthesizes locally. Cross-machine trust (verifying *another* operator's signing
-key) is the hub's job — an asymmetric (ed25519) upgrade can drop in here behind
+key) is the hub's job - an asymmetric (ed25519) upgrade can drop in here behind
 the same sign()/verify() surface when I lands.
 """
 
@@ -66,13 +66,13 @@ def verify(message: str, signature: str, key: Optional[bytes] = None) -> bool:
 
 
 # --------------------------------------------------------------------------- #
-# Cross-machine signatures — ed25519 (feature N upgrade, optional dependency)
+# Cross-machine signatures - ed25519 (feature N upgrade, optional dependency)
 # --------------------------------------------------------------------------- #
 #
 # HMAC above is per-machine: it proves a skill is untampered and identifies the
 # signer to itself, but verifying *another* operator's signature needs the shared
 # secret. ed25519 closes that gap (the hub's real goal): a publisher signs with a
-# private key, anyone verifies with the public key — no shared secret. It needs
+# private key, anyone verifies with the public key - no shared secret. It needs
 # the `cryptography` package; when absent these degrade safely (verify → False),
 # and `verify_signed` keeps dispatching the always-available HMAC path.
 
@@ -113,7 +113,7 @@ def sign_ed25519(message: str, private_pem: str) -> str:
 
 def verify_ed25519(message: str, signature_hex: str, public_pem: str) -> bool:
     """Verify an ed25519 signature with the publisher's public key. False on any
-    error (bad sig, malformed key, library absent) — never raises."""
+    error (bad sig, malformed key, library absent) - never raises."""
     if not signature_hex or not public_pem:
         return False
     try:

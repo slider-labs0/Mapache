@@ -1,4 +1,4 @@
-"""reporting — engagement deliverables (feature L)."""
+"""reporting - engagement deliverables (feature L)."""
 
 from .report_builder import EngagementReport, Finding, build_report
 

@@ -1,14 +1,14 @@
 """
-user_profile.py — agent-maintained user profile (feature F)
+user_profile.py - agent-maintained user profile (feature F)
 
 `user.md` is the inverse of `soul.md` (E): soul is human-owned and shapes the
 agent's voice; this is **agent-owned** and records durable facts about the
-*operator* — preferences, habits, recurring targets, past engagements — so the
+*operator* - preferences, habits, recurring targets, past engagements - so the
 agent carries continuity across sessions. It is distinct from the per-engagement
 `AttackState` (which resets per target) and from `soul.md` (persona, not facts).
 
 The agent appends facts through the `user_remember` tool; a compact summary is
-injected into the prompt each turn. Growth is bounded — exact-duplicate facts are
+injected into the prompt each turn. Growth is bounded - exact-duplicate facts are
 dropped, and per-category + total caps evict the oldest entries (the same
 "summarize/drop the oldest" idea compaction uses), so the profile stays a small,
 high-signal block rather than an ever-growing log.
@@ -162,8 +162,8 @@ class UserProfile:
 class UserRememberTool(BaseTool):
     name = "user_remember"
     description = (
-        "Record a DURABLE fact about the user/operator — a preference, habit, "
-        "recurring target, or past engagement — to the long-term user profile so "
+        "Record a DURABLE fact about the user/operator - a preference, habit, "
+        "recurring target, or past engagement - to the long-term user profile so "
         "future sessions remember it. Use sparingly, only for facts that stay true "
         "across engagements; per-engagement findings belong in the attack state, "
         "not here. Optional `category`: Identity, Preferences, Engagements, "

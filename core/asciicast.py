@@ -1,7 +1,7 @@
 """
-asciicast.py — record the engagement as an asciinema v2 cast (evidence capture).
+asciicast.py - record the engagement as an asciinema v2 cast (evidence capture).
 
-A real engagement wants a replayable record of what the agent actually did — the
+A real engagement wants a replayable record of what the agent actually did - the
 court-ready / debrief artifact. This subscribes to the event bus and writes an
 asciicast v2 file (`<workspace>/engagement.cast`): a JSON header line followed by
 `[time, "o", text]` output frames for each tool call, its result, findings, and RoE
@@ -49,7 +49,7 @@ class AsciicastRecorder:
         self._bus = bus
         for topic in _TOPICS:
             bus.subscribe(topic, self._on_event)
-        self._write("$ mapache engagement — recording started\r\n")
+        self._write("$ mapache engagement - recording started\r\n")
 
     async def _on_event(self, event: Any) -> None:
         self._write(self._render(getattr(event, "topic", ""), getattr(event, "data", {}) or {}))
@@ -58,7 +58,7 @@ class AsciicastRecorder:
         if self._closed:
             return
         self._closed = True
-        self._write("$ engagement complete — recording stopped\r\n")
+        self._write("$ engagement complete - recording stopped\r\n")
         if self._bus is not None:
             for topic in _TOPICS:
                 try:

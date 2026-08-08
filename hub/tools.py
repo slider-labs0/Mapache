@@ -1,5 +1,5 @@
 """
-tools.py — agent-callable hub tools (feature I): skill_search / list / install.
+tools.py - agent-callable hub tools (feature I): skill_search / list / install.
 
 Each tool reads the live HubClient through a provider, so the CLI can wire the
 registry after the controller is built. When no hub/registry is configured the
@@ -21,8 +21,8 @@ def _fmt(skills: list) -> str:
         return "No skills found."
     lines = []
     for m in skills:
-        sig = " ✓signed" if m.signature else ""
-        lines.append(f"  {m.name} v{m.version} [{m.skill_type}]{sig} — {m.description}")
+        sig = " oksigned" if m.signature else ""
+        lines.append(f"  {m.name} v{m.version} [{m.skill_type}]{sig} - {m.description}")
     return "\n".join(lines)
 
 
@@ -110,8 +110,8 @@ async def _github_raw(owner: str, repo: str, path: str, *, egress: Any = None) -
 class InstallGithubToolTool(BaseTool):
     """Install a tool the user points at on GitHub, right from a natural-language
     request. Reads the repo's `mapache-tool.json` if present; otherwise the caller
-    supplies the run `command` (and a name). The tool is registered live — usable
-    in the same session — and persisted to config so it survives a restart.
+    supplies the run `command` (and a name). The tool is registered live - usable
+    in the same session - and persisted to config so it survives a restart.
 
     Runs third-party code from the repo (cloned on first use); only install repos
     the operator trusts.
@@ -120,12 +120,12 @@ class InstallGithubToolTool(BaseTool):
     name = "install_github_tool"
     description = (
         "USE THIS whenever the user wants to add, install, or wrap a GitHub repo "
-        "(a github.com URL or owner/repo) as a callable tool — prefer it over "
+        "(a github.com URL or owner/repo) as a callable tool - prefer it over "
         "create_tool for anything backed by a repo. Give the repo in `repo`. If the "
         "repo has a mapache-tool.json it's used automatically; otherwise pass a "
         "`command` template ({dir} = the clone path, {args} = arguments) and a `name`. "
         "The tool clones the repo, becomes usable immediately (no restart), and "
-        "persists across restarts. Runs third-party code — only for repos the "
+        "persists across restarts. Runs third-party code - only for repos the "
         "operator trusts."
     )
     parameters = {
@@ -194,7 +194,7 @@ class InstallGithubToolTool(BaseTool):
                 text = await fetch(owner, repo_name, "mapache-tool.json")
                 if text is None:
                     return ToolResult.fail(
-                        f"{owner}/{repo_name} has no mapache-tool.json — pass a `command` "
+                        f"{owner}/{repo_name} has no mapache-tool.json - pass a `command` "
                         f"(and `name`) so I can install it, e.g. 'python {{dir}}/run.py {{args}}'.")
                 spec = text  # manifest_from_github parses the JSON string
 
@@ -214,7 +214,7 @@ class InstallGithubToolTool(BaseTool):
             if tools:
                 try:
                     self._on_installed(tools[0])
-                    live_note = (f" '{manifest.name}' is registered and callable now — "
+                    live_note = (f" '{manifest.name}' is registered and callable now - "
                                  f"invoke it directly; do NOT author it again with "
                                  f"create_tool.")
                 except Exception as exc:  # pragma: no cover - defensive

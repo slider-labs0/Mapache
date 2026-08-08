@@ -1,18 +1,18 @@
 """
-agent_middlewares.py — concrete loop middlewares (built on core/middleware.py)
+agent_middlewares.py - concrete loop middlewares (built on core/middleware.py)
 
 Standard, opt-in policies that plug into the agent loop's slots. Kept separate
 from the framework so the framework stays dependency-free.
 
-  - BudgetMiddleware — engagement-level token/time budget with a graceful stop
+  - BudgetMiddleware - engagement-level token/time budget with a graceful stop
     (Decepticon-parity: budget enforcement).
-  - HITLMiddleware — human-in-the-loop checkpoint gate: pause the loop at
+  - HITLMiddleware - human-in-the-loop checkpoint gate: pause the loop at
     milestones and let a human approve / deny / steer (Decepticon-parity: real
     HITL slot).
-  - VaccineMiddleware — defensive follow-up: when the engagement confirms a new
+  - VaccineMiddleware - defensive follow-up: when the engagement confirms a new
     vulnerability, generate a detection signature + remediation ("vaccine") and
     record it (Decepticon-parity: blue-cell / offensive-vaccine loop).
-  - ReflectionMiddleware — every N steps, inject a structured self-critique and name
+  - ReflectionMiddleware - every N steps, inject a structured self-critique and name
     the current tactical stage, so the agent reasons about what it has learned and
     picks the highest-value next action instead of drifting (frontier-loop parity).
 """
@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 # Active route enumeration (gap #2: discover real routes, don't invent them)
 # --------------------------------------------------------------------------- #
 
-# A small, high-signal list of routes to probe on a web target — the kind an agent
+# A small, high-signal list of routes to probe on a web target - the kind an agent
 # would otherwise guess (and get wrong). Hits are folded into attack_state.endpoints
 # so they show up in the state block as REAL paths for every (sub-)agent to use.
 COMMON_ROUTES = [
@@ -151,7 +151,7 @@ class BudgetMiddleware(AgentMiddleware):
 
     Both caps are ENGAGEMENT-level (cumulative across turns): the timer starts on
     the first turn and `max_tokens` is checked against the controller's cumulative
-    `session_tokens`. Enforcement is graceful — it ends the current turn cleanly via
+    `session_tokens`. Enforcement is graceful - it ends the current turn cleanly via
     ctx.stop rather than raising, so partial results and the transcript survive."""
 
     name = "budget"
@@ -183,7 +183,7 @@ class BudgetMiddleware(AgentMiddleware):
             return
         ctx.stop = True
         ctx.stop_reason = "budget_exceeded"
-        ctx.stop_message = (f"Engagement budget exceeded ({reason}) — stopping to "
+        ctx.stop_message = (f"Engagement budget exceeded ({reason}) - stopping to "
                             "stay within the operator's limit.")
         logger.warning("Budget middleware: %s", reason)
         bus = getattr(ctx.controller, "bus", None)
@@ -229,7 +229,7 @@ class HITLMiddleware(AgentMiddleware):
     A checkpoint fires when either:
       - `every` > 0 and that many iterations have passed since the last checkpoint, or
       - `on_phase_change` and the engagement phase changed since the last step.
-    The first iteration never gates — there is nothing to review yet.
+    The first iteration never gates - there is nothing to review yet.
 
     The callback is async `(ctx, reason) -> HITLDecision | None`:
       - approve / None → continue
@@ -288,7 +288,7 @@ class HITLMiddleware(AgentMiddleware):
         try:
             decision = await self.callback(ctx, reason)
         except Exception as exc:  # a broken prompt must not wedge the loop
-            logger.warning("HITL callback failed (%s) — auto-approving", exc)
+            logger.warning("HITL callback failed (%s) - auto-approving", exc)
             return
 
         if decision is None or decision.action == "approve":
@@ -312,7 +312,7 @@ class Vaccine:
     notes: str = ""
 
     def as_text(self) -> str:
-        parts = [f"# Vaccine — {self.vulnerability}"]
+        parts = [f"# Vaccine - {self.vulnerability}"]
         if self.detection:
             parts.append(f"\n## Detection\n{self.detection}")
         if self.remediation:
@@ -345,7 +345,7 @@ class VaccineMiddleware(AgentMiddleware):
     """Defensive follow-up loop ('offensive vaccine' / blue-cell).
 
     Every time the engagement confirms a NEW vulnerability, generate a defensive
-    artifact for it — a detection signature and a remediation — and record it, so
+    artifact for it - a detection signature and a remediation - and record it, so
     each offensive finding yields a blue-team deliverable. This is Decepticon's
     blue-cell node expressed as a composable loop slot.
 
@@ -486,12 +486,12 @@ def make_model_vaccine_generator(controller: Any) -> VaccineGenerator:
 class ReflectionMiddleware(AgentMiddleware):
     """Periodic self-critique + tactical staging (frontier-loop parity).
 
-    Frontier agent loops don't just react step to step — every so often they stop to
+    Frontier agent loops don't just react step to step - every so often they stop to
     reflect: what have I actually learned, what's my current hypothesis, and what is the
     highest-value thing I haven't tried? This middleware injects exactly that prompt
     every `every` iterations, and names the current TACTICAL STAGE derived from live
     state (recon → find a primitive → exploit → extract), so the agent drives a
-    kill-chain instead of drifting. It costs no extra model call — the reflection rides
+    kill-chain instead of drifting. It costs no extra model call - the reflection rides
     on the next call as a steering message.
     """
 
@@ -505,20 +505,20 @@ class ReflectionMiddleware(AgentMiddleware):
     def _stage(state: Any) -> str:
         """The tactical kill-chain stage implied by the current findings."""
         if state is None:
-            return "reconnaissance — map the target"
+            return "reconnaissance - map the target"
         flags = getattr(state, "flags", None) or []
         creds = getattr(state, "credentials", None) or []
         vulns = getattr(state, "vulnerabilities", None) or []
         ports = getattr(state, "open_ports", None) or []
         if flags:
-            return "extraction — you have the objective in hand; verify and report it"
+            return "extraction - you have the objective in hand; verify and report it"
         if creds:
-            return "escalation — use the access/credentials you have to reach the objective"
+            return "escalation - use the access/credentials you have to reach the objective"
         if vulns:
-            return "exploitation — turn a confirmed weakness into access or the objective"
+            return "exploitation - turn a confirmed weakness into access or the objective"
         if ports:
-            return "find a primitive — enumerate the surface for an exploitable weakness"
-        return "reconnaissance — map the target's ports, services, and entry points"
+            return "find a primitive - enumerate the surface for an exploitable weakness"
+        return "reconnaissance - map the target's ports, services, and entry points"
 
     async def on_iteration_start(self, ctx: LoopContext) -> None:
         it = ctx.iteration
@@ -527,12 +527,12 @@ class ReflectionMiddleware(AgentMiddleware):
         self._last = it
         stage = self._stage(ctx.attack_state)
         ctx.inject.append(
-            "CHECKPOINT — reflect before your next action. In three short lines state: "
-            "(1) CONFIRMED — the concrete facts you have actually verified from tool "
-            "output; (2) HYPOTHESIS — your current best theory for reaching the "
-            "objective; (3) NEXT — the single highest-value action you have NOT yet "
+            "CHECKPOINT - reflect before your next action. In three short lines state: "
+            "(1) CONFIRMED - the concrete facts you have actually verified from tool "
+            "output; (2) HYPOTHESIS - your current best theory for reaching the "
+            "objective; (3) NEXT - the single highest-value action you have NOT yet "
             f"tried. Your tactical stage looks like: {stage}. Then take that NEXT "
-            "action — do not repeat anything already tried, and do not restate the plan "
+            "action - do not repeat anything already tried, and do not restate the plan "
             "without acting on it.")
         bus = getattr(ctx.controller, "bus", None)
         if bus is not None:

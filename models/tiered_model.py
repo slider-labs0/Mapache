@@ -1,10 +1,10 @@
 """
-tiered_model.py — explicit cost/quality tiering across sub-agents (Decepticon-style).
+tiered_model.py - explicit cost/quality tiering across sub-agents (Decepticon-style).
 
 The RoutedModel (models/routed_model.py) tiers by SCORED role and needs a populated
 registry. This is the simpler, deterministic sibling: an explicit {tier: model_id} map,
 so a swarm runs high-volume, low-stakes discovery (recon/OSINT/scanning) on a cheaper
-model and keeps the strong model for the hacking-critical operators — the exact lever
+model and keeps the strong model for the hacking-critical operators - the exact lever
 that would have stretched the budget the XBOW run exhausted.
 
 Drop-in for the controller's model_provider: same chat/chat_stream/supports_tools

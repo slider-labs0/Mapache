@@ -1,11 +1,11 @@
 """
-flag_verifier.py — candidate-flag verification (tail of the agent-loop plan)
+flag_verifier.py - candidate-flag verification (tail of the agent-loop plan)
 
 The anti-fabrication guard already rejects a braced FLAG{…}/CTF{…} token that never
 appeared in tool output. This adds the missing dimension: FORMAT. A verifier that knows
 the engagement's expected flag shape can (a) recognise a real flag that isn't a generic
 FLAG{…} (custom CTF/HTB/pico formats, a hex/UUID key), and (b) catch a token that is
-grounded in output but does NOT match the expected format — a plausible-but-wrong
+grounded in output but does NOT match the expected format - a plausible-but-wrong
 "success". A candidate is VERIFIED only when it is both grounded (seen in tool output)
 and well-formed (matches the expected pattern, when one is set).
 """
@@ -50,7 +50,7 @@ class FlagVerifier:
         if self.expected is not None:
             out += self.expected.findall(text)
         out += _BRACED_RE.findall(text)
-        # findall may yield tuples if the pattern has groups — normalise to str.
+        # findall may yield tuples if the pattern has groups - normalise to str.
         flat = [m if isinstance(m, str) else (m[0] if m else "") for m in out]
         return list(dict.fromkeys(t for t in flat if t))
 
@@ -63,11 +63,11 @@ class FlagVerifier:
         grounded = bool(candidate) and candidate in (corpus or "")
         well_formed = self._well_formed(candidate)
         if grounded and well_formed:
-            reason = "verified — grounded in tool output and matches the expected format"
+            reason = "verified - grounded in tool output and matches the expected format"
         elif not grounded:
-            reason = "fabricated — never appeared in this session's tool output"
+            reason = "fabricated - never appeared in this session's tool output"
         else:
-            reason = "format mismatch — appeared in output but not the expected flag format"
+            reason = "format mismatch - appeared in output but not the expected flag format"
         return FlagVerdict(candidate=candidate, grounded=grounded,
                            well_formed=well_formed,
                            verified=grounded and well_formed, reason=reason)

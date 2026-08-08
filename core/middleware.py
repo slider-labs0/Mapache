@@ -1,10 +1,10 @@
 """
-middleware.py — composable slots around the agent loop (Decepticon-parity #1)
+middleware.py - composable slots around the agent loop (Decepticon-parity #1)
 
 Mapache's controller was monolithic: cross-cutting concerns (budget, human
 approval, defensive follow-up, tracing) had to be hand-wired into `_agent_loop`.
 This adds a small middleware layer so those concerns become pluggable components
-that hook the loop at well-defined slots — the composable architecture Decepticon
+that hook the loop at well-defined slots - the composable architecture Decepticon
 gets from LangGraph, without adopting the framework.
 
 A middleware implements any subset of the hooks; the controller runs them at:
@@ -49,7 +49,7 @@ class LoopContext:
 
 
 class AgentMiddleware:
-    """Base class — override the hooks you need. All are async and optional."""
+    """Base class - override the hooks you need. All are async and optional."""
     name: str = "middleware"
 
     async def on_turn_start(self, ctx: LoopContext) -> None:

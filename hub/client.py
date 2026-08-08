@@ -1,11 +1,11 @@
 """
-client.py — hub client: search / list / install (feature I)
+client.py - hub client: search / list / install (feature I)
 
 Installs a verified skill into the right home:
 
 - `generated_tool` → `write_generated_tool` under the generated-tool dir (A). The
   on-disk manifest is stamped `origin="hub"`, so A's loader re-verifies its sha256
-  before compiling — a tampered package refuses to load even after install.
+  before compiling - a tampered package refuses to load even after install.
 - `mcp_server`     → an entry under `mcpServers` in `mcp.json` (the MCP client).
 - `external_tool`  → an entry in the global config's `integrations` list (a BYO
   command tool backed by a GitHub repo); the CLI turns it into a CommandTool at
@@ -13,7 +13,7 @@ Installs a verified skill into the right home:
 
 Safety: every install re-checks the checksum (and the signature when a trusted key
 is configured) BEFORE writing anything; a failure refuses the install. Installs do
-NOT hot-load — generated tools and MCP servers are picked up at next startup, which
+NOT hot-load - generated tools and MCP servers are picked up at next startup, which
 is the "sandbox review before enabling" gate (the operator can inspect the written
 package first). Running a skill is third-party code execution; the agent-facing
 install tool says so.

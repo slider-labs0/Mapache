@@ -1,15 +1,15 @@
 """
-logger.py — Mapache logging setup
+logger.py - Mapache logging setup
 
 Structured, colored console output + rotating file logs.
 All modules use: from core.logger import get_logger; logger = get_logger(__name__)
 
 Log levels:
-    DEBUG   — internal state, model payloads, event traces
-    INFO    — normal operation milestones
-    WARNING — recoverable issues (retry, fallback, trim)
-    ERROR   — failures that affect output
-    CRITICAL — fatal, requires restart
+    DEBUG   - internal state, model payloads, event traces
+    INFO    - normal operation milestones
+    WARNING - recoverable issues (retry, fallback, trim)
+    ERROR   - failures that affect output
+    CRITICAL - fatal, requires restart
 """
 
 from __future__ import annotations
@@ -47,8 +47,8 @@ LEVEL_COLORS = {
 LEVEL_SYMBOLS = {
     "DEBUG":    "·",
     "INFO":     "→",
-    "WARNING":  "⚠",
-    "ERROR":    "✗",
+    "WARNING":  "[!]",
+    "ERROR":    "x",
     "CRITICAL": "☠",
 }
 
@@ -59,7 +59,7 @@ class MapacheFormatter(logging.Formatter):
 
     Format:
         [HH:MM:SS] → module_name  message
-        [HH:MM:SS] ✗ module_name  ERROR: message
+        [HH:MM:SS] x module_name  ERROR: message
     """
 
     def __init__(self, use_color: bool = True) -> None:
@@ -95,7 +95,7 @@ class MapacheFormatter(logging.Formatter):
 
 
 class FileFormatter(logging.Formatter):
-    """Plain formatter for log files — no ANSI codes."""
+    """Plain formatter for log files - no ANSI codes."""
 
     FORMAT = "%(asctime)s  %(levelname)-8s  %(name)-30s  %(message)s"
     DATEFMT = "%Y-%m-%d %H:%M:%S"
@@ -131,7 +131,7 @@ def setup_logging(
     global _initialized
     root = logging.getLogger("mapache")
     if _initialized:
-        # Already configured — most likely by _auto_setup() at import time (INFO).
+        # Already configured - most likely by _auto_setup() at import time (INFO).
         # An explicit later call (e.g. the CLI's WARNING) must still win, so apply
         # the requested level to the existing console handler instead of no-op'ing.
         target = getattr(logging, level.upper(), logging.INFO)

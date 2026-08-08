@@ -1,5 +1,5 @@
 """
-config.py — Mapache configuration layer (feature C0)
+config.py - Mapache configuration layer (feature C0)
 
 The single place settings come from. Before this, configuration was scattered
 across argparse flags and a few ad-hoc `os.environ` reads; this consolidates it
@@ -9,17 +9,17 @@ Precedence (highest wins):
 
     CLI flag  >  project file  >  global file  >  environment  >  built-in default
 
-- **global file**  — `~/.mapache/config.json` (override with $MAPACHE_CONFIG).
+- **global file**  - `~/.mapache/config.json` (override with $MAPACHE_CONFIG).
   Holds secrets + provider entries; lives outside any repo.
-- **project file** — `<working_dir>/mapache.json`. Non-secret per-engagement
+- **project file** - `<working_dir>/mapache.json`. Non-secret per-engagement
   overrides (default model, strategy). Mirrors MCP's `mcp.json` precedent.
-- **environment**  — well-known vars (OLLAMA_URL, OPENROUTER_API_KEY, …) mapped
+- **environment**  - well-known vars (OLLAMA_URL, OPENROUTER_API_KEY, …) mapped
   into the config, plus `${VAR}` interpolation anywhere in a value so a config
   can reference a secret kept only in the environment.
 
 Secrets are stored plaintext in the user-dir file (document a 0600 / .gitignore)
 *or* referenced as `"${OPENROUTER_API_KEY}"` and resolved from the environment at
-load — an unresolved reference becomes empty (never a literal token on the wire).
+load - an unresolved reference becomes empty (never a literal token on the wire).
 `MapacheConfig.redacted()` masks secrets for display (`mapache config show`).
 """
 
@@ -174,7 +174,7 @@ def _env_layer(environ: dict[str, str]) -> dict[str, Any]:
 def _interpolate(value: Any, environ: dict[str, str]) -> Any:
     """Resolve `${VAR}` references in any string within the structure.
 
-    An unresolved reference becomes "" rather than a literal `${VAR}` — so a
+    An unresolved reference becomes "" rather than a literal `${VAR}` - so a
     secret referenced but absent from the environment is simply unset, never
     sent verbatim.
     """
@@ -253,18 +253,18 @@ class MapacheConfig:
     # Voice I/O (Phase 9): raw dict ({"enabled": bool, "tts": …, "stt": …}).
     voice: dict[str, Any] = field(default_factory=dict)
     # Engagement budget (optional): {"max_tokens": int, "max_seconds": number}.
-    # Enforced by BudgetMiddleware — the loop stops gracefully when exceeded.
+    # Enforced by BudgetMiddleware - the loop stops gracefully when exceeded.
     budget: dict[str, Any] = field(default_factory=dict)
     # Human-in-the-loop checkpoints (optional): {"enabled": bool, "every": int,
-    # "on_phase_change": bool}. Enforced by HITLMiddleware — the loop pauses for
+    # "on_phase_change": bool}. Enforced by HITLMiddleware - the loop pauses for
     # operator approve/deny/steer at milestones.
     hitl: dict[str, Any] = field(default_factory=dict)
     # Defensive follow-up (optional): {"enabled": bool, "per_step_cap": int}.
-    # Enforced by VaccineMiddleware — each confirmed vuln yields a detection +
+    # Enforced by VaccineMiddleware - each confirmed vuln yields a detection +
     # remediation "vaccine" written to <workspace>/vaccines/.
     vaccine: dict[str, Any] = field(default_factory=dict)
     # Periodic self-critique (optional): {"enabled": bool, "every": int}. Enforced by
-    # ReflectionMiddleware — injects a reflect-and-refocus checkpoint every N steps.
+    # ReflectionMiddleware - injects a reflect-and-refocus checkpoint every N steps.
     reflection: dict[str, Any] = field(default_factory=dict)
     # Expected flag format (optional regex): the candidate-flag verifier uses it to
     # catch a grounded-but-wrong-format token and recognise custom (non-FLAG{}) flags.
@@ -449,7 +449,7 @@ def load_config(
 def load_global_raw(
     path: Optional[Path] = None, *, environ: Optional[dict[str, str]] = None
 ) -> dict[str, Any]:
-    """Read the global config file verbatim — no merge, no `${VAR}` resolution.
+    """Read the global config file verbatim - no merge, no `${VAR}` resolution.
 
     The wizard edits this raw dict so that secrets kept as `${ENV}` placeholders
     (or values supplied only by the environment) are preserved on save rather

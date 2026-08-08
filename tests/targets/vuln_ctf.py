@@ -1,8 +1,8 @@
 """
-vuln_ctf.py — a tiny intentionally-vulnerable CTF target for benchmarking Mapache.
+vuln_ctf.py - a tiny intentionally-vulnerable CTF target for benchmarking Mapache.
 
 A self-contained, dependency-free web app (stdlib http.server) that hosts a
-multi-step web-recon chain ending in a flag — an XBOW-style benchmark you can run
+multi-step web-recon chain ending in a flag - an XBOW-style benchmark you can run
 entirely on localhost (authorized: it's your own lab). No real exploit primitive
 is implemented (no shell exec / file system reach); the "vulnerabilities" are
 information disclosure the agent must chain together:
@@ -28,7 +28,7 @@ FLAG = "HTB{web_recon_chain_complete}"
 
 INDEX = """<!doctype html><html><head><title>Acme Staging</title></head>
 <body>
-<h1>Acme Corp — Staging</h1>
+<h1>Acme Corp - Staging</h1>
 <p>Welcome to the staging environment. Nothing to see here.</p>
 <!-- TODO before launch: tighten /robots.txt, it lists internal paths -->
 </body></html>"""
@@ -81,7 +81,7 @@ class Handler(BaseHTTPRequestHandler):
             if token == API_TOKEN:
                 self._send(f"Access granted.\n{FLAG}\n", ctype="text/plain")
             else:
-                self._send("403 — valid ?token= required (see the staging config).",
+                self._send("403 - valid ?token= required (see the staging config).",
                            code=403, ctype="text/plain")
         else:
             self._send("404 Not Found", code=404, ctype="text/plain")

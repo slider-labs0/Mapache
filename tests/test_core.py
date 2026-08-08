@@ -1,5 +1,5 @@
 """
-test_core.py — Mapache Phase 1 core tests
+test_core.py - Mapache Phase 1 core tests
 
 Tests all core modules without requiring Ollama to be running.
 Uses a mock model provider to simulate responses.
@@ -41,7 +41,7 @@ class MockModel:
         self.calls.append({"messages": messages, "tools": tools, "json_mode": json_mode})
         if self.responses:
             return self.responses.pop(0)
-        return {"message": {"content": "Mock response — no more scripted replies."}}
+        return {"message": {"content": "Mock response - no more scripted replies."}}
 
 
 from typing import Any
@@ -173,7 +173,7 @@ def test_context_builder_token_budget():
 
     payload = ctx.build(format="ollama")
     msgs = payload["messages"]
-    # Should be trimmed — not all 40+ messages
+    # Should be trimmed - not all 40+ messages
     assert len(msgs) < 42
     print(f"  PASS  context_builder_token_budget (kept {len(msgs)} messages)")
 
@@ -181,7 +181,7 @@ def test_context_builder_token_budget():
 def test_context_builder_tool_result_function_calling():
     ctx = ContextBuilder(use_function_calling=True)
     ctx.add_tool_result("call-1", "nmap_scan", "22/tcp open ssh")
-    # Exactly one message, with the tool role — no duplicate user echo.
+    # Exactly one message, with the tool role - no duplicate user echo.
     assert len(ctx._history) == 1
     msg = ctx._history[0]
     assert msg.role == "tool"
@@ -297,7 +297,7 @@ async def test_agent_json_mode_tool_call():
 
 async def test_prose_tool_call_recovered():
     # A tool-native model that writes the call as prose (no JSON / structured
-    # tool_call) must still be dispatched — not accepted as a final answer.
+    # tool_call) must still be dispatched - not accepted as a final answer.
     model = MockModel()
     model.queue({"message": {"content": 'shell(cmd="whoami")'}})
     model.queue({"message": {"content": "The user is root."}})
@@ -383,7 +383,7 @@ def test_skills_playbook_web_matching():
     # URL target → fires
     st2 = AttackState(); st2.target = "http://127.0.0.1:3000"
     assert web in relevant_skills(st2, "")
-    # a lone SSH/cred request is NOT web — the web skill stays silent (the credential
+    # a lone SSH/cred request is NOT web - the web skill stays silent (the credential
     # skill owns port 22 / "crack the ssh key"; see its own test).
     st3 = AttackState(); st3.open_ports = ["22"]; st3.target = "10.0.0.1"
     assert web not in relevant_skills(st3, "crack the ssh key")
@@ -457,7 +457,7 @@ def test_skills_playbook_ad_matching():
 
 def test_skills_playbook_domain_matching():
     """The multi-domain playbooks (cloud, binary, mobile, SE) fire on their own
-    keyword/state signals and stay silent otherwise — Mapache isn't web-only."""
+    keyword/state signals and stay silent otherwise - Mapache isn't web-only."""
     from core.skills_playbook import (relevant_skills, CLOUD_ATTACK_SKILL,
                                       BINARY_PWN_SKILL, MOBILE_ATTACK_SKILL,
                                       SOCIAL_ENGINEERING_SKILL)
@@ -576,7 +576,7 @@ async def test_agent_verifier_off_by_default():
 
 async def test_agent_max_iterations():
     model = MockModel()
-    # Always return a tool call — should hit max iterations
+    # Always return a tool call - should hit max iterations
     for _ in range(AgentController.MAX_ITERATIONS + 2):
         model.queue({"message": {
             "content": "",
@@ -652,7 +652,7 @@ async def test_agent_fabrication_enforcement():
     assert "UNVERIFIED" in resp.content        # never stands as a trusted result
 
     # (b) a flag that DID appear in tool output (attack_state.flags) is accepted clean.
-    model2 = MockModel([{"message": {"content": "Done — the flag is FLAG{real_one}"}}])
+    model2 = MockModel([{"message": {"content": "Done - the flag is FLAG{real_one}"}}])
     controller2 = AgentController(model_provider=model2, mode=AgentMode.AGENT,
                                   enable_verifier=False)
     await controller2.start()
@@ -665,7 +665,7 @@ async def test_agent_fabrication_enforcement():
 
 async def test_agent_middleware_hooks():
     """The middleware layer runs at turn_start/iteration_start/turn_end and can
-    inject a steering message and stop the turn — the composable-loop foundation."""
+    inject a steering message and stop the turn - the composable-loop foundation."""
     from core.middleware import AgentMiddleware
 
     events = []
@@ -708,7 +708,7 @@ async def test_agent_middleware_hooks():
 
 
 async def test_budget_middleware():
-    """BudgetMiddleware stops the engagement on a token or time cap — cleanly via
+    """BudgetMiddleware stops the engagement on a token or time cap - cleanly via
     ctx.stop, both as a unit and through the real loop."""
     import types
     from core.middleware import LoopContext
@@ -743,7 +743,7 @@ async def test_budget_middleware():
 
 async def test_hitl_middleware():
     """HITLMiddleware gates the loop at checkpoints (every-N and phase change),
-    honouring approve / deny / steer — as a unit and through the real loop."""
+    honouring approve / deny / steer - as a unit and through the real loop."""
     import types
     from core.middleware import LoopContext
     from core.agent_middlewares import HITLMiddleware, HITLDecision
@@ -1280,7 +1280,7 @@ def test_flag_verifier():
 
 async def test_agent_flag_format_guard():
     """With a flag_format set, the guard flags a token that was 'captured' (in
-    attack_state.flags) but does NOT match the expected format — the format-aware
+    attack_state.flags) but does NOT match the expected format - the format-aware
     extension the brace-only guard misses."""
     controller = AgentController(model_provider=MockModel(), mode=AgentMode.AGENT,
                                  flag_format=r"CTF\{[a-z]+\}")
@@ -1290,20 +1290,20 @@ async def test_agent_flag_format_guard():
     controller.chain.attack_state.flags.append("CTF{ABC123}")
     controller._tool_corpus = "the page said CTF{ABC123}"
     out = await controller._guard_fabricated_flags(
-        "Done — the flag is CTF{ABC123}", session_id="ff")
+        "Done - the flag is CTF{ABC123}", session_id="ff")
     assert "UNVERIFIED" in out and "CTF{ABC123}" in out   # wrong format, despite 'captured'
 
     # A correctly-formatted, grounded, captured flag passes clean.
     controller.chain.attack_state.flags.append("CTF{abc}")
     controller._tool_corpus = "response body: CTF{abc}"
-    ok = await controller._guard_fabricated_flags("Done — CTF{abc}", session_id="ff")
+    ok = await controller._guard_fabricated_flags("Done - CTF{abc}", session_id="ff")
     assert "UNVERIFIED" not in ok
     print("  PASS  agent_flag_format_guard")
 
 
 async def test_agent_grounding_nudge():
     """Repeated web calls to invented paths (never seen in any response) trip the
-    response-grounded-acting nudge — the guard against blind endpoint spraying."""
+    response-grounded-acting nudge - the guard against blind endpoint spraying."""
     class Stub:
         async def dispatch(self, name, args, session_id):
             return "404 Not Found"        # nothing that could ground a future path
@@ -1402,7 +1402,7 @@ async def test_progress_ledger_records_dead_ends():
 
 
 async def test_agent_tool_events_carry_timing():
-    """Each tool call emits task.start, then task.result with a duration_ms — the
+    """Each tool call emits task.start, then task.result with a duration_ms - the
     signals the CLI uses to draw 'running <tool>…' / 'ran <tool> · <N>s'."""
     class Stub:
         async def dispatch(self, name, args, session_id):
@@ -1486,7 +1486,7 @@ def _routing(strategy):
 
 def test_opsec_local_pin_falls_back_without_local_model():
     """OPSEC wants to pin a sub-agent local, but with only cloud models installed
-    that must NOT crash on a missing Ollama model — it stays on the current model."""
+    that must NOT crash on a missing Ollama model - it stays on the current model."""
     from models.model_registry import (ModelRegistry, ModelProfile,
                                         ModelCapabilities, Provider)
     from models.routing_engine import RoutingEngine
@@ -1560,7 +1560,7 @@ async def test_routing_strategy_switch_changes_executor():
 
 
 # ------------------------------------------------------------------ #
-# Self-authored tools (generated tools + curator) — feature A
+# Self-authored tools (generated tools + curator) - feature A
 # ------------------------------------------------------------------ #
 
 import tempfile
@@ -1681,7 +1681,7 @@ async def test_generated_tool_curator_lifecycle():
         await dispatcher.dispatch("oneoff", {}, "")
         assert mgr.tools["oneoff"].state == STATE_ACTIVE
 
-        # Purge refuses a live tool — a hard delete must be a deliberate two-step.
+        # Purge refuses a live tool - a hard delete must be a deliberate two-step.
         assert "must be archived" in mgr.purge("oneoff")
 
         # Archive (the permissioned step): unregistered + folder moved aside.
@@ -1899,7 +1899,7 @@ def test_config_save_and_raw_roundtrip():
                                              "models": ["a/b"], "enabled": True}}}
         out = save_global_config(data, gpath)
         assert out == gpath and gpath.is_file()
-        # Raw read is verbatim — the ${VAR} placeholder is preserved, not resolved.
+        # Raw read is verbatim - the ${VAR} placeholder is preserved, not resolved.
         raw = load_global_raw(gpath)
         assert raw["providers"]["openrouter"]["api_key"] == "${OPENROUTER_API_KEY}"
 
@@ -2345,7 +2345,7 @@ async def test_controller_emits_tool_call_and_finding_events():
 
     class FakeDispatcher:
         async def dispatch(self, name, args, session_id=""):
-            return "uid=0(root) — HTB{rooted_box}"
+            return "uid=0(root) - HTB{rooted_box}"
     controller.tool_dispatcher = FakeDispatcher()
 
     tool_calls: list[dict] = []
@@ -2397,7 +2397,7 @@ def test_shared_blackboard_semantics():
 
 def test_lead_state_reset_still_works():
     # The lead (allow_state_reset=True, the default) still reassigns on a new IP
-    # and clears stale ports — the operator-facing behavior is unchanged.
+    # and clears stale ports - the operator-facing behavior is unchanged.
     chain = ConversationChain()
     chain.attack_state.target = "10.0.0.1"
     chain.attack_state.open_ports = ["22/tcp"]
@@ -2409,7 +2409,7 @@ def test_lead_state_reset_still_works():
 
 def test_flag_capture_from_web_and_exec():
     # Regression: flag auto-capture must fire for web-recon output, not only
-    # exec tools — a CTF chain can end at a web flag endpoint (verified live
+    # exec tools - a CTF chain can end at a web flag endpoint (verified live
     # 2026-06-29 against tests/targets/vuln_ctf.py).
     chain = ConversationChain()
     chain.on_turn_start("test the web app and capture the flag")
@@ -2419,7 +2419,7 @@ def test_flag_capture_from_web_and_exec():
     assert "HTB{web_recon_chain_complete}" in chain.attack_state.flags
 
     # ...but a bare 32-hex string in a web body (asset/session hash) is NOT a
-    # flag — matching it from HTML would be a false positive.
+    # flag - matching it from HTML would be a false positive.
     chain.on_tool_result("web_fetch",
                          '<script src="/a/0123456789abcdef0123456789abcdef.js">')
     assert "0123456789abcdef0123456789abcdef" not in chain.attack_state.flags
@@ -2429,7 +2429,7 @@ def test_flag_capture_from_web_and_exec():
     assert "d41d8cd98f00b204e9800998ecf8427e" in chain.attack_state.flags
 
     # ...but a 32-hex on an HTTP-header line reached via `shell`+curl (an S3 ETag,
-    # session hash, or request id) is NOT a flag — this false positive ended a live
+    # session hash, or request id) is NOT a flag - this false positive ended a live
     # flaws2.cloud engagement at "objective met" before any real cloud pivot.
     chain.on_tool_result(
         "shell",
@@ -2445,7 +2445,7 @@ def test_flag_capture_from_web_and_exec():
 
 def test_form_and_endpoint_surfacing():
     """Web responses are mined for the REAL form (method/action/fields) and endpoints,
-    surfaced in the state block — so the agent submits the actual form instead of
+    surfaced in the state block - so the agent submits the actual form instead of
     inventing /login (the concrete gap that sank the IDOR trading-platform benchmark)."""
     from core.conversation_chain import ConversationChain
     # The real XBEN-001 shape: a POST form with NO action (submits to itself) + creds
@@ -2460,7 +2460,7 @@ def test_form_and_endpoint_surfacing():
     ch.attack_state.open_ports = ["80/tcp"]
     ch.on_tool_result("http_request", page)
 
-    # The form is captured with its method + the fact it submits to itself + fields —
+    # The form is captured with its method + the fact it submits to itself + fields -
     # NOT a guessed /login, and the field names are the real ones.
     assert len(ch.attack_state.forms) == 1
     form = ch.attack_state.forms[0]
@@ -2521,7 +2521,7 @@ def test_dead_vector_detection():
 
 def test_disclosed_cred_extraction():
     """Creds leaked in page content (comments/JS/'password is …') are extracted and
-    surfaced as a 'try these on the login form FIRST' directive — the exact info the
+    surfaced as a 'try these on the login form FIRST' directive - the exact info the
     agent had but ignored when it POSTed {username: admin} with no password."""
     from core.conversation_chain import ConversationChain as C
 
@@ -2654,7 +2654,7 @@ async def test_prompt_injection_defense_and_offense():
 
 async def test_tiered_model_routing():
     """Per-operator cost/quality tiering: low-tier operators (recon/OSINT/scanner) route
-    to the cheap model, hacking-critical ones to the strong model — the swarm cost lever."""
+    to the cheap model, hacking-critical ones to the strong model - the swarm cost lever."""
     from models.tiered_model import TieredModel
 
     class _Prov:
@@ -2688,7 +2688,7 @@ async def test_tiered_model_routing():
 
 async def test_offensive_arsenal():
     """New capability tools (Decepticon-gap closers): payload corpus, JWT weapon,
-    GraphQL IDOR-finder, secret scanner, tech fingerprint, + SARIF/bounty/CVSS exports —
+    GraphQL IDOR-finder, secret scanner, tech fingerprint, + SARIF/bounty/CVSS exports -
     and their wiring so the agent can actually reach them."""
     from security_tools.payloads import search_payloads, VULN_CLASSES
     from security_tools.web_weapons import SearchPayloadsTool, JwtTool, GraphqlTool
@@ -2752,7 +2752,7 @@ async def test_offensive_arsenal():
 async def test_evidence_first_findings():
     """Evidence-first deliverable: report_finding records a structured, evidence-carrying
     finding (severity/asset/impact/remediation auto-filled by category), the store dedups
-    and renders a report, and the agent findings merge into the main engagement report —
+    and renders a report, and the agent findings merge into the main engagement report -
     success is a proven finding, not a flag."""
     from core.findings import Finding, FindingsStore, categorize, normalize_severity
 
@@ -2808,7 +2808,7 @@ async def test_evidence_first_findings():
 
 async def test_http_repeater_burp_lite():
     """Burp-lite: http_request records exchanges; http_repeater lists/shows/replays
-    (with tamper) and DIFFS — a different body on an id swap is flagged as a possible
+    (with tamper) and DIFFS - a different body on an id swap is flagged as a possible
     IDOR, an identical body as a dead vector. This is the broken-authz primitive."""
     from browser.http_history import HTTPHistory, diff_bodies
     from browser import scraping_tools as st
@@ -2830,7 +2830,7 @@ async def test_http_repeater_burp_lite():
     r = await tool.execute(action="show", id="r1")
     assert "alice" in r.output and "id" in r.output
 
-    # Replay r1 with a tampered id — monkeypatch the network to return another user's data.
+    # Replay r1 with a tampered id - monkeypatch the network to return another user's data.
     class _Resp:
         text = "<h1>account: bob balance 999 FLAG{x}</h1>"
         status_code = 200
@@ -2999,7 +2999,7 @@ async def test_delegate_parallel_fans_out():
                 return json.dumps({"type": "response", "content": "web done"})
             if "Exploit Operator" in joined:                   # exploit child
                 return json.dumps({"type": "response", "content": "exploit done"})
-            if "delegate_parallel —" in joined or "subagent result" in joined:
+            if "delegate_parallel -" in joined or "subagent result" in joined:
                 return json.dumps({"type": "response", "content": "all done"})  # lead, after
             return json.dumps({"type": "tool_call", "tool": "delegate_parallel", "args": {
                 "tasks": [{"task": "enumerate web", "operator": "web_operator"},
@@ -3126,7 +3126,7 @@ async def test_subagent_gets_own_backend_and_teardown():
 
 async def test_subagent_receives_mission_context():
     """A delegated sub-agent inherits the lead's overall objective (so it knows the
-    concrete success artifact — e.g. the proof-file path — instead of guessing) plus
+    concrete success artifact - e.g. the proof-file path - instead of guessing) plus
     an honesty directive."""
     captured: dict = {}
 
@@ -3570,7 +3570,7 @@ async def test_multihost_parallel_delegation():
 
         async def chat(self, messages, tools=None, json_mode=False, stream=False):
             joined = " ".join(m.get("content", "") for m in messages)
-            if "delegate_parallel —" in joined or "subagent result" in joined:
+            if "delegate_parallel -" in joined or "subagent result" in joined:
                 return json.dumps({"type": "response", "content": "all done"})  # lead, after
             if "HTB{" in joined:                                # a child, post-loot
                 return json.dumps({"type": "response", "content": "looted"})
@@ -3604,7 +3604,7 @@ async def test_multihost_parallel_delegation():
     assert hosts["hostA"].flags == ["HTB{flag-hostA}"]
     assert hosts["hostB"].flags == ["HTB{flag-hostB}"]
     assert hosts["hostA"] is not hosts["hostB"]
-    # The lead's own blackboard stays clean — findings didn't bleed across.
+    # The lead's own blackboard stays clean - findings didn't bleed across.
     assert controller.chain.attack_state.flags == []
     # Both delegations were tagged with their host for the engagement log (K).
     assert set(targets) == {"hostA", "hostB"}
@@ -3691,7 +3691,7 @@ async def test_controller_routes_operator_by_role():
 
 
 # ------------------------------------------------------------------ #
-# Editable persona — soul.md (feature E)
+# Editable persona - soul.md (feature E)
 # ------------------------------------------------------------------ #
 
 
@@ -3737,7 +3737,7 @@ def test_soul_persona_in_system_prompt():
 async def test_soul_hot_reload_each_turn():
     # The controller re-reads the persona provider every turn, so an edit to
     # soul.md takes effect on the next message without a restart.
-    persona = {"text": "Persona A — be brief."}
+    persona = {"text": "Persona A - be brief."}
 
     class CaptureModel:
         supports_tools = False
@@ -3755,17 +3755,17 @@ async def test_soul_hot_reload_each_turn():
     await controller.start()
 
     await controller.run("turn one", session_id="soul-test")
-    assert "Persona A — be brief." in model.systems[-1]
+    assert "Persona A - be brief." in model.systems[-1]
 
-    persona["text"] = "Persona B — be verbose."     # edit between turns
+    persona["text"] = "Persona B - be verbose."     # edit between turns
     await controller.run("turn two", session_id="soul-test")
-    assert "Persona B — be verbose." in model.systems[-1]
+    assert "Persona B - be verbose." in model.systems[-1]
     assert "Persona A" not in model.systems[-1]      # old persona is gone
     print("  PASS  soul_hot_reload_each_turn")
 
 
 # ------------------------------------------------------------------ #
-# Agent-maintained user profile — user.md (feature F)
+# Agent-maintained user profile - user.md (feature F)
 # ------------------------------------------------------------------ #
 
 
@@ -3788,7 +3788,7 @@ def test_user_profile_dedup_caps_and_persistence():
         assert len(prefs) == 3 and "prefers sqlmap" not in prefs and "pref 4" in prefs
         assert ("Habits", "uses zsh") in prof.facts()               # other category untouched
 
-        # The markdown file is the store — a fresh instance reloads it.
+        # The markdown file is the store - a fresh instance reloads it.
         prof.add("ran HTB box Blue", "Engagements")
         assert path.is_file()
         reloaded = UserProfile(path=path, max_per_category=3, max_total=10)
@@ -4238,12 +4238,12 @@ async def test_orchestrator_supervisor_routing():
 
 
 async def test_orchestrator_anti_loop():
-    """An operator that changes nothing must not loop the full budget — the
+    """An operator that changes nothing must not loop the full budget - the
     supervisor detects the unchanged state and stops."""
     from core.orchestrator import Supervisor
     ctrl = _FakeSupervisorController(effects={})  # every operator is a no-op
     # Soft anti-loop (Fix #2): on a truly-frozen state each of the ~4 eligible operators
-    # may be re-tried up to per_sig_cap (2) before it's benched — so the run stops via
+    # may be re-tried up to per_sig_cap (2) before it's benched - so the run stops via
     # "no route" after at most roster×2 dispatches, well short of the round budget,
     # instead of the old hard permanent ban that quit after one pass.
     res = await Supervisor(ctrl, max_rounds=12).run("go")
@@ -4259,7 +4259,7 @@ async def test_orchestrator_operator_budget():
     changing state (so the per-state anti-loop wouldn't trip)."""
     from core.orchestrator import Supervisor
     # exploit_operator keeps finding new vulns (state changes each round) but never
-    # a flag — the per-state anti-loop never fires, so only the budget stops it.
+    # a flag - the per-state anti-loop never fires, so only the budget stops it.
     ctrl = _FakeSupervisorController(
         effects={"exploit_operator": lambda st: st.vulnerabilities.append("vuln")})
     ctrl.chain.attack_state.vulnerabilities.append("seed")  # make exploit the top route
@@ -4324,7 +4324,7 @@ async def test_orchestrator_opplan_sequencing():
 async def test_orchestrator_exploration_ladder():
     """When operators surface nothing (state never changes), the supervisor keeps
     trying DIFFERENT specialists via the exploration ladder rather than stopping
-    after one — the P3 findings-gated-stall fix."""
+    after one - the P3 findings-gated-stall fix."""
     from core.orchestrator import Supervisor, OperatorRouter, RoutingState
 
     ctrl = _FakeSupervisorController(effects={})   # every operator is a no-op
@@ -4384,7 +4384,7 @@ async def test_orchestrator_fanout():
 
 
 async def test_orchestrator_progress_signal_and_soft_bench():
-    """Fixes #1–#3: web-surface discovery counts as routing progress (so an operator
+    """Fixes #1-#3: web-surface discovery counts as routing progress (so an operator
     mid-enumeration isn't benched), the anti-loop bench is soft (re-dispatch with a
     steer up to the budget), and fan-out hands each branch a distinct technique angle."""
     from core.orchestrator import (Supervisor, RoutingState, _fanout_angles)
@@ -4419,7 +4419,7 @@ async def test_orchestrator_progress_signal_and_soft_bench():
 async def test_scoped_bus_tags():
     """ScopedBus stamps an _agent tag onto every emitted event and forwards it to the
     real bus (so a sub-agent's full trace is attributable); a deeper scope wins and
-    subscribe/history delegate through — Decepticon-parity #7."""
+    subscribe/history delegate through - Decepticon-parity #7."""
     from core.event_bus import EventBus, ScopedBus
 
     bus = EventBus()
@@ -4443,7 +4443,7 @@ async def test_scoped_bus_tags():
 
 def test_learning_store_and_bias():
     """LearningStore records outcomes by target fingerprint, recalls prior wins, and
-    biases the OperatorRouter toward operators that won on similar targets — the
+    biases the OperatorRouter toward operators that won on similar targets - the
     cross-engagement 'smarter over time' loop."""
     import os
     import tempfile
@@ -4504,7 +4504,7 @@ def test_skill_md_format():
           "phase: exploitation\n"
           "tools: [http_request]\n"
           "---\n"
-          "ACTIVE PLAYBOOK — try ../../etc/passwd and %2e%2e%2f encodings.")
+          "ACTIVE PLAYBOOK - try ../../etc/passwd and %2e%2e%2f encodings.")
 
     spec = parse_skill_md(md)
     assert spec.name == "lfi_probe"
@@ -4546,7 +4546,7 @@ def test_skill_md_format():
 
 
 async def test_web_session_persists_login():
-    """A login via http_request must authenticate the NEXT call — the persistent
+    """A login via http_request must authenticate the NEXT call - the persistent
     cookie-jar fix for the auth/IDOR failure cluster. Without it, each call built a
     fresh client and the session cookie was lost."""
     import httpx
@@ -4596,7 +4596,7 @@ async def test_web_tools_share_session():
 
 async def test_browser_tool():
     """The headless-browser tool validates its input and degrades gracefully when
-    Playwright is absent — it reports install steps instead of crashing the loop."""
+    Playwright is absent - it reports install steps instead of crashing the loop."""
     from browser.browser_tool import BrowserTool
     from browser.chromium_controller import ChromiumController
 
@@ -4643,8 +4643,8 @@ async def test_heavy_tools():
 
 
 def test_recon_attack_surface_extraction():
-    """The web tools surface the REAL attack surface — form actions + field names,
-    referenced endpoints, and comments — so the agent stops guessing routes/params."""
+    """The web tools surface the REAL attack surface - form actions + field names,
+    referenced endpoints, and comments - so the agent stops guessing routes/params."""
     from browser.scraping_tools import (format_attack_surface, _extract_forms,
                                         _extract_endpoints, _extract_comments)
     html = (
@@ -4780,7 +4780,7 @@ def test_exec_backend_build_and_argv():
         except ValueError:
             pass
 
-    # ...but backend_from_config never raises — it falls back to local + warns.
+    # ...but backend_from_config never raises - it falls back to local + warns.
     fb, warn = backend_from_config({"backend": "ssh"})
     assert isinstance(fb, LocalBackend) and warn and "local" in warn
 
@@ -4902,7 +4902,7 @@ async def test_exec_backend_metasploit_cli():
             self.cmds.append(cmd)
             return ExecResult(self.output, exit_code=0)
 
-    # search — drives `msfconsole -q -x 'search …; exit -y'` and parses the table.
+    # search - drives `msfconsole -q -x 'search …; exit -y'` and parses the table.
     table = ("Matching Modules\n================\n"
              "   0  auxiliary/dos/ftp/vsftpd_232          normal   VSFTPD DoS\n"
              "   1  exploit/unix/ftp/vsftpd_234_backdoor  excellent  VSFTPD Backdoor\n")
@@ -4916,7 +4916,7 @@ async def test_exec_backend_metasploit_cli():
     assert "auxiliary/dos/ftp/vsftpd_232" not in sr.output
     assert sr.metadata.get("mode") == "cli"
 
-    # run — one stateless invocation: exploit + post_cmd, first session is id 1.
+    # run - one stateless invocation: exploit + post_cmd, first session is id 1.
     fr = FakeRemote("[*] Command shell session 1 opened\nuid=0(root)\nFLAG{x}\n")
     rr = await MetasploitRunTool(backend=fr).execute(
         module="exploit/multi/samba/usermap_script", target="172.18.0.2",
@@ -4935,7 +4935,7 @@ async def test_exec_backend_metasploit_cli():
         module="exploit/x; sessions -C evil", target="1.2.3.4")
     assert not bad.success and fbad.cmds == []
 
-    # sessions — CLI mode has no persistent daemon; it explains rather than lists.
+    # sessions - CLI mode has no persistent daemon; it explains rather than lists.
     fss = FakeRemote()
     ss = await MetasploitSessionsTool(backend=fss).execute()
     assert ss.success and "post_cmd" in ss.output and fss.cmds == []
@@ -5050,7 +5050,7 @@ async def test_external_tools():
         assert isinstance(ht, HttpApiTool)
         assert "ip" in ht.parameters["properties"]
         # A convenience `required: true` on a param is promoted to the object-level
-        # array and STRIPPED from the property — an inline required boolean is
+        # array and STRIPPED from the property - an inline required boolean is
         # invalid JSON Schema and strict validators (xAI) 400 on it.
         assert ht.parameters["required"] == ["ip"]
         assert "required" not in ht.parameters["properties"]["ip"]
@@ -5151,7 +5151,7 @@ def test_tool_registry_name_collision_guard():
 
 
 async def test_generated_tool_collision_guard():
-    """create_tool refuses a taken name — up front, and via rollback if it races."""
+    """create_tool refuses a taken name - up front, and via rollback if it races."""
     from pathlib import Path
     from tools.tool_registry import ToolRegistry
     from tools.generated_tool_manager import GeneratedToolManager
@@ -5175,7 +5175,7 @@ async def test_generated_tool_collision_guard():
         assert "already exists" in msg
         assert not (mgr.generated_dir / "taken").exists()  # nothing persisted
 
-    # Race: has() passes (name looks free) but the register at _expose collides —
+    # Race: has() passes (name looks free) but the register at _expose collides -
     # the package must roll back so no orphan shadows the real tool.
     with tempfile.TemporaryDirectory() as base:
         reg = ToolRegistry()
@@ -5193,7 +5193,7 @@ async def test_generated_tool_collision_guard():
 
 def test_installed_integration_visible_via_always_tools():
     """A freshly installed integration is exposed to the model only when pinned into
-    always_tools — as install_github_tool / integration registration now does. Without
+    always_tools - as install_github_tool / integration registration now does. Without
     the pin, phase-based subsetting filters it out and the model never sees it."""
     from core.conversation_chain import ConversationChain, CORE_TOOLS
     chain = ConversationChain()
@@ -5492,7 +5492,7 @@ def test_hub_external_tool_publish_and_verify():
     m2.command = "python3 {dir}/evil.py {args}"  # tamper post-publish
     assert verify_manifest(m2, key=key)[0] is False
 
-    # repo_url is authoritative — a repo field inside the file is ignored.
+    # repo_url is authoritative - a repo field inside the file is ignored.
     lying = _json.dumps({"name": "my_recon", "command": "sh {dir}/x.sh",
                          "repo": "https://evil.example/x"})
     assert manifest_from_github(repo, lying).repo == repo
@@ -5733,7 +5733,7 @@ def test_config_voice_section():
 # ------------------------------------------------------------------ #
 
 async def run_all():
-    print("\nMapache Phase 1 — Core test suite\n" + "─" * 40)
+    print("\nMapache Phase 1 - Core test suite\n" + "─" * 40)
 
     print("\nEventBus")
     await test_event_bus_basic()
@@ -5904,12 +5904,12 @@ async def run_all():
     await test_per_operator_model_role()
     await test_controller_routes_operator_by_role()
 
-    print("\nEditable persona — soul.md (feature E)")
+    print("\nEditable persona - soul.md (feature E)")
     test_soul_resolution_and_default()
     test_soul_persona_in_system_prompt()
     await test_soul_hot_reload_each_turn()
 
-    print("\nUser profile — user.md (feature F)")
+    print("\nUser profile - user.md (feature F)")
     test_user_profile_dedup_caps_and_persistence()
     test_user_profile_summary_and_total_cap()
     await test_user_profile_tool_and_injection()

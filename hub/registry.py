@@ -1,12 +1,12 @@
 """
-registry.py — skill registry sources (feature I)
+registry.py - skill registry sources (feature I)
 
 A registry is just an index of skill manifests. `LocalRegistry` reads an
-`index.json` (a list of manifest dicts) from a directory — enough to browse and
+`index.json` (a list of manifest dicts) from a directory - enough to browse and
 install from a checked-out repo or a synced folder, and trivially testable.
 
 `UrlRegistry` adds an HTTP/GitHub-index source behind the same `list_skills` /
-`search` / `get` surface — the only addition is the fetch, which is injectable so
+`search` / `get` surface - the only addition is the fetch, which is injectable so
 tests stay offline and the default install needs no network.
 """
 

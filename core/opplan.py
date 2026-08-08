@@ -1,5 +1,5 @@
 """
-opplan.py — operation plan (OPPLAN) with objective status transitions.
+opplan.py - operation plan (OPPLAN) with objective status transitions.
 
 The lead orchestrator tracks the engagement as a list of OBJECTIVES, each owned by
 a phase/specialist and moving through explicit states:
@@ -8,7 +8,7 @@ a phase/specialist and moving through explicit states:
 
 This is the richer, orchestration-facing sibling of the model's self-planning todo
 list: where todos are the agent's private scratchpad, the OPPLAN is the durable
-operation plan the lead drives — dispatch an objective to a specialist, then mark it
+operation plan the lead drives - dispatch an objective to a specialist, then mark it
 `passed` or `blocked` from the specialist's PASSED/BLOCKED report. The progress
 table is injected into the lead's context every turn so it always sees what's done,
 what's next, and what's stuck. Persisted to `<workspace>/opplan.json`.
@@ -113,7 +113,7 @@ class OPPLAN:
         return True
 
     def _resolve(self, ref) -> Optional[Objective]:
-        if isinstance(ref, bool):  # bool is an int subclass — guard
+        if isinstance(ref, bool):  # bool is an int subclass - guard
             return None
         if isinstance(ref, int):
             return next((o for o in self._objectives if o.id == ref), None)
@@ -145,11 +145,11 @@ class OPPLAN:
             return ""
         c = self.counts()
         done, total = c["passed"], len(self._objectives)
-        lines = [f"OPPLAN — operation plan ({done}/{total} passed, "
+        lines = [f"OPPLAN - operation plan ({done}/{total} passed, "
                  f"{c['blocked']} blocked):"]
         for o in self._objectives:
             owner = f" @{o.operator}" if o.operator else ""
-            note = f" — {o.note}" if o.note else ""
+            note = f" - {o.note}" if o.note else ""
             lines.append(f"  {_MARK.get(o.status, '[ ]')} #{o.id} {o.text}{owner}"
                          f" [{o.status}]{note}")
         return "\n".join(lines)

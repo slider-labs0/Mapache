@@ -1,15 +1,15 @@
 """
-engagement_scope.py — Rules-of-Engagement guardrails (feature J)
+engagement_scope.py - Rules-of-Engagement guardrails (feature J)
 
 An authorized penetration test has a *scope*: the targets you are allowed to
 touch and the actions you are not. A general-purpose agent has no concept of
-this; an offensive one operating unattended needs it as trust infrastructure —
+this; an offensive one operating unattended needs it as trust infrastructure -
 the thing that makes "leave it running overnight" safe.
 
 `EngagementScope` is loaded once per engagement (a `scope.json`, mirroring the
 `mcp.json` precedent) and consulted in the tool-dispatch path. A call that would
-act on an out-of-scope target — or that uses a forbidden tool / matches a
-forbidden command pattern — is **refused before it runs**, with a logged reason,
+act on an out-of-scope target - or that uses a forbidden tool / matches a
+forbidden command pattern - is **refused before it runs**, with a logged reason,
 rather than executed and regretted.
 
 Design choices:
@@ -20,7 +20,7 @@ Design choices:
     arg keys or URLs. This avoids false-positives like a wordlist path
     `common.txt` being mistaken for a host and blocking a legitimate scan. The
     trade-off: a hostname buried in a free-form `shell` command is not caught by
-    name (its IP would be) — acceptable for v1, and the loopback/utility case is
+    name (its IP would be) - acceptable for v1, and the loopback/utility case is
     explicitly allowed.
   - **Loopback is in-scope by default.** Local utility commands (whoami, ls) and
     127.0.0.1 are the operator's own box, not a target; blocking them is never
@@ -44,7 +44,7 @@ from typing import Any, Optional
 TARGET_KEYS = {"target", "host", "hosts", "rhost", "rhosts", "ip", "domain", "url"}
 
 _IPV4_RE = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b")
-# scheme://host[:port] — host captured without the port or path.
+# scheme://host[:port] - host captured without the port or path.
 _URL_HOST_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9+.\-]*://(?P<host>[^/:\s]+)")
 _HOSTNAME_RE = re.compile(
     r"^[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?"
@@ -119,7 +119,7 @@ class EngagementScope:
         """Decide whether a tool call is permitted under the engagement scope.
 
         `fallback_target` is the attack-state target the controller backfills for
-        tools (e.g. nmap_scan) that the model often calls without one — it is
+        tools (e.g. nmap_scan) that the model often calls without one - it is
         checked alongside any host found in the args.
         """
         if not self.active:
@@ -175,7 +175,7 @@ class EngagementScope:
     def _in_scope(self, host: str) -> bool:
         host = (host or "").strip().lower().rstrip(".")
         # Strip a `host:port` suffix (e.g. a backfilled target like 127.0.0.1:37302):
-        # scope is about hosts, not ports. Only a single trailing numeric port — never
+        # scope is about hosts, not ports. Only a single trailing numeric port - never
         # touch bare IPv6, which legitimately contains many colons.
         if host.count(":") == 1:
             maybe_host, _, port = host.partition(":")

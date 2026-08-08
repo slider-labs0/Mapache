@@ -1,14 +1,14 @@
 """
-render.py — CLI presentation layer (feature B)
+render.py - CLI presentation layer (feature B)
 
 Splits *what* the REPL says from *how* it is drawn, behind a small `Renderer`
 interface with two implementations:
 
-- `PlainRenderer` — the line-printing behavior Mapache has always had. Used for
+- `PlainRenderer` - the line-printing behavior Mapache has always had. Used for
   pipes, dumb terminals, `--plain`, and any environment without `rich`. Its
   output is byte-for-byte the previous CLI output, so scripts and the smoke
   harness are unaffected.
-- `RichRenderer` — panels, colour, a colour-coded phase banner, and styled
+- `RichRenderer` - panels, colour, a colour-coded phase banner, and styled
   streaming via `rich`. Selected only when `rich` is importable AND stdout is a
   real TTY AND `--plain` was not passed.
 
@@ -100,7 +100,7 @@ def make_renderer(plain: bool = False, *, force_rich: Optional[bool] = None) -> 
 
 
 # --------------------------------------------------------------------------- #
-# Plain (default / fallback) — preserves the historical output exactly
+# Plain (default / fallback) - preserves the historical output exactly
 # --------------------------------------------------------------------------- #
 
 
@@ -133,7 +133,7 @@ class Renderer:
 
     def action(self, phrase: str) -> None:
         """Narrate the agent's next step in plain language before a tool runs
-        (e.g. 'Scanning ports with nmap'). No-op in the line-based renderers —
+        (e.g. 'Scanning ports with nmap'). No-op in the line-based renderers -
         the live spinner already carries the phrase there; the TUI overrides this
         to commit a narration line above the tool block."""
 
@@ -178,7 +178,7 @@ class PlainRenderer(Renderer):
         if tools:
             print(f"        (used: {', '.join(tools)}, {iterations} steps)")
         if error and error != "max_iterations":
-            print(f"        ✗ {error}")
+            print(f"        x {error}")
         print()
         self._streamed = False
 
@@ -195,7 +195,7 @@ class PlainRenderer(Renderer):
         print(f"\n  ↪ steering: {line}\n", flush=True)
 
     def error(self, msg: str) -> None:
-        print(f"agent > ✗ {msg}")
+        print(f"agent > x {msg}")
 
     def info(self, msg: str) -> None:
         print(msg)
@@ -211,7 +211,7 @@ class PlainRenderer(Renderer):
 
 
 # --------------------------------------------------------------------------- #
-# Rich — only constructed when `rich` is importable
+# Rich - only constructed when `rich` is importable
 # --------------------------------------------------------------------------- #
 
 
@@ -246,7 +246,7 @@ class RichRenderer(Renderer):
             self.console.print(
                 f"   [dim]used {', '.join(tools)} · {iterations} steps[/]")
         if error and error != "max_iterations":
-            self.console.print(f"   [red]✗ {error}[/]")
+            self.console.print(f"   [red]x {error}[/]")
         self.console.print()
         self._streamed = False
 
@@ -261,7 +261,7 @@ class RichRenderer(Renderer):
         self.console.print(f"\n  [yellow]↪ steering:[/] {line}\n")
 
     def error(self, msg: str) -> None:
-        self.console.print(f"[bold green]agent[/] [red]✗ {msg}[/]")
+        self.console.print(f"[bold green]agent[/] [red]x {msg}[/]")
 
     def info(self, msg: str) -> None:
         self.console.print(msg)

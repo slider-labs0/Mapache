@@ -1,5 +1,5 @@
 """
-tool_registry.py — Mapache tool registry
+tool_registry.py - Mapache tool registry
 
 Central store of all available tools. Tools register here at startup.
 The dispatcher queries the registry to find and invoke tools.
@@ -79,7 +79,7 @@ class ToolRegistry:
         """Register a tool by name.
 
         Name-collision guard: a *different* tool may not silently overwrite an
-        existing name — that lets one source (e.g. a self-authored `create_tool`
+        existing name - that lets one source (e.g. a self-authored `create_tool`
         tool) shadow another (e.g. an installed GitHub/integration tool of the same
         name), which is almost always a mistake. On collision this raises
         `ToolNameCollisionError` unless `replace=True` is passed to signal an
@@ -195,7 +195,7 @@ class ToolRegistry:
     def summary(self) -> str:
         lines = [f"ToolRegistry ({len(self._tools)} tools):"]
         for name, tool in self._tools.items():
-            status = "✓" if tool.enabled else "✗"
+            status = "ok" if tool.enabled else "x"
             perms = ",".join(p.value for p in tool.permissions) or "none"
             lines.append(f"  {status} {name:30s} v{tool.version}  [{perms}]")
         return "\n".join(lines)

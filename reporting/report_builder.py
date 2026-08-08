@@ -1,20 +1,20 @@
 """
-report_builder.py — structured pentest report from the engagement (feature L)
+report_builder.py - structured pentest report from the engagement (feature L)
 
 Turns the reporting phase into an actual deliverable. Hermes gives you a chat
-history; Mapache gives you a report a client pays for — findings with severity,
+history; Mapache gives you a report a client pays for - findings with severity,
 evidence, and remediation, plus a methodology timeline.
 
 Inputs are exactly what features K and P already produce: the shared AttackState
 blackboard (target, ports, services, vulns, creds, flags) and the EngagementLog's
 records (timestamped tool calls / findings / RoE refusals). It is **deterministic
-and offline** — no LLM call, so the report is reproducible, testable, and never
+and offline** - no LLM call, so the report is reproducible, testable, and never
 sends findings to a third party (the local-first OPSEC story holds end to end).
 A richer LLM narrative pass, and precise CVSS scoring via CVE grounding (feature
 M), are layered enhancements, not prerequisites.
 
 Exports Markdown and self-contained HTML. (PDF: open/print the HTML, or add an
-optional weasyprint backend later — kept dependency-free here.)
+optional weasyprint backend later - kept dependency-free here.)
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ _REMEDIATION = {
                   "passwords, and require MFA on the affected service.",
     "vulnerability": "Apply the vendor patch or upgrade to a fixed version; where no "
                      "fix exists, apply the documented mitigation and restrict exposure.",
-    "flag": "Capture-the-flag artifact proving access to the host — remediate the "
+    "flag": "Capture-the-flag artifact proving access to the host - remediate the "
             "underlying access vector that allowed it.",
     "open_port": "Restrict the service to trusted networks (firewall / segmentation) "
                  "and disable it if it is not required.",
@@ -104,7 +104,7 @@ class EngagementReport:
 
     def to_markdown(self) -> str:
         L: list[str] = []
-        L.append(f"# Penetration Test Report — {self.target or 'engagement'}")
+        L.append(f"# Penetration Test Report - {self.target or 'engagement'}")
         L.append("")
         L.append(f"*Generated {self.generated}*")
         L.append("")
@@ -149,7 +149,7 @@ class EngagementReport:
         L.append("")
 
         if self.tool_calls:
-            L.append("## Appendix — tool activity")
+            L.append("## Appendix - tool activity")
             L.append("")
             L.append("| Time | Tool | Result |")
             L.append("|---|---|---|")
@@ -189,7 +189,7 @@ class EngagementReport:
             for r in self.timeline
         )
         return f"""<!doctype html><html><head><meta charset="utf-8">
-<title>Pentest Report — {esc(self.target or 'engagement')}</title>
+<title>Pentest Report - {esc(self.target or 'engagement')}</title>
 <style>
  body{{font-family:system-ui,sans-serif;max-width:50rem;margin:2rem auto;padding:0 1rem;color:#1a1a1a}}
  h1{{border-bottom:2px solid #333}} code{{background:#f2f2f2;padding:.1em .3em;border-radius:3px}}
@@ -199,7 +199,7 @@ class EngagementReport:
  .sev-medium{{border-color:#c9a227}} .sev-low{{border-color:#2e7d32}} .sev-info{{border-color:#607d8b}}
  .sev{{font-variant:small-caps}}
 </style></head><body>
-<h1>Penetration Test Report — {esc(self.target or 'engagement')}</h1>
+<h1>Penetration Test Report - {esc(self.target or 'engagement')}</h1>
 <p><em>Generated {esc(self.generated)}</em></p>
 <ul>{meta}</ul>
 <h2>Executive summary</h2><p>{esc(self._summary_sentence())}</p>
@@ -239,7 +239,7 @@ def _vuln_finding(value: str, records: list[dict]) -> "Finding":
         exploit = f" Public exploit: {entry.exploit}." if entry.exploit else ""
         refs = (" Refs: " + ", ".join(entry.references)) if entry.references else ""
         return Finding(
-            title=f"{entry.id} — {entry.title}",
+            title=f"{entry.id} - {entry.title}",
             severity=entry.severity,
             finding_type="vulnerability",
             evidence=f"{entry.id} (CVSS {entry.cvss}).{exploit}{refs}",
@@ -283,7 +283,7 @@ def build_report(
     """Assemble an EngagementReport from the blackboard + engagement-log records.
 
     `extra_findings` are agent-authored, evidence-carrying findings (core.findings
-    Finding objects recorded via the report_finding tool) — the rich web/authz
+    Finding objects recorded via the report_finding tool) - the rich web/authz
     findings with a real request/response as proof. They are merged in FIRST so the
     deliverable leads with proven weaknesses, not just blackboard-derived ones.
     """
@@ -375,7 +375,7 @@ def _summarize_record(r: dict) -> str:
     if kind == "finding":
         return f"found {r.get('finding_type')}: {r.get('value')}"
     if kind == "scope_refused":
-        return f"RoE refused {r.get('tool')} — {r.get('reason')}"
+        return f"RoE refused {r.get('tool')} - {r.get('reason')}"
     if kind == "delegate_start":
         return f"delegated to {r.get('operator', 'sub-agent')}: {r.get('task', '')}"
     return kind.replace("_", " ") if kind else ""

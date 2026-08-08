@@ -1,5 +1,5 @@
 """
-model_registry.py — Mapache model registry
+model_registry.py - Mapache model registry
 
 Central registry of all available models and their capabilities.
 The routing engine queries this to decide which model handles which task.
@@ -12,7 +12,7 @@ Each model is registered with:
     - Speed/quality tradeoff
     - Hardware requirements
 
-This is what makes the multi-model pipeline intelligent —
+This is what makes the multi-model pipeline intelligent -
 the right model gets assigned to the right job automatically.
 """
 
@@ -80,7 +80,7 @@ class ModelProfile:
     @property
     def is_local(self) -> bool:
         # Local == runs on the local Ollama server. A *free* cloud model
-        # (cost==0) is still cloud, so it must NOT count as local — otherwise it
+        # (cost==0) is still cloud, so it must NOT count as local - otherwise it
         # would slip past the `--allow-cloud` / local_only OPSEC gate.
         return self.provider == Provider.OLLAMA
 
@@ -148,7 +148,7 @@ class ModelRegistry:
             "quality_score": 0.65,
             "vram_gb": 5.0,
             "tags": ["local", "fast", "executor"],
-            "notes": "Ideal executor — fast tool calling, low VRAM",
+            "notes": "Ideal executor - fast tool calling, low VRAM",
         },
         {
             "id": "qwen3:8b",

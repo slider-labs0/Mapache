@@ -1,5 +1,5 @@
 """
-ad_tools.py — Active Directory attack tool (structured command builder + parser).
+ad_tools.py - Active Directory attack tool (structured command builder + parser).
 
 The AD operator drives impacket/certipy/bloodhound through the shell, which means the
 model hand-crafts fiddly syntax and eyeballs the output. This tool encodes the correct
@@ -90,7 +90,7 @@ class AdAttackTool(BaseTool):
         "Active Directory attacks with correct syntax + parsed loot. action: kerberoast "
         "(request crackable SPN TGS hashes), asreproast (AS-REP-roastable users), "
         "secretsdump / dcsync (dump NTLM secrets from a DC), bloodhound (collect the "
-        "graph), certipy (find vulnerable ADCS templates — ESC1-8). Provide domain, user, "
+        "graph), certipy (find vulnerable ADCS templates - ESC1-8). Provide domain, user, "
         "password or nthash, and dc_ip/target. Runs the tool if installed; otherwise "
         "returns the exact command. Kerberos/NTLM hashes come back ready for john/hashcat."
     )
@@ -122,7 +122,7 @@ class AdAttackTool(BaseTool):
         binary, hint = _BINS[action]
         if shutil.which(binary) is None:
             return ToolResult.ok(
-                f"[{binary} not installed here — {hint}]\nRun this on a host with the AD "
+                f"[{binary} not installed here - {hint}]\nRun this on a host with the AD "
                 f"toolchain:\n  {cmd}")
         import asyncio
         try:
@@ -135,7 +135,7 @@ class AdAttackTool(BaseTool):
         loot = parse_ad_output(action, output)
         summary = []
         if loot["hashes"]:
-            summary.append(f"{len(loot['hashes'])} crackable hash(es) — feed to john/hashcat.")
+            summary.append(f"{len(loot['hashes'])} crackable hash(es) - feed to john/hashcat.")
         if loot["creds"]:
             summary.append(f"{len(loot['creds'])} NTLM secret(s) dumped.")
         if loot["notes"]:

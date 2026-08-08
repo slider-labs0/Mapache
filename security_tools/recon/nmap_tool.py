@@ -1,5 +1,5 @@
 """
-nmap_tool.py — Mapache Nmap integration
+nmap_tool.py - Mapache Nmap integration
 
 Wraps Nmap into a structured tool the agent can call autonomously.
 Returns parsed, model-friendly output instead of raw XML.
@@ -10,13 +10,13 @@ Requires nmap installed:
     Mac:     brew install nmap
 
 Scan types supported:
-    quick   — top 100 ports, fast (-F)
-    standard — top 1000 ports (default)
-    full    — all 65535 ports (slow)
-    udp     — UDP scan (requires root/admin)
-    version — service version detection (-sV)
-    os      — OS detection (-O, requires root/admin)
-    vuln    — basic vulnerability scripts (--script vuln)
+    quick   - top 100 ports, fast (-F)
+    standard - top 1000 ports (default)
+    full    - all 65535 ports (slow)
+    udp     - UDP scan (requires root/admin)
+    version - service version detection (-sV)
+    os      - OS detection (-O, requires root/admin)
+    vuln    - basic vulnerability scripts (--script vuln)
 """
 
 from __future__ import annotations
@@ -91,13 +91,13 @@ class NmapTool(BaseTool):
     def __init__(self, backend: Any = None, egress: Any = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         # Execution backend (feature H). A remote backend (ssh/docker) runs nmap on
-        # that host — e.g. an attacker container that shares the target's isolated
-        # network — so we must NOT resolve the binary locally; the remote PATH does.
+        # that host - e.g. an attacker container that shares the target's isolated
+        # network - so we must NOT resolve the binary locally; the remote PATH does.
         # None / local → the local subprocess fast-path below (unchanged).
         self.backend = backend
         # Egress/OPSEC: when active, route the scan through the proxy/Tor. NOTE:
         # proxychains/torsocks hook connect(), so only a TCP-connect scan (-sT)
-        # honors it — raw SYN/UDP does not. For raw scans, hide the IP with a pivot
+        # honors it - raw SYN/UDP does not. For raw scans, hide the IP with a pivot
         # backend instead. Applied on the (POSIX) remote path.
         self.egress = egress
 
@@ -111,7 +111,7 @@ class NmapTool(BaseTool):
         **kwargs: Any,
     ) -> ToolResult:
 
-        # Sanitize target — basic protection against shell injection. Done first
+        # Sanitize target - basic protection against shell injection. Done first
         # because it guards both the local and the remote execution paths.
         if not self._is_safe_target(target):
             return ToolResult.fail(f"Invalid target: {target!r}. Use IP, hostname, or CIDR only.")
@@ -186,7 +186,7 @@ class NmapTool(BaseTool):
         timing: int,
         extra_args: str,
     ) -> ToolResult:
-        # "nmap" (unqualified) — the remote host/container resolves it on its PATH.
+        # "nmap" (unqualified) - the remote host/container resolves it on its PATH.
         # target is already sanitized (no shell metacharacters), so joining the
         # argv into a command string for the backend is safe.
         cmd = self._build_command("nmap", target, scan_type, ports, timing, extra_args)
@@ -339,7 +339,7 @@ class NmapTool(BaseTool):
 
     def _is_safe_target(self, target: str) -> bool:
         """
-        Basic validation — allow IPs, hostnames, CIDR ranges.
+        Basic validation - allow IPs, hostnames, CIDR ranges.
         Reject anything with shell metacharacters.
         """
         dangerous = set(';|&`$(){}[]<>!\\"\'\n\r\t')

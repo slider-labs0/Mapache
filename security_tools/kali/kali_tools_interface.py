@@ -1,5 +1,5 @@
 """
-kali_tools_interface.py — Mapache Kali Linux tools interface
+kali_tools_interface.py - Mapache Kali Linux tools interface
 
 Provides structured access to the full suite of Kali Linux security tools.
 Rather than wrapping each tool individually, this provides a smart execution
@@ -105,7 +105,7 @@ KALI_TOOLS = {
     },
     # Network
     "netcat": {
-        "desc": "Network utility — listeners, connections, file transfer",
+        "desc": "Network utility - listeners, connections, file transfer",
         "example": "nc -lvnp 4444",
         "category": "network",
     },
@@ -153,7 +153,7 @@ KALI_TOOLS = {
         "category": "osint",
     },
     "dnsenum": {
-        "desc": "DNS enumeration — zone transfers, subdomains",
+        "desc": "DNS enumeration - zone transfers, subdomains",
         "example": "dnsenum example.com",
         "category": "osint",
     },
@@ -205,14 +205,14 @@ class KaliToolListTool(BaseTool):
                 if cat != current_cat:
                     lines.append(f"  [{cat.upper()}]")
                     current_cat = cat
-                lines.append(f"    {name:20s} — {desc}")
+                lines.append(f"    {name:20s} - {desc}")
         else:
             lines.append("No security tools found installed.")
 
         if unavailable:
             lines.append(f"\nNot installed ({len(unavailable)}):")
             for name, desc, cat in unavailable[:10]:
-                lines.append(f"  {name:20s} — {desc}")
+                lines.append(f"  {name:20s} - {desc}")
             if len(unavailable) > 10:
                 lines.append(f"  ... and {len(unavailable) - 10} more")
 
@@ -263,7 +263,7 @@ class KaliRunTool(BaseTool):
     def __init__(self, backend: Any = None, egress: Any = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         # Execution backend (feature H). A remote backend (ssh/docker) runs the
-        # tool on that host — e.g. a real Kali box/container — so we must NOT
+        # tool on that host - e.g. a real Kali box/container - so we must NOT
         # resolve the path locally; the remote PATH resolves it.
         self.backend = backend
         # Egress/OPSEC: route the tool's TCP through the proxy/Tor when active
@@ -309,7 +309,7 @@ class KaliRunTool(BaseTool):
                 "Use kali_list to see available tools."
             )
 
-        # Build full command. Quote the resolved path — on Windows shutil.which
+        # Build full command. Quote the resolved path - on Windows shutil.which
         # often returns a path with spaces (e.g. C:\Program Files (x86)\Nmap\
         # nmap.EXE), which create_subprocess_shell would split at the space
         # ("'C:\Program' is not recognized"). Double quotes are honored by both
@@ -345,7 +345,7 @@ class KaliRunTool(BaseTool):
 
             header = f"{tool} {args[:60]}\n"
             if timed_out:
-                header += f"[Timed out after {timeout}s — partial output below]\n"
+                header += f"[Timed out after {timeout}s - partial output below]\n"
             header += f"Exit code: {proc.returncode}\n\n"
 
             return ToolResult.ok(
@@ -375,7 +375,7 @@ class SearchsploitTool(BaseTool):
         "properties": {
             "query": {
                 "type": "string",
-                "description": "Search query — software name, version, CVE (e.g. 'apache 2.4', 'CVE-2021-44228')",
+                "description": "Search query - software name, version, CVE (e.g. 'apache 2.4', 'CVE-2021-44228')",
             },
             "exploit_type": {
                 "type": "string",

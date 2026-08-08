@@ -1,11 +1,11 @@
 """
-conversation_chain.py — Mapache conversation chain manager
+conversation_chain.py - Mapache conversation chain manager
 
 Fixes the three root causes of broken conversation continuity:
 
-1. Turn summarization — compresses tool outputs so context stays clean
-2. Goal tracking — remembers the overall objective across turns
-3. Attack state — tracks what was found and what phase we're in
+1. Turn summarization - compresses tool outputs so context stays clean
+2. Goal tracking - remembers the overall objective across turns
+3. Attack state - tracks what was found and what phase we're in
 """
 
 from __future__ import annotations
@@ -35,27 +35,27 @@ CORE_TOOLS = {
     "shell",
     "file_read", "file_write", "file_edit", "file_list", "file_search",
     "memory_recall", "memory_save", "memory_target_store", "memory_target_get",
-    # Built-in sub-agent delegation tools — always available when registered.
+    # Built-in sub-agent delegation tools - always available when registered.
     "delegate", "delegate_parallel",
-    # Self-authored tool meta-tools — always available so the agent can author,
+    # Self-authored tool meta-tools - always available so the agent can author,
     # inspect, and retire its own tools regardless of attack phase.
     "create_tool", "tool_list_generated", "tool_delete",
-    # Skill synthesis (feature N) — save a proven chain as a reusable skill.
+    # Skill synthesis (feature N) - save a proven chain as a reusable skill.
     "synthesize_skill",
-    # CVE grounding (feature M) — correlate services to CVEs any phase.
+    # CVE grounding (feature M) - correlate services to CVEs any phase.
     "cve_lookup",
-    # Agent-maintained user profile (feature F) — record durable user facts.
+    # Agent-maintained user profile (feature F) - record durable user facts.
     "user_remember",
-    # Community skill hub (feature I) — browse + install downloadable skills,
+    # Community skill hub (feature I) - browse + install downloadable skills,
     # and install a GitHub repo as a tool straight from a natural-language request.
     "skill_search", "skill_list", "skill_install", "install_github_tool",
-    # Shared findings store — query/record findings across objectives + sub-agents.
+    # Shared findings store - query/record findings across objectives + sub-agents.
     "kg_query", "kg_add",
-    # Evidence-first engagement report — record a confirmed finding (the deliverable).
+    # Evidence-first engagement report - record a confirmed finding (the deliverable).
     "report_finding",
     # Offensive knowledge: look up real payloads instead of inventing; scan for secrets.
     "search_payloads", "secret_scan",
-    # Operation plan (OPPLAN) — objectives + status transitions for the orchestrator.
+    # Operation plan (OPPLAN) - objectives + status transitions for the orchestrator.
     "opplan_add", "opplan_update", "opplan_show",
     # Vulnerability-research pipeline seeder (scanner→detector→verifier→patcher→exploiter).
     "vuln_research",
@@ -149,10 +149,10 @@ class AttackState:
     # HTML forms discovered in responses, as human-readable descriptors
     # ("POST /login [fields: username, password]"). Surfaced in the state block so the
     # agent submits the REAL form action/fields instead of inventing an endpoint like
-    # /login — the concrete gap that sank the IDOR trading-platform benchmark.
+    # /login - the concrete gap that sank the IDOR trading-platform benchmark.
     forms: list[str] = field(default_factory=list)
     # Path templates that returned an IDENTICAL response body across several DISTINCT
-    # requests (e.g. ?id=1,2,3 all yielding the same page) — a dead vector the agent
+    # requests (e.g. ?id=1,2,3 all yielding the same page) - a dead vector the agent
     # should stop fuzzing. A WORKING IDOR yields DIFFERENT bodies per id, so it is never
     # flagged here. Surfaced in the state block as a hard "switch approach" steer.
     dead_vectors: list[str] = field(default_factory=list)
@@ -165,7 +165,7 @@ class AttackState:
 
     # Credentials DISCLOSED in page content (HTML comments, JS, "password is …"), e.g.
     # a `test:test` left in a comment. Surfaced as a directive to try them on the login
-    # form FIRST — the agent had these in context but submitted `admin`/no-password.
+    # form FIRST - the agent had these in context but submitted `admin`/no-password.
     disclosed_creds: list[str] = field(default_factory=list)
 
     def record_disclosed_creds(self, items) -> int:
@@ -252,19 +252,19 @@ class AttackState:
             suggestions = []
             ports = [p.split("/")[0] for p in self.open_ports]
             if "80" in ports or "443" in ports or "8080" in ports:
-                suggestions.append("web server found — run gobuster for directories and nikto for vulns")
+                suggestions.append("web server found - run gobuster for directories and nikto for vulns")
             if "445" in ports or "139" in ports:
-                suggestions.append("SMB found — check for EternalBlue with msf_search(query='ms17-010')")
+                suggestions.append("SMB found - check for EternalBlue with msf_search(query='ms17-010')")
             if "21" in ports:
-                suggestions.append("FTP found — check anonymous login")
+                suggestions.append("FTP found - check anonymous login")
             if "22" in ports:
-                suggestions.append("SSH found — check for weak credentials")
+                suggestions.append("SSH found - check for weak credentials")
             if "23" in ports:
-                suggestions.append("Telnet found — try connecting with no password")
+                suggestions.append("Telnet found - try connecting with no password")
             if "3306" in ports:
-                suggestions.append("MySQL found — try default credentials")
+                suggestions.append("MySQL found - try default credentials")
             if "6379" in ports:
-                suggestions.append("Redis found — often unauthenticated")
+                suggestions.append("Redis found - often unauthenticated")
             # CVE grounding (feature M): correlate discovered versions to known
             # CVEs and lead with the highest-priority one when present.
             from .cve_grounding import ground_services
@@ -275,13 +275,13 @@ class AttackState:
                 cve_note = (". Grounded CVEs (prioritized): " + "; ".join(
                     f"{m.entry.id} [{m.entry.severity}/{m.confidence}] on {m.service}"
                     for m in top)
-                    + " — run cve_lookup for the full plan")
+                    + " - run cve_lookup for the full plan")
             if suggestions:
                 base = "Based on open ports: " + "; ".join(suggestions)
                 from .operators import suggest_operators
                 ops = suggest_operators(self.open_ports, self.services)
                 if ops:
-                    base += (f". Specialists available — delegate with operator=: "
+                    base += (f". Specialists available - delegate with operator=: "
                              f"{', '.join(ops)}")
                 return base + cve_note
             return f"Enumerate discovered services on {self.target}" + cve_note
@@ -328,23 +328,23 @@ class AttackState:
 
         if self.disclosed_creds:
             lines.append("DISCLOSED credentials found in page content (a `user:pass` "
-                         "token or labeled value — TRY THESE on the login form FIRST, "
+                         "token or labeled value - TRY THESE on the login form FIRST, "
                          "submitting ALL of the form's fields): "
                          + ", ".join(self.disclosed_creds[:8]))
 
         if self.forms:
-            lines.append("Discovered forms (submit the REAL method/action/fields — do "
+            lines.append("Discovered forms (submit the REAL method/action/fields - do "
                          "NOT invent an endpoint like /login; an action of '(self)' "
                          "means POST back to the URL you fetched):")
             for f in self.forms[:6]:
                 lines.append(f"  - {f}")
 
         if self.endpoints:
-            lines.append("Discovered endpoints (use these real paths — do not guess "
+            lines.append("Discovered endpoints (use these real paths - do not guess "
                          f"/dashboard etc.): {', '.join(self.endpoints[:15])}")
 
         if self.dead_vectors:
-            lines.append("DEAD vectors (identical response for every value tried — STOP "
+            lines.append("DEAD vectors (identical response for every value tried - STOP "
                          f"fuzzing these, switch approach): {', '.join(self.dead_vectors[:8])}")
 
         lines.append(f"Next step: {self.suggest_next_step()}")
@@ -409,7 +409,7 @@ class ConversationChain:
     ) -> None:
         # Multi-agent blackboard (feature P): when an operator sub-agent is given
         # the lead's AttackState here, both reference the SAME object, so a
-        # finding one records is immediately visible to the lead and siblings —
+        # finding one records is immediately visible to the lead and siblings -
         # no copy-down / merge-back. `allow_state_reset` is False for sub-agents
         # so their task text can't reassign the engagement target or clear the
         # shared findings (only the lead, taking operator input, may do that).
@@ -438,7 +438,7 @@ class ConversationChain:
         target or a rescan request takes effect either way, without disturbing
         per-turn bookkeeping (turn counter, current-turn accumulator).
 
-        A freshly typed IP that differs from the current target overrides it —
+        A freshly typed IP that differs from the current target overrides it -
         e.g. HTB reassigns the machine IP mid-session, and we must not keep
         scanning the dead host. When the target changes, stale per-target
         findings (ports, services, vulns) are cleared and the phase resets to
@@ -457,10 +457,10 @@ class ConversationChain:
                 self.attack_state.versions = {}
                 self.attack_state.vulnerabilities = []
                 self.attack_state.current_phase = "recon"
-                # New engagement — the old plan no longer applies.
+                # New engagement - the old plan no longer applies.
                 self._todos = []
 
-        # Detect explicit rescan requests — clear cached data. Lead-only: a
+        # Detect explicit rescan requests - clear cached data. Lead-only: a
         # sub-agent must not wipe the shared blackboard from its task wording.
         rescan_keywords = [
             "rescan", "scan again", "re-scan", "fresh scan",
@@ -515,7 +515,7 @@ class ConversationChain:
             self.attack_state.update_from_exploit(output)
             # Exec output may carry a raw 32-hex flag file (user.txt/root.txt).
             self._scan_for_flags(output, hex32=True)
-            # shell is the agent's main curl runner — mine page bodies for surface.
+            # shell is the agent's main curl runner - mine page bodies for surface.
             self.attack_state.record_endpoints(self._endpoint_keys(output))
             self.attack_state.record_forms(self._extract_forms(output))
             self.attack_state.record_disclosed_creds(self._extract_creds(output))
@@ -523,7 +523,7 @@ class ConversationChain:
 
         elif tool_name in ("web_fetch", "http_request", "curl"):
             # Web-recon flags surface in page bodies too (CTF chains end at a flag
-            # endpoint). Match only explicit flag formats — a bare 32-hex string in
+            # endpoint). Match only explicit flag formats - a bare 32-hex string in
             # HTML is usually an asset/session hash, not a flag.
             self._scan_for_flags(output, hex32=False)
             self.attack_state.record_endpoints(self._endpoint_keys(output))
@@ -541,7 +541,7 @@ class ConversationChain:
     _FLAG_BRACE_RE = re.compile(r"(?:HTB|FLAG|CTF|flag)\{[^}]+\}", re.IGNORECASE)
     _FLAG_HEX32_RE = re.compile(r"\b[0-9a-f]{32}\b", re.IGNORECASE)
     # A bare 32-hex on an HTTP-header/key-value line is an ETag, session hash, or
-    # request id — NOT a flag. `shell` is now the agent's main curl/aws runner, so
+    # request id - NOT a flag. `shell` is now the agent's main curl/aws runner, so
     # header lines routinely reach the hex32 path (a curl `-D -` dump of an S3
     # object surfaced its ETag as a "flag" and falsely ended a live engagement).
     # A real user.txt/root.txt prints the hash as a plain value, not a `Key: …` line.
@@ -596,7 +596,7 @@ class ConversationChain:
 
     @classmethod
     def _request_url(cls, tool_name: str, args, output: str) -> str:
-        """Best-effort recovery of the URL a web tool actually requested — from its
+        """Best-effort recovery of the URL a web tool actually requested - from its
         args (http_request/web_fetch), the curl command (shell), or the request line
         the tool echoes into its output."""
         if isinstance(args, dict):
@@ -649,7 +649,7 @@ class ConversationChain:
             meth = cls._FORM_METHOD_RE.search(attrs)
             method = meth.group(1).upper() if meth else "GET"
             act = cls._FORM_ACTION_RE.search(attrs)
-            action = act.group(1) if act and act.group(1) else "(self — submits to this page's own URL)"
+            action = act.group(1) if act and act.group(1) else "(self - submits to this page's own URL)"
             # Field names live between this <form> tag and the next </form> (bounded so
             # a truncated response body still yields the fields it did include).
             end = low.find("</form>", m.end())
@@ -665,7 +665,7 @@ class ConversationChain:
 
     # Disclosed-credential extraction. CTF/app pages leak creds in HTML comments, JS,
     # or "password is …" text. Precision matters: a `user:pass` token is only credible
-    # with NO whitespace around the colon (so "TODO: Delete" — space after colon — is
+    # with NO whitespace around the colon (so "TODO: Delete" - space after colon - is
     # skipped while "(test:test)" is caught), and a small denylist rejects obvious
     # non-cred left tokens (http, todo, …).
     _COMMENT_RE = re.compile(r"<!--(.*?)-->", re.DOTALL)
@@ -683,7 +683,7 @@ class ConversationChain:
         if not output:
             return []
         found: list[str] = []
-        # `user:pass` tokens — trust them anywhere, but they're most common in comments.
+        # `user:pass` tokens - trust them anywhere, but they're most common in comments.
         scopes = cls._COMMENT_RE.findall(output) or []
         scopes.append(output)  # also scan the whole body (JS strings, config dumps)
         for scope in scopes:
@@ -725,7 +725,7 @@ class ConversationChain:
         if len(rec["urls"]) >= self.DEAD_VECTOR_MIN and len(rec["bodies"]) == 1:
             if self.attack_state.record_dead_vector(key) and self._current_turn:
                 self._current_turn.key_findings.append(
-                    f"DEAD VECTOR: {key} — identical response for "
+                    f"DEAD VECTOR: {key} - identical response for "
                     f"{len(rec['urls'])} distinct values; switch approach")
 
     def on_turn_end(self, response: str) -> None:
@@ -750,7 +750,7 @@ class ConversationChain:
     #
     # Gives the agent long-horizon coherence: the plan survives across many
     # tool calls instead of being re-derived (or lost) each turn. The model
-    # owns the list — it seeds it via a `plan` response and revises it by
+    # owns the list - it seeds it via a `plan` response and revises it by
     # re-emitting one with per-item status (the TodoWrite pattern). Completed
     # items are preserved across re-emits so a model that restates only the
     # remaining work does not lose progress.

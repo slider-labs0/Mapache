@@ -1,10 +1,10 @@
-"""Live cloud-domain validation — Mapache vs the public flaws2.cloud AWS CTF.
+"""Live cloud-domain validation - Mapache vs the public flaws2.cloud AWS CTF.
 
 Authorized target: flaws2.cloud is Scott Piper's intentionally-vulnerable AWS CTF,
 explicitly published for anyone to attack (attacker track, http://level1.flaws2.cloud/).
 This drives Mapache's *cloud* path end-to-end against a REAL internet AWS target to
 verify the cloud_hunter operator + cloud_attacks playbook actually engage and drive
-`aws`/curl through `shell` — the open item from ROADMAP section S.
+`aws`/curl through `shell` - the open item from ROADMAP section S.
 
 Bounded for a paid model (Sonnet 5 via OpenRouter):
   - AgentController.MAX_ITERATIONS caps EVERY controller (lead + fanned-out sub-agents).
@@ -81,7 +81,7 @@ OBJECTIVE = (
     "Drive provider CLIs and curl through the `shell` tool. Report concrete PROOF of "
     "each step you achieve: the brute-forced code, retrieved credentials/tokens, the "
     "sts caller identity of any principal you obtain, and any bucket/object contents. "
-    "Do NOT fabricate — only report what a tool actually returned."
+    "Do NOT fabricate - only report what a tool actually returned."
 )
 
 

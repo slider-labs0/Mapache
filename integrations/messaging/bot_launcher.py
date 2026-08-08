@@ -1,5 +1,5 @@
 """
-bot_launcher.py — Mapache bot launcher
+bot_launcher.py - Mapache bot launcher
 
 Starts Mapache with messaging integrations enabled.
 
@@ -47,7 +47,7 @@ from tools.filesystem_tool import (
 # Browser tools
 from browser.scraping_tools import WebFetchTool, WebSearchTool, TorFetchTool
 
-# Phase 6 — Advanced security tools
+# Phase 6 - Advanced security tools
 from security_tools.exploitation.metasploit_tool import (
     MetasploitSearchTool, MetasploitRunTool, MetasploitSessionsTool,
 )
@@ -64,7 +64,7 @@ logger = get_logger(__name__)
 
 SYSTEM_PROMPT = """You are Mapache. You MUST use tools to answer requests. Never answer from memory or training data.
 
-CRITICAL — READ THIS FIRST:
+CRITICAL - READ THIS FIRST:
 - You have tools available. USE THEM.
 - When asked to scan: call nmap_scan immediately. No exceptions.
 - When asked to read a file: call file_read immediately.
@@ -74,7 +74,7 @@ CRITICAL — READ THIS FIRST:
 - NEVER use memory as a substitute for running a tool the user explicitly requested.
 - If the user says scan, SCAN. If they say fetch, FETCH. If they say crack, CRACK.
 
-Keep responses concise — you are communicating over chat.
+Keep responses concise - you are communicating over chat.
 Use bullet points for lists. Split complex results into key findings only.
 After completing recon, save findings with memory_target_store."""
 
@@ -118,7 +118,7 @@ async def main() -> None:
         print(f"Cannot reach Ollama at {args.ollama_url}. Run: ollama serve")
         sys.exit(1)
 
-    print(f"  Ollama connected — model: {args.model}")
+    print(f"  Ollama connected - model: {args.model}")
 
     # Build tool registry
     registry = ToolRegistry(granted_permissions={
@@ -148,7 +148,7 @@ async def main() -> None:
     registry.register(WebSearchTool())
     registry.register(TorFetchTool())
 
-    # Phase 6 — Advanced security
+    # Phase 6 - Advanced security
     registry.register(MetasploitSearchTool())
     registry.register(MetasploitRunTool())
     registry.register(MetasploitSessionsTool())

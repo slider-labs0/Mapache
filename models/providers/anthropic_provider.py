@@ -1,5 +1,5 @@
 """
-anthropic_provider.py — native Anthropic (Claude) provider.
+anthropic_provider.py - native Anthropic (Claude) provider.
 
 Speaks the Claude Messages API (POST /v1/messages), which is NOT OpenAI-shaped:
 the system prompt is a top-level field, tools use `input_schema`, and tool calls
@@ -12,7 +12,7 @@ changes).
 Tool results in Mapache's history are `tool`-role messages (the assistant's
 originating `tool_use` block is not stored). Rather than reconstruct the strict
 tool_use/tool_result pairing the Messages API requires, tool outputs are
-flattened into user text — valid, model-agnostic, and what JSON-mode already
+flattened into user text - valid, model-agnostic, and what JSON-mode already
 does. The model still receives the tool schemas and can emit fresh tool_use.
 """
 

@@ -1,5 +1,5 @@
 """
-project_context.py — Mapache project context builder
+project_context.py - Mapache project context builder
 
 Scans the working directory on startup, builds a mental model of the codebase,
 and injects it into the system prompt automatically.
@@ -10,7 +10,7 @@ Detects:
 - Key files (README, config, entry points)
 - MAPACHE.md custom instructions
 
-This is what makes Mapache feel like Claude Code — it understands
+This is what makes Mapache feel like Claude Code - it understands
 your project before you say a word.
 """
 

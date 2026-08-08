@@ -1,5 +1,5 @@
 """
-recon_weapons.py — grounding recon tools.
+recon_weapons.py - grounding recon tools.
 
   - secret_scan  : regex-scan text or files for exposed secrets (keys/tokens/creds).
   - tech_detect  : fingerprint a target's stack from response headers + body.
@@ -35,7 +35,7 @@ _COMPILED = [(n, re.compile(p)) for n, p in _SECRET_PATTERNS]
 class SecretScanTool(BaseTool):
     name = "secret_scan"
     description = (
-        "Scan text or files for exposed secrets — API keys, AWS keys, private keys, JWTs, "
+        "Scan text or files for exposed secrets - API keys, AWS keys, private keys, JWTs, "
         "bearer tokens, DB connection strings, hardcoded passwords. Pass 'text' to scan a "
         "blob (a response body, a config you already read) or 'path' to scan a file or "
         "directory tree. Reports each hit with a redacted preview + where it was found."
@@ -114,7 +114,7 @@ _TECH_SIGS: list[tuple[str, str]] = [
     (r"(?i)server:\s*amazons3|x-amz-", "AWS S3 / CloudFront"),
     (r"(?i)cf-ray|cloudflare", "Cloudflare"),
     (r"(?i)graphql", "GraphQL endpoint present"),
-    (r"(?i)jquery|react|vue|angular", "JS framework (SPA) — read the JS"),
+    (r"(?i)jquery|react|vue|angular", "JS framework (SPA) - read the JS"),
     (r"(?i)swagger|openapi", "Swagger/OpenAPI docs exposed"),
 ]
 

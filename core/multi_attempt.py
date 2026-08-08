@@ -1,5 +1,5 @@
 """
-multi_attempt.py — self-consistency / multi-attempt solving (capability #5)
+multi_attempt.py - self-consistency / multi-attempt solving (capability #5)
 
 A single ReAct pass fixates: once it commits to a vulnerability class or a wrong
 hypothesis, it burns its whole budget there. Frontier results (e.g. MAPTA) get a large
@@ -8,7 +8,7 @@ succeeds. This wraps a controller in exactly that: run the objective up to `max_
 times, stopping the moment success holds.
 
 Each retry starts a FRESH conversation (`context.clear_history`) so the reasoning isn't
-anchored to the failed line — but the shared attack-state blackboard and knowledge graph
+anchored to the failed line - but the shared attack-state blackboard and knowledge graph
 PERSIST, so it keeps confirmed findings (ports, services, creds) and doesn't re-discover
 them. The retry prompt tells the model to take a genuinely different approach and hands it
 the accumulated dead ends (from the progress ledger) so it doesn't re-walk them.
@@ -47,7 +47,7 @@ def _retry_prompt(controller: Any, objective: str, attempt: int) -> str:
     parts = [
         objective,
         f"\n\nATTEMPT {attempt}. The previous attempt(s) did NOT reach the objective. "
-        "Start FRESH and take a GENUINELY DIFFERENT approach — a different vulnerability "
+        "Start FRESH and take a GENUINELY DIFFERENT approach - a different vulnerability "
         "class, endpoint, parameter, credential, or technique than before. Your "
         "confirmed findings so far (ports, services, credentials) still stand; build on "
         "them, but do not repeat the line of attack that already failed.",

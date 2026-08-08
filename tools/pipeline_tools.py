@@ -1,10 +1,10 @@
 """
-pipeline_tools.py — the Vulnresearch pipeline runner.
+pipeline_tools.py - the Vulnresearch pipeline runner.
 
 `vuln_research` seeds the five-stage pipeline (scanner → detector → verifier →
 patcher → exploiter) as OPPLAN objectives for a target, then tells the lead to
 delegate each stage in order. State flows between stages through the knowledge
-graph — each stage spawns fresh and reads prior stages' findings via `kg_query`,
+graph - each stage spawns fresh and reads prior stages' findings via `kg_query`,
 records its own via `kg_add`. Reuses OPPLAN + operators + delegation rather than a
 bespoke orchestrator, so every stage benefits from scope/OPSEC/logging.
 """

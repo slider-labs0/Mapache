@@ -1,5 +1,5 @@
 """
-progress_ledger.py — a running record of what the agent has tried, so it stops
+progress_ledger.py - a running record of what the agent has tried, so it stops
 re-trying dead ends (agent-loop plan P1).
 
 The controller already injects CONFIRMED facts (the attack-state blackboard + the
@@ -10,8 +10,8 @@ endpoint/credential spraying and re-attempting dead ends were a top failure mode
 the XBOW runs, and the exact-duplicate guard resets every turn, so nothing stopped
 the model from re-walking the same fruitless path a turn later.
 
-This ledger records every dispatched action's outcome — productive (it surfaced a
-new finding) or a dead end — and renders a compact block the loop injects so the
+This ledger records every dispatched action's outcome - productive (it surfaced a
+new finding) or a dead end - and renders a compact block the loop injects so the
 model avoids repeating approaches that already paid nothing. It is advisory, not a
 hard block: an action that was fruitless early (e.g. before auth) can become
 productive later, so a later win PROMOTES it back out of the dead-end list.
@@ -71,7 +71,7 @@ class ProgressLedger:
             self._tried.add(signature)
             self.total += 1
         if found_new:
-            # It paid off — make sure it is not also listed as a dead end.
+            # It paid off - make sure it is not also listed as a dead end.
             if signature in self._dead_sigs:
                 self._dead_sigs.discard(signature)
                 self._dead = [d for d in self._dead if d != label]
@@ -91,10 +91,10 @@ class ProgressLedger:
         lines = ["Progress ledger (what you have already tried this engagement):"]
         if self._dead:
             shown = self._dead[-self.max_shown:]
-            lines.append("  Dead ends — these produced nothing new, so do NOT repeat "
+            lines.append("  Dead ends - these produced nothing new, so do NOT repeat "
                          "them; try a genuinely different endpoint, parameter, "
                          "credential, or technique:")
-            lines += [f"    • {d}" for d in shown]
+            lines += [f"    - {d}" for d in shown]
             if len(self._dead) > len(shown):
                 lines.append(f"    …and {len(self._dead) - len(shown)} more.")
         lines.append(f"  ({self.total} distinct actions tried, "

@@ -1,22 +1,22 @@
 """
-http_history.py — a Burp-lite request/response store for the web tools.
+http_history.py - a Burp-lite request/response store for the web tools.
 
 Every HTTP request the agent sends is recorded here as an `HTTPExchange` with a
 short id (`r1`, `r2`, …). That gives the agent three capabilities it otherwise
-lacks — the ones a human uses Burp Repeater for:
+lacks - the ones a human uses Burp Repeater for:
 
   * **replay** an earlier request verbatim,
-  * **tamper** — replay it with one field changed (an id, a header, a param),
-  * **diff** — compare two responses.
+  * **tamper** - replay it with one field changed (an id, a header, a param),
+  * **diff** - compare two responses.
 
 This is what turns IDOR / broken-authz from guesswork into a mechanical check:
-replay the authenticated request with `id=124` instead of `id=123` and diff —
+replay the authenticated request with `id=124` instead of `id=123` and diff -
 a DIFFERENT body means you just read another user's object (a confirmed IDOR);
 an IDENTICAL body means the parameter is ignored (a dead vector).
 
 The store is shared (like `WebSession`) across the web tools and, because
 delegated sub-agents reuse the lead's tool dispatcher + instances, across every
-operator in a swarm — so a request captured by recon is replayable by exploit.
+operator in a swarm - so a request captured by recon is replayable by exploit.
 """
 
 from __future__ import annotations

@@ -1,12 +1,12 @@
 """
-manifest.py — skill manifest + verification (feature I)
+manifest.py - skill manifest + verification (feature I)
 
 A "skill" is a downloadable package the hub can install into one of Mapache's
 existing homes:
 
-- `generated_tool` — a self-authored tool package (feature A): code body +
+- `generated_tool` - a self-authored tool package (feature A): code body +
   parameters, installed under `plugins/generated/<name>/`.
-- `mcp_server`     — an MCP server entry added to `mcp.json` (the MCP client).
+- `mcp_server`     - an MCP server entry added to `mcp.json` (the MCP client).
 
 The manifest carries identity (name/version/type/description/deps) and the
 **safety** fields the hub enforces before running third-party code: a `checksum`
@@ -14,7 +14,7 @@ over the installable payload, and an optional `signature`/`signer` (HMAC, reusin
 feature N's `core.provenance`). The checksum is mandatory and recomputed at
 install; the signature is verified when a trusted key is supplied. Cross-machine
 *asymmetric* trust (verifying another operator's key) arrives with N's ed25519
-upgrade behind the same `provenance.verify` surface — until then the checksum is
+upgrade behind the same `provenance.verify` surface - until then the checksum is
 the integrity gate and the signature confirms a self-/key-shared publisher.
 """
 
@@ -26,10 +26,10 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 # Installable types with a clear home. (prompt/persona packs are a documented
-# future type — no consumer wired yet, so not accepted here.)
-#   generated_tool — self-authored tool package (feature A)
-#   mcp_server     — an MCP server entry in mcp.json (the MCP client)
-#   external_tool  — a bring-your-own command tool backed by a GitHub repo, an
+# future type - no consumer wired yet, so not accepted here.)
+#   generated_tool - self-authored tool package (feature A)
+#   mcp_server     - an MCP server entry in mcp.json (the MCP client)
+#   external_tool  - a bring-your-own command tool backed by a GitHub repo, an
 #                    `integrations` entry the CLI turns into a CommandTool
 #                    (tools/external_tools.py). This is the shape a user's
 #                    uploaded GitHub tool takes in the hub.
@@ -91,8 +91,8 @@ class SkillManifest:
 def payload_digest(m: SkillManifest) -> str:
     """sha256 over the type-specific installable payload.
 
-    For a generated tool it is the sha256 of the *rendered* source — exactly what
-    `write_generated_tool` stores in the on-disk manifest — so an installed hub
+    For a generated tool it is the sha256 of the *rendered* source - exactly what
+    `write_generated_tool` stores in the on-disk manifest - so an installed hub
     tool's checksum matches and the A loader's own sha256 gate passes.
     """
     if m.skill_type == "generated_tool":

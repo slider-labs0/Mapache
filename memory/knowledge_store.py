@@ -1,8 +1,8 @@
 """
-knowledge_store.py — Mapache knowledge store
+knowledge_store.py - Mapache knowledge store
 
 Persistent key-value store for cross-session facts and agent state.
-Simpler than the note store — designed for structured data the agent
+Simpler than the note store - designed for structured data the agent
 needs to recall quickly:
 
     - Target profiles (IP, open ports, services found)

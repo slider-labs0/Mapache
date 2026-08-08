@@ -1,10 +1,10 @@
 """
-reversing_tools.py — binary analysis tool (structured command builder + parser).
+reversing_tools.py - binary analysis tool (structured command builder + parser).
 
 The reverser drives file/checksec/nm/ROPgadget/strings through the shell. This wraps
 the common triage actions with correct invocation and, crucially, PARSES the output
 into what matters: memory protections, dangerous imports, interesting strings
-(flags/creds/paths/format-strings), and ROP primitives — so triage is one call and
+(flags/creds/paths/format-strings), and ROP primitives - so triage is one call and
 the exploitable facts are surfaced, not buried.
 
 Runs the underlying binary when present; otherwise returns the command. Builders +

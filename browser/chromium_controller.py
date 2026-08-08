@@ -1,5 +1,5 @@
 """
-chromium_controller.py — Mapache browser automation
+chromium_controller.py - Mapache browser automation
 
 Headless Chromium control via Playwright.
 Used for JavaScript-heavy pages that httpx can't handle,
@@ -85,7 +85,7 @@ class ChromiumController:
         self._playwright: Optional[Any] = None
         self._browser: Optional[Any] = None
         # One persistent context for the controller's lifetime, so cookies (a login,
-        # a session token) carry across pages/calls — the auth/IDOR continuity that a
+        # a session token) carry across pages/calls - the auth/IDOR continuity that a
         # fresh page-per-call would lose.
         self._context: Optional[Any] = None
 

@@ -1,6 +1,6 @@
 ---
 name: lfi_ssrf
-description: Local File Inclusion / SSRF playbook — a parameter that takes a path or URL
+description: Local File Inclusion / SSRF playbook - a parameter that takes a path or URL
 when_to_use: A web request has a parameter that names a file, template, or URL (file=, path=, page=, url=, next=, dest=, image=, feed=)
 ports: [80, 443, 3000, 5000, 8000, 8080, 8443, 8888]
 keywords: [lfi, rfi, ssrf, path traversal, file inclusion, file=, path=, page=, url=, redirect, ../]
@@ -8,7 +8,7 @@ target_scheme: [http, https]
 phase: exploitation
 tools: [http_request]
 ---
-ACTIVE PLAYBOOK — a request parameter takes a FILE PATH or a URL. Two related
+ACTIVE PLAYBOOK - a request parameter takes a FILE PATH or a URL. Two related
 classes live here; pick by what the parameter feeds.
 
 LOCAL FILE INCLUSION / PATH TRAVERSAL (parameter names a file/template/page):
@@ -26,10 +26,10 @@ SERVER-SIDE REQUEST FORGERY (parameter takes a URL / fetches a resource):
   watch for the callback / a different response.
 - Reach internal-only services: `http://127.0.0.1:<port>/`, `http://localhost/admin`,
   and the cloud metadata endpoint `http://169.254.169.254/latest/meta-data/` (AWS) or
-  `http://metadata.google.internal/` (GCP) — often leaks IAM creds / tokens.
+  `http://metadata.google.internal/` (GCP) - often leaks IAM creds / tokens.
 - Bypass allow-lists: alternate IP encodings (`http://2130706433/` = 127.0.0.1),
   `http://[::1]/`, a redirect on a host you control, or `@`-tricks (`http://allowed@evil/`).
 - Scheme abuse: `file:///etc/passwd`, `gopher://` to forge requests to internal TCP services.
 
 PROOF = the actual retrieved file contents, the internal service's response, or the
-leaked credential/token returned by a request YOU issued — never a payload you did not send.
+leaked credential/token returned by a request YOU issued - never a payload you did not send.

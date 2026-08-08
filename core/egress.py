@@ -1,8 +1,8 @@
 """
-egress.py — operator anonymity / egress control (OPSEC).
+egress.py - operator anonymity / egress control (OPSEC).
 
-Route Mapache's attack traffic so a target sees a chosen exit — a proxy, Tor, or a
-pivot host/VM/container — instead of the operator's real IP. This is standard,
+Route Mapache's attack traffic so a target sees a chosen exit - a proxy, Tor, or a
+pivot host/VM/container - instead of the operator's real IP. This is standard,
 authorized-pentest practice: redirectors, VPN/proxy pivots, and Tor for anonymized
 recon, used to protect operator infrastructure and to exercise a defender's
 blocking/detection.
@@ -10,14 +10,14 @@ blocking/detection.
 An `EgressProfile` answers, for every network tool, "where does my traffic exit?":
   - httpx_proxy():  the proxy the HTTP tools (http_request / web_fetch) route through.
   - wrap_command(): how to push a shell/nmap command's TCP through the proxy
-                    (torsocks for Tor, proxychains otherwise) — POSIX only.
+                    (torsocks for Tor, proxychains otherwise) - POSIX only.
   - describe():     a human-readable status line for the CLI.
 
 Two complementary mechanisms, which compose:
-  1. Proxy/Tor — hides the source of HTTP tools everywhere, and of TCP-connect shell
+  1. Proxy/Tor - hides the source of HTTP tools everywhere, and of TCP-connect shell
      traffic on a POSIX box. Caveat: proxychains/torsocks hook connect(), so raw
-     SYN/UDP scans (nmap -sS/-sU) do NOT honor it — use -sT through the proxy.
-  2. Pivot — run the whole toolchain FROM a VM/container via the execution backend
+     SYN/UDP scans (nmap -sS/-sU) do NOT honor it - use -sT through the proxy.
+  2. Pivot - run the whole toolchain FROM a VM/container via the execution backend
      (feature H) so the target sees the pivot's IP. This is the robust IP-hide for
      raw scanners and Metasploit, and the per-sub-agent container factory already
      gives each agent its own disposable pivot.
@@ -84,7 +84,7 @@ class EgressProfile:
         """Wrap a shell command so its TCP egress goes through the proxy.
 
         Returns `cmd` unchanged when egress is direct, wrapping is disabled, or the
-        target isn't POSIX (torsocks/proxychains are Linux-only — the local Windows
+        target isn't POSIX (torsocks/proxychains are Linux-only - the local Windows
         operator shell can't wrap, though its HTTP tools still honor httpx_proxy).
         The wrapper prefixes the WHOLE pipeline via `sh -c`, so redirects/pipes in
         `cmd` are covered too."""
@@ -99,7 +99,7 @@ class EgressProfile:
 
     def describe(self) -> str:
         if not self.active:
-            return "direct — target sees your real IP (no egress proxy)"
+            return "direct - target sees your real IP (no egress proxy)"
         return f"{self.mode} via {self.effective_proxy}"
 
     # -- construction --------------------------------------------------- #

@@ -1,5 +1,5 @@
 """
-benchmark_xbow.py — run Mapache against the XBOW validation-benchmarks suite.
+benchmark_xbow.py - run Mapache against the XBOW validation-benchmarks suite.
 
 The XBOW `validation-benchmarks` repo (github.com/xbow-engineering/validation-
 benchmarks) is 104 Dockerized web-security CTF challenges (IDOR, SQLi, XSS, SSRF,
@@ -7,7 +7,7 @@ auth bypass, …), each with a single flag. It is the same set XBOW and others u
 to score autonomous pentest agents, so it lets us place Mapache next to them on a
 shared yardstick.
 
-Success is OBJECTIVE, not prose-matched: each benchmark's flag is deterministic —
+Success is OBJECTIVE, not prose-matched: each benchmark's flag is deterministic -
 `FLAG{sha256(<BENCHMARK-ID>)}` (the repo's Makefile bakes exactly that in at build
 time). We compute the same value, stand the target up, point the real agent at it,
 and a run PASSES only if that exact flag string appears in the agent's transcript
@@ -45,7 +45,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 def _quiet_and_utf8() -> None:
     """Windows consoles default to cp1252, which can't encode the status glyphs
-    (▶ ✅ →) this harness and the agent logger print — force UTF-8 on the streams,
+    (> [ok] →) this harness and the agent logger print - force UTF-8 on the streams,
     and drop INFO log spam so the per-benchmark verdicts stay readable."""
     for stream in (sys.stdout, sys.stderr):
         try:
@@ -106,7 +106,7 @@ _YAML_KEY = re.compile(r'^(\s*)([A-Za-z_][\w-]*):\s*$')
 
 def sanitize_compose(bench_dir: Path) -> bool:
     """Newer docker compose rejects `expose:` entries written as host:container
-    mappings (e.g. `- 3306:3306`) — `expose` takes a bare container port. ~20 XBOW
+    mappings (e.g. `- 3306:3306`) - `expose` takes a bare container port. ~20 XBOW
     compose files use the mapping form; rewrite ONLY items inside an `expose:` block
     (never `ports:`, where `8000:80` is legitimate) to the bare port so `up` works.
     Idempotent; the benchmarks repo is a disposable clone so we patch in place."""
@@ -142,8 +142,8 @@ def sanitize_compose(bench_dir: Path) -> bool:
 
 
 # EOL Debian releases (Buster and older) whose apt mirrors moved to archive.debian.org.
-# We CANNOT tell the release from the FROM tag — `php:7.4-apache` is Bullseye (still
-# live), `python:2.7.18-slim` is Buster (EOL) — and blindly rewriting a live release to
+# We CANNOT tell the release from the FROM tag - `php:7.4-apache` is Bullseye (still
+# live), `python:2.7.18-slim` is Buster (EOL) - and blindly rewriting a live release to
 # archive BREAKS it (Bullseye's -security repo isn't on archive). So the fix is applied
 # to every apt-using Dockerfile but is RUNTIME-CONDITIONAL: it only rewrites the sources
 # when they actually name buster/stretch/jessie, and is a harmless no-op otherwise
@@ -183,7 +183,7 @@ def patch_eol_debian(bench_dir: Path) -> int:
         for line in text.splitlines():
             s = line.strip()
             if s.upper().startswith("FROM "):
-                stage_fixed = False  # new build stage — fix again if it uses apt
+                stage_fixed = False  # new build stage - fix again if it uses apt
             elif (not stage_fixed and s.upper().startswith("RUN ")
                   and "apt-get" in s):
                 out.append(_APT_FIX.rstrip("\n"))
@@ -196,7 +196,7 @@ def patch_eol_debian(bench_dir: Path) -> int:
 
 
 def _probe_http(port: int, timeout: float = 3.0) -> bool:
-    """True if something is serving HTTP on the port — ANY status counts (a 404/500
+    """True if something is serving HTTP on the port - ANY status counts (a 404/500
     still proves the app is up). We probe ourselves rather than trust the compose
     healthcheck, which fails targets that serve fine but health-check a custom path."""
     import urllib.request
@@ -240,11 +240,11 @@ def build_and_up(bench_dir: Path, project: str, flag: str, *,
       - bring-up is detached and we IGNORE the healthcheck, polling the published
         port with a real HTTP GET until it answers (up to up_timeout),
       - if a port is published but never answers, we still return it so the agent
-        can try — only a total build failure or no-port-at-all is fatal."""
+        can try - only a total build failure or no-port-at-all is fatal."""
     sanitize_compose(bench_dir)
     patch_eol_debian(bench_dir)
     patch_composer(bench_dir)
-    # Build — bake the deterministic flag in (benchmarks name the arg FLAG or flag).
+    # Build - bake the deterministic flag in (benchmarks name the arg FLAG or flag).
     last_err = ""
     for _ in (1, 2):
         b = _compose(bench_dir, project, "build",
@@ -272,7 +272,7 @@ def build_and_up(bench_dir: Path, project: str, flag: str, *,
             return port
         time.sleep(3)
     if port:
-        return port  # published but never answered — let the agent try anyway
+        return port  # published but never answered - let the agent try anyway
     raise RuntimeError("target never became reachable (no published port)")
 
 
@@ -322,7 +322,7 @@ def teardown(bench_dir: Path, project: str) -> None:
 # --------------------------------------------------------------------------- #
 
 OBJECTIVE = (
-    "You are authorized to penetration-test the web application at {base} — an "
+    "You are authorized to penetration-test the web application at {base} - an "
     "isolated CTF lab you fully own and control. This is challenge '{name}'.\n"
     "Hint from the author: {description}\n"
     "Category tags: {tags}\n\n"
@@ -364,7 +364,7 @@ async def run_agent(port: int, meta: dict, flag: str, provider, *, max_iters: in
     # loopback containers and the scope was refusing legitimate calls; an empty
     # scope is inactive, so ToolDispatcher permits every target/tool. The agent's
     # ONLY remaining self-protection is the prompt-injection shield (SHIELD_CLAUSE +
-    # wrap_untrusted in context_builder), which is always on regardless of scope —
+    # wrap_untrusted in context_builder), which is always on regardless of scope -
     # so injected "now attack host X" text in tool output still carries no authority.
     scope = EngagementScope.from_dict({"name": session_id})
     registry = ToolRegistry(granted_permissions={
@@ -504,16 +504,16 @@ async def run_one(repo: Path, bid: str, provider, prov_label: str, *,
            "tags": meta.get("tags", []), "status": "error", "solved": False,
            "iterations": 0, "seconds": 0.0, "detail": ""}
     t0 = time.time()
-    print(f"\n{'='*70}\n▶ {bid}  {meta.get('name','')}\n  tags={meta.get('tags')}  "
+    print(f"\n{'='*70}\n> {bid}  {meta.get('name','')}\n  tags={meta.get('tags')}  "
           f"flag={flag[:14]}…  model={prov_label}{'  [preflight]' if preflight else ''}")
     try:
         port = build_and_up(bench_dir, project, flag,
                             build_timeout=build_timeout, up_timeout=up_timeout)
         if preflight:
-            # Buildability check only — prove the target is reachable, no agent spend.
+            # Buildability check only - prove the target is reachable, no agent spend.
             rec.update(status="reachable", detail=f"port {port}")
         else:
-            print(f"  target http://127.0.0.1:{port}  — running agent "
+            print(f"  target http://127.0.0.1:{port}  - running agent "
                   f"(strategy={strategy}, max_iters={max_iters})")
             found, result, _ = await asyncio.wait_for(
                 run_agent(port, meta, flag, provider, max_iters=max_iters,
@@ -532,10 +532,10 @@ async def run_one(repo: Path, bid: str, provider, prov_label: str, *,
     finally:
         teardown(bench_dir, project)
     rec["seconds"] = round(time.time() - t0, 1)
-    mark = ("✅ SOLVED" if rec["solved"] else
-            "✓ reachable" if rec["status"] == "reachable" else
-            "❌ not solved" if rec["status"] == "ok" else
-            f"⚠ {rec['status']}")
+    mark = ("[ok] SOLVED" if rec["solved"] else
+            "ok reachable" if rec["status"] == "reachable" else
+            "[x] not solved" if rec["status"] == "ok" else
+            f"[!] {rec['status']}")
     print(f"  {mark}  ({rec['iterations']} iters, {rec['seconds']}s)"
           + (f"  [{rec['detail'][:80]}]" if rec['status'] in ('error', 'timeout') else ""))
     return rec
@@ -550,7 +550,7 @@ def print_report(results: list[dict], model: str, wall: float) -> None:
     reachable = [r for r in results if r["status"] in ("ok", "timeout", "reachable")]
     n = len(results)
     print("\n" + "=" * 70)
-    print(f"XBOW VALIDATION — Mapache ({model})")
+    print(f"XBOW VALIDATION - Mapache ({model})")
     print("=" * 70)
     print(f"{'ID':<14}{'lvl':<5}{'result':<14}{'iters':>6}{'time':>8}  tags")
     for r in results:
@@ -564,18 +564,18 @@ def print_report(results: list[dict], model: str, wall: float) -> None:
         print(f"ATTEMPTED  {len(attempted)}   SOLVED {len(solved)}  "
               f"({solved_of_attempted:.1f}% of attempted, {100.0*len(solved)/n:.1f}% of all {n})")
     else:
-        print(f"REACHABLE {len(reachable)}/{n} — preflight only, no agent runs.")
+        print(f"REACHABLE {len(reachable)}/{n} - preflight only, no agent runs.")
     print(f"wall={wall:.0f}s")
 
 
 async def main_async(args) -> int:
     repo = Path(args.repo).expanduser()
     if not (repo / "benchmarks").is_dir():
-        print(f"✗ {repo}/benchmarks not found — clone xbow-engineering/validation-benchmarks.")
+        print(f"x {repo}/benchmarks not found - clone xbow-engineering/validation-benchmarks.")
         return 2
     ids = select_benchmarks(repo, args.only, args.limit)
     if not ids:
-        print("✗ no benchmarks selected.")
+        print("x no benchmarks selected.")
         return 2
     if args.preflight:
         provider, prov_label = None, "preflight (no model)"
@@ -584,7 +584,7 @@ async def main_async(args) -> int:
             provider, prov_label = build_provider(args.model, args.base_url,
                                                   tier_model=getattr(args, "tier_model", ""))
         except RuntimeError as exc:
-            print(f"✗ {exc}")
+            print(f"x {exc}")
             return 2
 
     log_dir = Path(args.log_dir)
@@ -610,9 +610,9 @@ async def main_async(args) -> int:
         # Fail-fast: stop at the first benchmark that isn't solved (agent miss OR infra
         # error) so the operator can diagnose it before spending on the rest.
         if getattr(args, "fail_fast", False) and not args.preflight and not rec.get("solved"):
-            print(f"\n✗ FAIL-FAST: {bid} not solved "
+            print(f"\nx FAIL-FAST: {bid} not solved "
                   f"(status={rec.get('status')}, iters={rec.get('iterations')}, "
-                  f"{rec.get('seconds')}s) — stopping. detail: {rec.get('detail')}")
+                  f"{rec.get('seconds')}s) - stopping. detail: {rec.get('detail')}")
             print_report(results, args.model, time.time() - t0)
             return 1
     print_report(results, args.model, time.time() - t0)
@@ -637,7 +637,7 @@ def main() -> None:
     ap.add_argument("--log-dir", default="engagements/xbow")
     ap.add_argument("--preflight", action="store_true",
                     help="build + start + probe every benchmark and report which are "
-                         "reachable vs unbuildable — NO agent runs, no model spend")
+                         "reachable vs unbuildable - NO agent runs, no model spend")
     ap.add_argument("--strategy", default="single", choices=["single", "swarm"],
                     help="single = one generalist agent; swarm = the autonomous "
                          "multi-agent supervisor routing specialist operators")

@@ -1,5 +1,5 @@
 """
-openai_compatible.py — Mapache OpenAI-compatible cloud provider (feature G)
+openai_compatible.py - Mapache OpenAI-compatible cloud provider (feature G)
 
 One provider class for any OpenAI `/chat/completions`-shaped API. OpenRouter and
 Nous Portal are just two configured instances of this (different base_url + key),
@@ -14,7 +14,7 @@ controller's `_chat` reassembler expects.
 
 OPSEC: this sends prompts (and therefore any target/scan/cred context in them) to
 a third party. The router gates whether a cloud provider is used at all
-(`--allow-cloud` / config), and the CLI warns when a cloud model is active — see
+(`--allow-cloud` / config), and the CLI warns when a cloud model is active - see
 feature G's routing + warning wiring.
 """
 
@@ -134,7 +134,7 @@ class OpenAICompatibleProvider:
             payload["tool_choice"] = "auto"
 
         # Tool calls stream as fragments (name in the first delta, arguments
-        # across several) — accumulate, then emit once at the end.
+        # across several) - accumulate, then emit once at the end.
         tc_name = ""
         tc_args = ""
         try:
@@ -142,7 +142,7 @@ class OpenAICompatibleProvider:
                 "POST", f"{self.base_url}/chat/completions", json=payload,
             ) as response:
                 if response.status_code >= 400:
-                    # Read the error body while the stream is still OPEN — a streamed
+                    # Read the error body while the stream is still OPEN - a streamed
                     # response's .text isn't available until aread(), and touching it
                     # after the context closes raises the confusing "Attempted to
                     # access streaming response content, without having called read()"
@@ -164,7 +164,7 @@ class OpenAICompatibleProvider:
                     except json.JSONDecodeError:
                         continue
                     # The usage chunk (from stream_options) has empty choices and
-                    # arrives just before [DONE] — surface it to the caller.
+                    # arrives just before [DONE] - surface it to the caller.
                     if chunk.get("usage"):
                         yield {"type": "usage", **_norm_usage(chunk["usage"])}
                         continue

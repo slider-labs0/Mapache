@@ -1,5 +1,5 @@
 """
-executor.py — Mapache shell/tool execution utility
+executor.py - Mapache shell/tool execution utility
 
 A thin helper that actually *runs* low-level actions on the host:
 
@@ -85,10 +85,10 @@ class Executor:
     ) -> ExecutionResult:
         """Route through the tool dispatcher."""
         if self._tool_dispatcher is None:
-            # Phase 1 stub — dispatcher not wired yet
+            # Phase 1 stub - dispatcher not wired yet
             stub_output = (
                 f"[STUB] {tool_name}({json.dumps(tool_args, separators=(',', ':'))})\n"
-                f"Tool dispatcher not yet connected — Phase 2 will wire this up."
+                f"Tool dispatcher not yet connected - Phase 2 will wire this up."
             )
             logger.debug("Tool dispatcher stub: %s", tool_name)
             return ExecutionResult(output=stub_output)
@@ -103,7 +103,7 @@ class Executor:
         """
         Run a shell command in a subprocess.
 
-        Safety notes (Phase 1 — basic):
+        Safety notes (Phase 1 - basic):
         - Commands run as the current user
         - Output is captured and truncated
         - Timeout enforced
@@ -141,7 +141,7 @@ class Executor:
                 output = output[:self.MAX_OUTPUT_BYTES] + "\n[... output truncated]"
 
             if proc.returncode != 0:
-                # Non-zero exit — return output as error context, not a hard error
+                # Non-zero exit - return output as error context, not a hard error
                 # Many tools (nmap, etc.) use non-zero exits for partial results
                 return ExecutionResult(
                     output=output,

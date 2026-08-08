@@ -1,12 +1,12 @@
 """
-filesystem_tool.py — Mapache filesystem tools
+filesystem_tool.py - Mapache filesystem tools
 
 Gives the agent structured file system access:
-    file_read    — read file contents
-    file_write   — create or overwrite a file
-    file_edit    — find-and-replace within a file (safe, targeted edits)
-    file_list    — list directory contents with metadata
-    file_search  — search for text across files (grep-like)
+    file_read    - read file contents
+    file_write   - create or overwrite a file
+    file_edit    - find-and-replace within a file (safe, targeted edits)
+    file_list    - list directory contents with metadata
+    file_search  - search for text across files (grep-like)
 
 These replace fragile shell workarounds with structured, validated operations.
 The agent can now read, understand, and edit codebases directly.
@@ -21,7 +21,7 @@ from typing import Any
 
 from plugins.sdk.base_tool import BaseTool, Permission, ToolResult
 
-MAX_FILE_SIZE = 100_000   # 100KB — truncate larger files
+MAX_FILE_SIZE = 100_000   # 100KB - truncate larger files
 MAX_SEARCH_RESULTS = 50
 MAX_LIST_DEPTH = 3
 
@@ -34,7 +34,7 @@ def _safe_path(path_str: str) -> Path:
 def _truncate(text: str, max_len: int = MAX_FILE_SIZE) -> str:
     if len(text) <= max_len:
         return text
-    return text[:max_len] + f"\n\n[... truncated — file is {len(text)} chars, showing first {max_len}]"
+    return text[:max_len] + f"\n\n[... truncated - file is {len(text)} chars, showing first {max_len}]"
 
 
 # ------------------------------------------------------------------ #
@@ -113,10 +113,10 @@ class FileReadTool(BaseTool):
             e = end_line if end_line > 0 else len(lines)
             selected = lines[s:e]
             text = "".join(selected)
-            header = f"[{p.name} lines {start_line}–{min(end_line, len(lines))} of {len(lines)}]\n"
+            header = f"[{p.name} lines {start_line}-{min(end_line, len(lines))} of {len(lines)}]\n"
         else:
             total_lines = text.count("\n") + 1
-            header = f"[{p.name} — {total_lines} lines, {size} bytes]\n"
+            header = f"[{p.name} - {total_lines} lines, {size} bytes]\n"
 
         content = header + _truncate(text)
 
@@ -249,7 +249,7 @@ class FileEditTool(BaseTool):
         count = original.count(old_str)
 
         if count == 0:
-            # Show a hint — find closest match
+            # Show a hint - find closest match
             lines = original.splitlines()
             hints = []
             for i, line in enumerate(lines, 1):
@@ -523,7 +523,7 @@ class FileSearchTool(BaseTool):
                 f"Searched {files_searched} file(s)"
             )
 
-        lines = [f"Search: '{pattern}' in {path} — {len(matches)} match(es)\n"]
+        lines = [f"Search: '{pattern}' in {path} - {len(matches)} match(es)\n"]
         current_file = None
         for filepath, line_num, line_text in matches:
             if filepath != current_file:

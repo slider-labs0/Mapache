@@ -1,18 +1,18 @@
 """
-tui.py — full-screen chat UI (opt-in via `--tui`).
+tui.py - full-screen chat UI (opt-in via `--tui`).
 
 A prompt_toolkit `Application` that pins a bordered input box to the bottom of the
-screen while agent output scrolls in a region above it — the layout the classic
+screen while agent output scrolls in a region above it - the layout the classic
 line-based REPL can't give. It reuses the whole existing engine: the same
 controller, command handlers, and turn loop feed their output here instead of
 straight to stdout.
 
 Design:
-- `OutputModel` — pure transcript state (committed ANSI text + one mutable live
+- `OutputModel` - pure transcript state (committed ANSI text + one mutable live
   status line). No prompt_toolkit, so it's unit-testable without a console.
-- `TuiRenderer` — a `render.Renderer` whose methods append to the model instead of
+- `TuiRenderer` - a `render.Renderer` whose methods append to the model instead of
   printing; the turn loop already talks to a Renderer, so nothing else changes.
-- `RaccoonTUI` — the prompt_toolkit glue: an output `Window` (colour via `ANSI`,
+- `RaccoonTUI` - the prompt_toolkit glue: an output `Window` (colour via `ANSI`,
   auto-scrolled to the bottom) over a bordered input `Frame`. Enter submits; while a
   turn runs, a submit steers it instead of starting a new one.
 
@@ -30,7 +30,7 @@ from cli import theme
 
 
 # --------------------------------------------------------------------------- #
-# Pure transcript state (no prompt_toolkit — unit-testable)
+# Pure transcript state (no prompt_toolkit - unit-testable)
 # --------------------------------------------------------------------------- #
 
 
@@ -94,7 +94,7 @@ class TuiRenderer(Renderer):
     def __init__(self, model: OutputModel) -> None:
         self.model = model
         self._streamed = False
-        # The active agent's accent colour — "green" for the lead, a per-specialist
+        # The active agent's accent colour - "green" for the lead, a per-specialist
         # colour while a sub-agent is running (set by the CLI on delegate start/end).
         self.accent = "green"
 
@@ -118,7 +118,7 @@ class TuiRenderer(Renderer):
         elif content:
             self.model.commit(theme.agent_line(content, dot="white", color=True))
         if error and error != "max_iterations":
-            self.model.commit(theme.paint(f"  ✗ {error}", "amber", color=True))
+            self.model.commit(theme.paint(f"  x {error}", "amber", color=True))
         self.model.commit("")
         self._streamed = False
 
@@ -173,7 +173,7 @@ class TuiRenderer(Renderer):
         self.model.commit(f"  ↪ steering: {line}")
 
     def error(self, msg: str) -> None:
-        self.model.commit(f"agent > ✗ {msg}")
+        self.model.commit(f"agent > x {msg}")
 
     def info(self, msg: str) -> None:
         self.model.commit(msg)
@@ -204,7 +204,7 @@ class TuiRenderer(Renderer):
 
 
 # --------------------------------------------------------------------------- #
-# stdout shim — routes stray print()s (banner, command handlers) into the model
+# stdout shim - routes stray print()s (banner, command handlers) into the model
 # --------------------------------------------------------------------------- #
 
 
@@ -230,7 +230,7 @@ class _ModelStdout:
 
     def isatty(self) -> bool:
         # True so theme.supports_color() keeps ANSI on (the output region renders
-        # it) — the banner shows the coloured mascot and status lines stay styled.
+        # it) - the banner shows the coloured mascot and status lines stay styled.
         # The spinner's \r paths are handled by TuiRenderer overrides, not here.
         return True
 
@@ -351,7 +351,7 @@ class RaccoonTUI:
         try:
             await self._on_run(text)
         except Exception as exc:  # never let a turn crash take down the UI
-            self.model.commit(f"agent > ✗ {exc}")
+            self.model.commit(f"agent > x {exc}")
         finally:
             self._invalidate()
 
@@ -365,7 +365,7 @@ def _enable_windows_vt() -> None:
     """Turn on ENABLE_VIRTUAL_TERMINAL_PROCESSING on the Windows stdout handle.
 
     In the VS Code integrated terminal (a ConPTY), prompt_toolkit otherwise selects
-    its Win32 console output — which needs a classic console screen buffer and
+    its Win32 console output - which needs a classic console screen buffer and
     raises NoConsoleScreenBufferError there. With VT enabled, prompt_toolkit picks
     the VT-capable output and the full-screen app works. Best-effort + silent."""
     import sys as _sys

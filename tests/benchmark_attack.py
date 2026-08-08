@@ -1,5 +1,5 @@
 """
-benchmark_attack.py — live end-to-end attack-chain benchmark (XBOW-style).
+benchmark_attack.py - live end-to-end attack-chain benchmark (XBOW-style).
 
 Points the REAL agent (Ollama model) at the local intentionally-vulnerable target
 (tests/targets/vuln_ctf.py) and checks whether it completes the web-recon chain and
@@ -39,10 +39,10 @@ async def run_benchmark(port: int, model: str, max_iters: int, log_path: Path) -
     base = f"http://127.0.0.1:{port}"
     provider = OllamaProvider(model=model)
     if not await provider.is_available():
-        print("✗ Ollama not reachable — start it (`ollama serve`) and pull the model.")
+        print("x Ollama not reachable - start it (`ollama serve`) and pull the model.")
         return 2
 
-    # RoE scope (J): loopback only — the agent is hard-limited to the practice box.
+    # RoE scope (J): loopback only - the agent is hard-limited to the practice box.
     scope = EngagementScope.from_dict({"name": "ctf-benchmark", "targets": ["127.0.0.1"]})
 
     registry = ToolRegistry(granted_permissions={
@@ -74,7 +74,7 @@ async def run_benchmark(port: int, model: str, max_iters: int, log_path: Path) -
         f"Use web_fetch to retrieve pages; start with {base}/ and follow what you "
         f"find (comments, robots.txt, backup files) until you reach the flag.")
 
-    print(f"▶ target={base}  model={model}  max_iters={max_iters}\n")
+    print(f"> target={base}  model={model}  max_iters={max_iters}\n")
     t0 = time.time()
     result = await controller.run(objective, session_id="ctf-benchmark")
     elapsed = time.time() - t0
@@ -90,7 +90,7 @@ async def run_benchmark(port: int, model: str, max_iters: int, log_path: Path) -
     print(f"flags      : {st.flags or '(none)'}")
     print(f"log        : {elog.summary()}")
     print("=" * 60)
-    verdict = "PASS ✅ flag captured" if flag_found else "FAIL ❌ no flag"
+    verdict = "PASS [ok] flag captured" if flag_found else "FAIL [x] no flag"
     print(f"\nBENCHMARK {verdict}")
     return 0 if flag_found else 1
 

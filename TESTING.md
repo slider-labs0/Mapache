@@ -1,4 +1,4 @@
-# Mapache — Testing Playbook
+# Mapache - Testing Playbook
 
 How to verify Mapache's features, from fast automated checks to live runs against
 a real model. Three tiers, cheapest first. On Windows, prefix Python commands with
@@ -8,7 +8,7 @@ Primary test model: **qwen2.5:32b** (native tool-calling). Swap with `--model`.
 
 ---
 
-## Tier 1 — Unit suite (no Ollama, fast, deterministic)
+## Tier 1 - Unit suite (no Ollama, fast, deterministic)
 
 The regression net. Run on every change; must stay green.
 
@@ -16,7 +16,7 @@ The regression net. Run on every change; must stay green.
 $env:PYTHONUTF8=1; python tests/test_core.py
 ```
 
-Expect: `All tests passed.` — currently **39 checks** covering:
+Expect: `All tests passed.` - currently **39 checks** covering:
 
 | Area | What's verified |
 |------|-----------------|
@@ -26,15 +26,15 @@ Expect: `All tests passed.` — currently **39 checks** covering:
 | Self-authored tools (A) | create/dispatch, bad-input rejection, curator active→stale→archived, hub checksum |
 | Config layer (C0) | precedence chain, `${ENV}` interpolation, provider resolution, redaction |
 
-These use a scripted `MockModel` — they prove the *plumbing*, not real-model
+These use a scripted `MockModel` - they prove the *plumbing*, not real-model
 behavior. That's Tier 2's job.
 
 ---
 
-## Tier 2 — Live smoke (real model, the real proof)
+## Tier 2 - Live smoke (real model, the real proof)
 
 Why it matters: every Tier-1 controller test feeds the loop scripted JSON. Only a
-live model tells us whether a local model actually emits valid protocol — the
+live model tells us whether a local model actually emits valid protocol - the
 whole reason the reask / robust-parsing layer exists.
 
 Prereqs: `ollama serve` running; `ollama list` shows the model. Launch:
@@ -62,7 +62,7 @@ Drive each check by typing the prompt at `you >` and watching the behavior. Type
 ### Sub-agent delegation
 | 6 | `delegate: enumerate the web service on this host and report back` | `agent.delegate.start/end`; a child runs and only its conclusion returns. |
 
-### Self-authored tools (feature A) — the headline test
+### Self-authored tools (feature A) - the headline test
 | 7 | `create a tool named add_one that takes an integer n and returns n+1, then use it on 41` | A `create_tool` call succeeds ("Created tool 'add_one'…"); **next turn** the model calls `add_one` and returns `42`. |
 | 8 | `/tools` then look for `add_one` | Listed among registered tools (tagged generated). |
 | 9 | `tool_list_generated` (ask the model to list its tools) | Shows `add_one` with state `active`, a use count. |
@@ -91,19 +91,19 @@ With an `mcp.json` present and `--mcp-config mcp.json`, startup prints
 
 ---
 
-## Tier 3 — Offensive end-to-end (the mission)
+## Tier 3 - Offensive end-to-end (the mission)
 
 Non-deterministic; needs real targets + binaries (nmap, msfconsole, john) and
 authorization. The HTB-style benchmark:
 
 ```powershell
 $env:PYTHONUTF8=1; python -m cli --model qwen2.5:32b
-you > target is 10.129.x.x — nmap scan with -Pn flag
+you > target is 10.129.x.x - nmap scan with -Pn flag
 ```
 
 Watch for: target captured into attack state, `nmap_scan` runs with `target=`,
 open ports parsed, phase advances recon→enumeration, phase-appropriate tools
-exposed. See `STATUS.md` "HTB benchmark — issue tracker" for known-good behavior.
+exposed. See `STATUS.md` "HTB benchmark - issue tracker" for known-good behavior.
 
 Use `--confirm` to gate dangerous ops, `--verify` to enable the reflection step.
 
@@ -111,13 +111,13 @@ Use `--confirm` to gate dangerous ops, `--verify` to enable the reflection step.
 
 ## Known coverage gaps (be honest about these)
 
-- **CLI entrypoint** (`cli/mapache_cli.py`) — REPL, slash commands (`/curate`,
-  `/restore`, `/purge`), the steering loop and stdin reader — is only
+- **CLI entrypoint** (`cli/mapache_cli.py`) - REPL, slash commands (`/curate`,
+  `/restore`, `/purge`), the steering loop and stdin reader - is only
   construction-tested. Tier 2 is currently manual; a pipeable `tests/smoke_cli.py`
   harness (scripted stdin → grep output) would automate it.
-- **C0 config layer** is unit-tested but **not yet wired into the CLI** — nothing
+- **C0 config layer** is unit-tested but **not yet wired into the CLI** - nothing
   consumes `MapacheConfig` until C1. Until then, `--model`/env flags still drive it.
 - **Real offensive tools** (nmap/msf/john/burp/kali) and **messaging**
   (Telegram/Discord) need external services and aren't covered automatically.
 - **Real-model protocol reliability** for `create_tool` (nested schema + code in
-  one call) is exactly what Tier 2 #7 probes — the main unknown for feature A.
+  one call) is exactly what Tier 2 #7 probes - the main unknown for feature A.

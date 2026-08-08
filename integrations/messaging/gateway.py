@@ -1,5 +1,5 @@
 """
-gateway.py — Mapache messaging gateway
+gateway.py - Mapache messaging gateway
 
 The bridge between messaging platforms and the agent controller.
 All incoming messages from Telegram, Discord, etc. flow through here.
@@ -97,7 +97,7 @@ class MessageGateway:
     async def handle_message(self, msg: IncomingMessage) -> None:
         logger.info("[%s] %s: %r", msg.platform, msg.username, msg.text[:80])
 
-        # Auth check — shows actual ID so you can copy it into .env
+        # Auth check - shows actual ID so you can copy it into .env
         if not self.allow_all and msg.user_id not in self.allowed_users:
             await self._send(msg.platform, OutgoingMessage(
                 text=f"Not authorized. Your ID is: {msg.user_id}",
@@ -175,7 +175,7 @@ class MessageGateway:
         elif cmd == "/help":
             lines = ["Mapache Commands\n"]
             for c, desc in self.COMMANDS.items():
-                lines.append(f"{c} — {desc}")
+                lines.append(f"{c} - {desc}")
             text = "\n".join(lines)
 
         elif cmd == "/reset":

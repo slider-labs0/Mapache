@@ -1,5 +1,5 @@
 """
-http_client.py — Mapache HTTP client
+http_client.py - Mapache HTTP client
 
 Base HTTP client used by both surface web and Tor browsing.
 Supports proxy routing (SOCKS5 for Tor), custom headers,
@@ -132,7 +132,7 @@ class HttpClient:
         if proxy:
             client_kwargs["proxy"] = proxy
         # A shared cookie jar (httpx.Cookies) lets one HttpClient's Set-Cookie carry
-        # into the next request even though a fresh client is built per tool call —
+        # into the next request even though a fresh client is built per tool call -
         # so a login authenticates subsequent calls. httpx.Cookies(jar) shares the
         # same underlying jar, and responses update it in place, so the caller's jar
         # accumulates cookies across clients.

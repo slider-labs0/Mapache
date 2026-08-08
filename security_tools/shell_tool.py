@@ -1,5 +1,5 @@
 """
-shell_tool.py — Mapache shell execution tool
+shell_tool.py - Mapache shell execution tool
 
 Replaces the Phase 1 inline ShellDispatcher with a proper BaseTool implementation.
 Handles Windows and Unix transparently.

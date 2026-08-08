@@ -1,5 +1,5 @@
 """
-smoke_hub_upload.py — end-to-end walk of the GitHub-tool upload flow.
+smoke_hub_upload.py - end-to-end walk of the GitHub-tool upload flow.
 
 Mimics the real path with NO network and NO touching your real config:
   1. an author publishes a repo (a real local git repo stands in for GitHub)
@@ -75,7 +75,7 @@ def _run() -> None:
         manifest_from_github(repo_url, json.dumps({"name": "demo_recon", "command": "echo hi"}))
         raise SystemExit("FAIL: a command without {dir} should be refused")
     except PublishError as exc:
-        print("    validation OK — refused a repo tool with no {dir}:", exc)
+        print("    validation OK - refused a repo tool with no {dir}:", exc)
 
     # 3. Fold it into the registry index.json (what UrlRegistry serves).
     step(3, "Add to registry index.json")
@@ -96,7 +96,7 @@ def _run() -> None:
                  if e["name"] == "demo_recon")
     print("    config integrations entry:", json.dumps(entry))
 
-    # 5. Build the tool from that config — exactly what the CLI does at startup.
+    # 5. Build the tool from that config - exactly what the CLI does at startup.
     step(5, "CLI startup builds a CommandTool from the config")
     config = load_config(global_path=cfg, environ={"HOME": str(tmp), "USERPROFILE": str(tmp)})
     tools, warnings = build_external_tools(config.integrations)
@@ -113,7 +113,7 @@ def _run() -> None:
     except Exception as exc:  # shell/git quirks shouldn't fail the smoke
         print("    (execution step skipped:", exc, ")")
 
-    print("\nSMOKE OK — publish → index → install → build all succeeded.")
+    print("\nSMOKE OK - publish → index → install → build all succeeded.")
     # Cleanup (best-effort; temp dir).
     import shutil
     shutil.rmtree(tmp, ignore_errors=True)

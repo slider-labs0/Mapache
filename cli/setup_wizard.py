@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-setup_wizard.py — Mapache interactive setup (feature C1)
+setup_wizard.py - Mapache interactive setup (feature C1)
 
 `mapache setup` walks an operator through a first-run configuration and writes
 the result to the global config file (`~/.mapache/config.json`). It is the
@@ -11,7 +11,7 @@ What it does, in order:
   1. Detect Ollama at the configured URL; list installed models and offer to
      pull the chosen default if it is missing.
   2. Check the optional offensive toolchain on PATH (nmap, msfconsole, …) and
-     report what is present vs missing — informational, never fatal.
+     report what is present vs missing - informational, never fatal.
   3. Prompt for cloud-provider API keys (OpenRouter, Nous) and the model ids to
      expose, plus Telegram/Discord tokens.
   4. Write the config, then smoke-test one turn against the chosen default model.
@@ -20,8 +20,8 @@ Design notes:
   - **Idempotent.** Every prompt shows the current effective value as its
     default; pressing Enter keeps it. Re-running reports what is already set.
   - **Secret-preserving.** The wizard edits the *raw* global file
-    (`load_global_raw`), so a key kept as a `${ENV_VAR}` placeholder — or one
-    supplied only by the environment — is never rewritten as a plaintext
+    (`load_global_raw`), so a key kept as a `${ENV_VAR}` placeholder - or one
+    supplied only by the environment - is never rewritten as a plaintext
     literal. A secret is only written when the operator types a new value.
 
 `mapache config show` / `config path` (also routed here) print the effective
@@ -56,7 +56,7 @@ from core.config import (
 )
 
 # Optional offensive bins we like to see on PATH. Missing ones are reported, not
-# required — Mapache degrades to whatever is installed (and remote exec, H, will
+# required - Mapache degrades to whatever is installed (and remote exec, H, will
 # eventually cover the gaps).
 OPTIONAL_BINS = [
     ("nmap", "port/service scanning"),
@@ -161,27 +161,27 @@ async def _step_ollama(cfg, raw: dict, default_model: str) -> None:
     prov = OllamaProvider(model=default_model, base_url=url)
     try:
         if not await prov.is_available():
-            print("  ✗  Ollama is not reachable. Start it with:  ollama serve")
+            print("  x  Ollama is not reachable. Start it with:  ollama serve")
             print("     (Then re-run `mapache setup`, or pull models yourself.)")
             return
 
         models = await prov.list_models()
         if models:
-            print(f"  ✓  Ollama up — {len(models)} model(s) installed:")
+            print(f"  ok  Ollama up - {len(models)} model(s) installed:")
             for m in models:
-                print(f"       • {m}")
+                print(f"       - {m}")
         else:
-            print("  ✓  Ollama up — no models installed yet.")
+            print("  ok  Ollama up - no models installed yet.")
 
         base = default_model.split(":")[0]
         have = any(base in m for m in models)
         if not have:
-            print(f"  ⚠  Default model '{default_model}' is not installed.")
+            print(f"  [!]  Default model '{default_model}' is not installed.")
             if _prompt_bool(f"Pull '{default_model}' now? (large download)", default=False):
                 await prov.pull_model(default_model)
-                print(f"  ✓  Pulled {default_model}.")
+                print(f"  ok  Pulled {default_model}.")
             else:
-                print("  • Skipped — pull it later with:  ollama pull " + default_model)
+                print("  - Skipped - pull it later with:  ollama pull " + default_model)
     finally:
         await prov.close()
 
@@ -193,9 +193,9 @@ def _step_bins() -> None:
     for name, desc in OPTIONAL_BINS:
         (present if shutil.which(name) else missing).append((name, desc))
     for name, _desc in present:
-        print(f"  ✓  {name}")
+        print(f"  ok  {name}")
     for name, desc in missing:
-        print(f"  –  {name:14s} not found  ({desc})")
+        print(f"  -  {name:14s} not found  ({desc})")
     if missing:
         print("  Missing tools just disable their feature; nothing here is required.")
 
@@ -266,7 +266,7 @@ async def _pick_ollama_model(cfg, current: str) -> str:
         if sel.isdigit() and 1 <= int(sel) <= len(installed):
             return installed[int(sel) - 1]
         return sel
-    print("  ⚠  Ollama has no installed models (or is unreachable at "
+    print("  [!]  Ollama has no installed models (or is unreachable at "
           f"{cfg.ollama_url}).")
     return _prompt("Enter a model id to use (you can `ollama pull` it later)",
                    current or "qwen2.5:32b")
@@ -315,12 +315,12 @@ async def _step_choose_provider_model(cfg, raw: dict) -> tuple[str, bool]:
                                model_id=model_id, api_key=api_key or None,
                                is_cloud=True)
         if not api_key:
-            print(f"  ⚠  No API key for {name} yet — add one (or set {env_var}) "
+            print(f"  [!]  No API key for {name} yet - add one (or set {env_var}) "
                   "before launching this model.")
         else:
-            print("  ⚠  OPSEC: cloud models may receive target/scan/cred context.")
+            print("  [!]  OPSEC: cloud models may receive target/scan/cred context.")
 
-    print(f"  ✓  Default model: {model_id}  (provider: {name})")
+    print(f"  ok  Default model: {model_id}  (provider: {name})")
     return model_id, is_cloud
 
 
@@ -341,7 +341,7 @@ def _step_prefs(cfg, raw: dict) -> None:
     _hr("Defaults")
     strat = _prompt("Default strategy (single|pipeline|auto|hybrid)", cfg.default_strategy)
     if strat not in ("single", "pipeline", "auto", "hybrid"):
-        print(f"  ⚠  Unknown strategy '{strat}', keeping '{cfg.default_strategy}'.")
+        print(f"  [!]  Unknown strategy '{strat}', keeping '{cfg.default_strategy}'.")
         strat = cfg.default_strategy
     raw["default_strategy"] = strat
 
@@ -349,7 +349,7 @@ def _step_prefs(cfg, raw: dict) -> None:
     try:
         raw["max_vram_gb"] = float(vram)
     except ValueError:
-        print(f"  ⚠  '{vram}' is not a number, keeping {cfg.max_vram_gb}.")
+        print(f"  [!]  '{vram}' is not a number, keeping {cfg.max_vram_gb}.")
 
 
 async def _step_smoke_test(default_model: str, working_dir: Path) -> None:
@@ -359,15 +359,15 @@ async def _step_smoke_test(default_model: str, working_dir: Path) -> None:
     cfg = load_config(working_dir=working_dir)
     prov_cfg = cfg.provider_for_model(default_model)
     if prov_cfg is None:
-        print("  • No provider resolves the default model; skipping smoke test.")
+        print("  - No provider resolves the default model; skipping smoke test.")
         return
 
     if prov_cfg.is_cloud:
         if not cfg.allow_cloud:
-            print("  • Default is a cloud model and cloud routing is off; skipping.")
+            print("  - Default is a cloud model and cloud routing is off; skipping.")
             return
         if not prov_cfg.is_usable:
-            print(f"  • Cloud provider '{prov_cfg.name}' has no key; skipping.")
+            print(f"  - Cloud provider '{prov_cfg.name}' has no key; skipping.")
             return
         from models.providers.openai_compatible import OpenAICompatibleProvider
         provider = OpenAICompatibleProvider(
@@ -377,7 +377,7 @@ async def _step_smoke_test(default_model: str, working_dir: Path) -> None:
         from models.providers.ollama_provider import OllamaProvider
         provider = OllamaProvider(model=default_model, base_url=cfg.ollama_url)
         if not await provider.is_available():
-            print("  • Ollama not reachable; skipping smoke test.")
+            print("  - Ollama not reachable; skipping smoke test.")
             await provider.close()
             return
 
@@ -388,11 +388,11 @@ async def _step_smoke_test(default_model: str, working_dir: Path) -> None:
         )
         reply = provider.extract_content(resp).strip()
         if reply:
-            print(f"  ✓  Model replied: {reply[:80]!r}")
+            print(f"  ok  Model replied: {reply[:80]!r}")
         else:
-            print("  ⚠  Model returned an empty reply (config saved, model may be loading).")
+            print("  [!]  Model returned an empty reply (config saved, model may be loading).")
     except Exception as exc:
-        print(f"  ✗  Smoke test failed: {exc}")
+        print(f"  x  Smoke test failed: {exc}")
         print("     Config was still saved; fix the model/endpoint and retry.")
     finally:
         await provider.close()
@@ -419,7 +419,7 @@ async def run_setup(argv: Optional[list[str]] = None) -> int:
     print("╚══════════════════════════════════════╝")
     print(f"  Writing to: {gpath}")
     if gpath.is_file():
-        print("  (existing config found — Enter keeps each current value)")
+        print("  (existing config found - Enter keeps each current value)")
 
     # Effective view drives the shown defaults; the raw file is what we edit.
     cfg = load_config(working_dir=working_dir)
@@ -434,7 +434,7 @@ async def run_setup(argv: Optional[list[str]] = None) -> int:
     _step_messaging(cfg, raw)
 
     saved = save_global_config(raw)
-    print(f"\n  ✓  Saved {saved}")
+    print(f"\n  ok  Saved {saved}")
 
     if not args.no_smoke_test:
         await _step_smoke_test(default_model, working_dir)
@@ -461,6 +461,6 @@ async def run_config_cmd(argv: Optional[list[str]] = None) -> int:
     if cfg.sources:
         print("\n# sources (low → high precedence): " + ", ".join(cfg.sources))
     else:
-        print("\n# no config files found — built-in defaults in effect")
+        print("\n# no config files found - built-in defaults in effect")
     print(f"# global config path: {global_config_path()}")
     return 0

@@ -1,16 +1,16 @@
 """
-memory_manager.py — Mapache memory manager
+memory_manager.py - Mapache memory manager
 
 Unified interface that wires together all memory subsystems:
-    - SessionMemory   — current conversation state
-    - NoteStore       — persistent human-readable notes
-    - KnowledgeStore  — persistent structured key-value data
-    - VectorStore     — semantic search over past findings
+    - SessionMemory   - current conversation state
+    - NoteStore       - persistent human-readable notes
+    - KnowledgeStore  - persistent structured key-value data
+    - VectorStore     - semantic search over past findings
 
 Also exposes memory as agent tools so Mapache can manage
 its own memory autonomously.
 
-This is what makes Mapache remember things across sessions —
+This is what makes Mapache remember things across sessions -
 it's the difference between a stateless tool and an agent
 that learns and builds context over time.
 """
@@ -41,7 +41,7 @@ class MemoryManager:
         memory.knowledge.store_target("192.168.1.1", {"ports": [22, 80]})
         await memory.vectors.add("Port 22 SSH open on 192.168.1.1", {"target": "192.168.1.1"})
 
-        # Next session — recall
+        # Next session - recall
         results = await memory.vectors.search("SSH services")
         notes = memory.notes.search("recon")
     """
@@ -69,7 +69,7 @@ class MemoryManager:
 
     async def end_session(self) -> None:
         """
-        End the current session — summarize and persist to long-term memory.
+        End the current session - summarize and persist to long-term memory.
         Called when the user exits or the session ends.
         """
         if not self._current_session:
@@ -124,7 +124,7 @@ class MemoryRecallTool(BaseTool):
         "Search long-term memory for relevant past findings, notes, or information. "
         "Use to recall what was found in previous sessions, past recon results, "
         "stored credentials, or anything remembered from prior work. "
-        "Semantic search — describe what you're looking for in plain language."
+        "Semantic search - describe what you're looking for in plain language."
     )
     parameters = {
         "type": "object",
@@ -365,7 +365,7 @@ class MemoryNoteListTool(BaseTool):
         lines = [f"{len(notes)} note(s):\n"]
         for note in notes:
             tags_str = f" [{', '.join(note.tags)}]" if note.tags else ""
-            lines.append(f"  [{note.id}] {note.title}{tags_str} — {note.updated_at[:10]}")
+            lines.append(f"  [{note.id}] {note.title}{tags_str} - {note.updated_at[:10]}")
 
         all_tags = self._manager.notes.list_tags()
         if all_tags:
@@ -378,7 +378,7 @@ class MemoryTargetStoreTool(BaseTool):
     name = "memory_target_store"
     description = (
         "Store recon findings for a target host or IP. "
-        "Persists across sessions — use after scanning to remember what was found. "
+        "Persists across sessions - use after scanning to remember what was found. "
         "Merges with existing data for the same target."
     )
     parameters = {

@@ -1,9 +1,9 @@
 """
-model_pool.py — Mapache lazy provider pool
+model_pool.py - Mapache lazy provider pool
 
 Caches one provider per model id. With a MapacheConfig, it builds the *right*
-provider per model — Ollama for local models, OpenAICompatibleProvider for models
-a cloud provider entry (openrouter / nous / …) claims — so per-role routing can
+provider per model - Ollama for local models, OpenAICompatibleProvider for models
+a cloud provider entry (openrouter / nous / …) claims - so per-role routing can
 address local and cloud models interchangeably. Without a config it stays
 Ollama-only (backwards-compatible).
 """

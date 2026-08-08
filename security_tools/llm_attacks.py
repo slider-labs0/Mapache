@@ -1,11 +1,11 @@
 """
-llm_attacks.py — offensive prompt-injection testing for LLM-backed targets.
+llm_attacks.py - offensive prompt-injection testing for LLM-backed targets.
 
 Modern apps wire user input into an LLM (chatbots, summarizers, agents, RAG). If the
 app concatenates that input into the model's prompt without isolation, an attacker can
-override the system prompt — OWASP LLM01. This tool probes a target LLM endpoint with a
+override the system prompt - OWASP LLM01. This tool probes a target LLM endpoint with a
 battery of injection payloads and CONFIRMS susceptibility via a unique canary: if the
-model emits the canary, it obeyed the injected instruction over the app's own — proven
+model emits the canary, it obeyed the injected instruction over the app's own - proven
 prompt injection (a reportable finding).
 
 Authorized-testing tool: point it only at a target you are engaged to assess.
@@ -51,7 +51,7 @@ class LlmInjectTool(BaseTool):
         "battery of injection payloads to <url>, placing each in the request's <field> "
         "(the JSON key the app reads, e.g. 'message'/'prompt'/'query'), and confirms "
         "susceptibility with a unique canary: if the model echoes the canary, the app's "
-        "system prompt was overridden — a confirmed finding. Also probes for system-prompt "
+        "system prompt was overridden - a confirmed finding. Also probes for system-prompt "
         "leakage. Report a hit with report_finding (category=other, the request+response as "
         "evidence). Use only against an authorized target."
     )
@@ -106,15 +106,15 @@ class LlmInjectTool(BaseTool):
                     continue
                 if kind == "canary" and canary in text:
                     confirmed.append(pid)
-                    results.append(f"  [{pid}] CONFIRMED — target echoed the canary "
+                    results.append(f"  [{pid}] CONFIRMED - target echoed the canary "
                                    f"(system prompt overridden). {desc}.")
                 elif kind == "leak" and _LEAK_SIGNS.search(text):
                     leaked = True
-                    results.append(f"  [{pid}] POSSIBLE system-prompt leak — response "
+                    results.append(f"  [{pid}] POSSIBLE system-prompt leak - response "
                                    f"contains instruction-like text. Review: {text[:200]}")
                 else:
                     results.append(f"  [{pid}] no effect ({resp.status_code}).")
-        verdict = ("VULNERABLE — confirmed prompt injection via: " + ", ".join(confirmed)
+        verdict = ("VULNERABLE - confirmed prompt injection via: " + ", ".join(confirmed)
                    if confirmed else
                    ("Possible system-prompt leakage (unconfirmed)." if leaked else
                     "No injection confirmed with these probes."))

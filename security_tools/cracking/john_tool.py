@@ -1,5 +1,5 @@
 """
-john_tool.py — Mapache John the Ripper integration
+john_tool.py - Mapache John the Ripper integration
 
 Wraps John the Ripper for autonomous password cracking.
 The agent can crack hashes found during recon without manual intervention.
@@ -212,7 +212,7 @@ class JohnCrackTool(BaseTool):
             cracked_output = show_stdout.decode("utf-8", errors="replace")
 
             # Parse results
-            lines = [f"John the Ripper — {mode} attack\n"]
+            lines = [f"John the Ripper - {mode} attack\n"]
 
             cracked_lines = [
                 l for l in cracked_output.splitlines()
@@ -278,7 +278,7 @@ class JohnFormatTool(BaseTool):
 
         # Length-based identification
         if length == 32 and is_hex:
-            candidates.append(("MD5", "md5", "Most common — MySQL, web apps"))
+            candidates.append(("MD5", "md5", "Most common - MySQL, web apps"))
             candidates.append(("NTLM", "nt", "Windows password hash"))
             candidates.append(("MD4", "raw-md4", "Older Windows"))
         elif length == 40 and is_hex:
@@ -294,7 +294,7 @@ class JohnFormatTool(BaseTool):
         elif h.startswith("$1$"):
             candidates.append(("MD5crypt", "md5crypt", "Linux /etc/shadow (MD5)"))
         elif h.startswith("$2b$") or h.startswith("$2a$"):
-            candidates.append(("bcrypt", "bcrypt", "Modern web apps — very slow to crack"))
+            candidates.append(("bcrypt", "bcrypt", "Modern web apps - very slow to crack"))
         elif h.startswith("$5$"):
             candidates.append(("SHA256crypt", "sha256crypt", "Linux /etc/shadow"))
         elif h.startswith("$6$"):

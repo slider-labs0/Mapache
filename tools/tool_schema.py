@@ -1,5 +1,5 @@
 """
-tool_schema.py — Tool argument validation
+tool_schema.py - Tool argument validation
 
 Validates tool call arguments against JSON schemas before execution.
 Prevents bad args from reaching tools and gives the model clear error feedback.
@@ -42,7 +42,7 @@ def validate_args(
     validated: dict[str, Any] = {}
 
     for key, prop_schema in properties.items():
-        # A null for an optional field means "not provided" — local models
+        # A null for an optional field means "not provided" - local models
         # routinely dump every optional param with a null value. Treat it like
         # an omitted key (apply the default if any) rather than trying to coerce
         # None to the declared type, which would spuriously reject the call.

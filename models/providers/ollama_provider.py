@@ -1,5 +1,5 @@
 """
-ollama_provider.py — Mapache Ollama model provider (v2)
+ollama_provider.py - Mapache Ollama model provider (v2)
 
 Adds:
 - chat_stream() for token-by-token streaming
@@ -25,7 +25,7 @@ logger = get_logger(__name__)
 
 DEFAULT_BASE_URL = "http://localhost:11434"
 DEFAULT_MODEL    = "qwen2.5:14b"
-DEFAULT_TIMEOUT  = 600.0  # 10 minutes — long scans need this
+DEFAULT_TIMEOUT  = 600.0  # 10 minutes - long scans need this
 
 
 class OllamaProvider:

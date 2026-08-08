@@ -1,5 +1,5 @@
 """
-mcp_client.py — Mapache MCP client (stdio transport)
+mcp_client.py - Mapache MCP client (stdio transport)
 
 Connects OUT to Model Context Protocol servers, launched as local subprocesses,
 and adapts their tools into Mapache `BaseTool`s so the agent can call them
@@ -75,7 +75,7 @@ def load_mcp_config(path: str) -> list[MCPServerConfig]:
     for name, spec in servers.items():
         command = (spec or {}).get("command")
         if not command:
-            logger.warning("MCP server %r has no command — skipping", name)
+            logger.warning("MCP server %r has no command - skipping", name)
             continue
         configs.append(MCPServerConfig(
             name=name,

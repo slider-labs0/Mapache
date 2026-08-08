@@ -1,8 +1,8 @@
 """
-event_bus.py — Mapache core event bus
+event_bus.py - Mapache core event bus
 
 Central pub/sub backbone. All inter-module communication goes through here.
-No module should call another module directly — post an event instead.
+No module should call another module directly - post an event instead.
 
 Usage:
     bus = EventBus()
@@ -115,7 +115,7 @@ class EventBus:
     ) -> Event:
         """
         Emit an event and invoke all registered handlers concurrently.
-        Handlers run as gathered tasks — one slow handler won't block others.
+        Handlers run as gathered tasks - one slow handler won't block others.
         """
         event = Event(
             topic=topic,
@@ -230,7 +230,7 @@ class ScopedBus:
     data, then forwards to the underlying bus.
 
     A delegated sub-agent shares the lead's bus, so its tool calls, findings, and
-    reasks already flow through the same stream — but nothing marks them as the
+    reasks already flow through the same stream - but nothing marks them as the
     sub-agent's. Wrapping the child's bus in a ScopedBus injects an `_agent` tag
     ({"operator", "depth", "suffix", …}) into each event so consumers (e.g. the CLI)
     can attribute and nest the sub-agent's full trace instead of seeing only the
@@ -247,7 +247,7 @@ class ScopedBus:
 
     def __getattr__(self, name: str) -> Any:
         # Everything not overridden here (subscribe/unsubscribe/get_history/…) is the
-        # real bus's — so consumers and nested scopes behave identically.
+        # real bus's - so consumers and nested scopes behave identically.
         return getattr(self._bus, name)
 
     def _stamp(self, data: dict[str, Any] | None) -> dict[str, Any]:

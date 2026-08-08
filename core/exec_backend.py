@@ -1,14 +1,14 @@
 """
-exec_backend.py — pluggable command execution backends (feature H)
+exec_backend.py - pluggable command execution backends (feature H)
 
 Run the offensive toolchain somewhere other than the local shell. A command is
 the same string either way; the *backend* decides where it lands:
 
-- `LocalBackend`  — a subprocess on this host (the default; unchanged behavior).
-- `SSHBackend`    — wrap the command in an `ssh user@host "<cmd>"` invocation and
-                    run that locally (uses the system `ssh` binary — dependency-
+- `LocalBackend`  - a subprocess on this host (the default; unchanged behavior).
+- `SSHBackend`    - wrap the command in an `ssh user@host "<cmd>"` invocation and
+                    run that locally (uses the system `ssh` binary - dependency-
                     free, key/agent auth, no paramiko).
-- `DockerBackend` — `docker exec <container> sh -c "<cmd>"` for a long-lived
+- `DockerBackend` - `docker exec <container> sh -c "<cmd>"` for a long-lived
                     container, or `docker run --rm <image> sh -c "<cmd>"` for an
                     ephemeral one (e.g. a Kali image).
 
@@ -18,7 +18,7 @@ changes. The remote backends build an explicit argv (`build_argv`) that is unit-
 testable without a live host/daemon; only `run()` actually spawns a process.
 
 OPSEC note: routing commands to a remote host/container means they execute (and
-their output returns) off this machine — the engagement scope (J) still gates
+their output returns) off this machine - the engagement scope (J) still gates
 *which* commands run, and the active backend is surfaced in the CLI status line.
 """
 
@@ -201,7 +201,7 @@ def build_backend(spec: Optional[dict]) -> ExecBackend:
 
 
 def backend_from_config(spec: Optional[dict]) -> tuple[ExecBackend, Optional[str]]:
-    """Like build_backend, but never raises — on an invalid spec it returns the
+    """Like build_backend, but never raises - on an invalid spec it returns the
     local backend plus a warning string (warn-don't-block)."""
     try:
         return build_backend(spec), None
@@ -228,7 +228,7 @@ async def spawn_subagent_container(
     image: str, *, network: str = "", name: str = "", workdir: str = "",
 ) -> DisposableDockerBackend:
     """Start a detached keep-alive container from `image` and return a disposable
-    backend bound to it — one sub-agent's private terminal. Removed on aclose()."""
+    backend bound to it - one sub-agent's private terminal. Removed on aclose()."""
     name = name or f"mapache-sub-{uuid.uuid4().hex[:8]}"
     argv = ["docker", "run", "-d", "--name", name]
     if network:

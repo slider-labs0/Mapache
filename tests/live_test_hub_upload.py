@@ -1,5 +1,5 @@
 """
-live_test_hub_upload.py — LIVE end-to-end test of the GitHub-tool upload flow.
+live_test_hub_upload.py - LIVE end-to-end test of the GitHub-tool upload flow.
 
 Unlike smoke_hub_upload.py (which uses a local repo), this hits the REAL network:
 it publishes a tool that points at a real public GitHub repo, installs it through
@@ -7,7 +7,7 @@ the real HubClient path, builds it the way the CLI does at startup, and actually
 clones + runs it over the network on THIS machine.
 
 Safety:
-  * Writes to a DEDICATED config via MAPACHE_CONFIG — your real
+  * Writes to a DEDICATED config via MAPACHE_CONFIG - your real
     ~/.mapache/config.json is never touched.
   * The clone lands in the real ~/.mapache/tools/<name> (true install behavior);
     both the clone dir and the temp config are removed at the end.
@@ -83,7 +83,7 @@ def main() -> int:
         tool = next(t for t in tools if t.name == TOOL)
         print(f"    built '{tool.name}' [{type(tool).__name__}]")
 
-        # 4. Run it — real network clone into ~/.mapache/tools + execute.
+        # 4. Run it - real network clone into ~/.mapache/tools + execute.
         print(f"[4] Execute: clone {REPO_URL} → {clone_target} and run")
         res = asyncio.run(tool.execute())
         out = res.output or res.error or ""
@@ -96,7 +96,7 @@ def main() -> int:
               f"(success={res.success})")
     finally:
         # Windows-safe: git's .git packs are read-only and resist a plain rmtree
-        # (a leftover .git wedges the next clone — the bug this file once caused).
+        # (a leftover .git wedges the next clone - the bug this file once caused).
         from tools.external_tools import _rmtree_force
         for d in (clone_target, cfg_dir):
             if Path(d).exists():

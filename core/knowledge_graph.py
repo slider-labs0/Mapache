@@ -1,5 +1,5 @@
 """
-knowledge_graph.py — disk-persisted findings store (feature: fresh-context state).
+knowledge_graph.py - disk-persisted findings store (feature: fresh-context state).
 
 Sub-agents run with a fresh context window per objective, so they can't rely on
 in-memory conversation history to know what earlier agents found. This module is
@@ -7,11 +7,11 @@ the shared, durable source of truth they read and write instead: a small typed
 entity/relation graph persisted to disk (`<workspace>/knowledge/graph.json`).
 
 Design (deliberately dependency-free + deterministic, like engagement_log/reporting):
-- `Entity` — a typed node: host, service, credential, vulnerability, flag, finding,
+- `Entity` - a typed node: host, service, credential, vulnerability, flag, finding,
   note. Identity is (type, value); adding the same one twice merges attrs, never
   duplicates.
-- `Relation` — a typed edge between entity ids (host --runs--> service, …).
-- `KnowledgeGraph` — add/query/persist. `query(type=…, contains=…)` is what an
+- `Relation` - a typed edge between entity ids (host --runs--> service, …).
+- `KnowledgeGraph` - add/query/persist. `query(type=…, contains=…)` is what an
   agent tool exposes so a freshly-spawned specialist can pull "what do we know about
   <host>" without the lead having to re-explain it.
 - `sync_from_attack_state` folds the live AttackState (ports/services/creds/vulns/

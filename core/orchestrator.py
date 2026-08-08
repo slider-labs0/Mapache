@@ -1,22 +1,22 @@
 """
-orchestrator.py — autonomous multi-agent routing (feature: supervisor, P0)
+orchestrator.py - autonomous multi-agent routing (feature: supervisor, P0)
 
 Mapache already has the specialist substrate: 20+ `Operator`s (core/operators.py),
 `delegate`/`delegate_parallel` to deploy them, a shared knowledge graph + AttackState
-blackboard, and phase-based color routing. What was missing — and what Decepticon
-has — is an autonomous ROUTER/SUPERVISOR: something that reads the current state and
+blackboard, and phase-based color routing. What was missing - and what Decepticon
+has - is an autonomous ROUTER/SUPERVISOR: something that reads the current state and
 decides which specialist to deploy next, instead of relying on the lead model to call
 `delegate` by hand.
 
 This module adds exactly that, reusing the existing pieces:
 
-- `RoutingState` — a compact snapshot of the engagement (AttackState + knowledge
+- `RoutingState` - a compact snapshot of the engagement (AttackState + knowledge
   graph) that routing decisions are made from.
-- `OperatorRouter` — deterministic tier-1 routing: it turns the dormant
+- `OperatorRouter` - deterministic tier-1 routing: it turns the dormant
   `Operator.triggers` field (plus phase and finding types) into a ranked list of
-  `(operator, subtask)` candidates. No model calls — fast and cheap. (The tier-2
+  `(operator, subtask)` candidates. No model calls - fast and cheap. (The tier-2
   LLM supervisor is P1.)
-- `Supervisor` — the control loop: snapshot → route → dispatch (via the controller's
+- `Supervisor` - the control loop: snapshot → route → dispatch (via the controller's
   own `_spawn_and_run`, so bus events / color routing / KG sharing all still work) →
   the operator's findings fold back into the shared state → re-route, until the
   objective is met, no route remains, or the round budget is spent. Anti-loop: it
@@ -109,7 +109,7 @@ class RoutingState:
 
 
 # --------------------------------------------------------------------------- #
-# Router (tier 1 — deterministic)
+# Router (tier 1 - deterministic)
 # --------------------------------------------------------------------------- #
 
 @dataclass
@@ -211,18 +211,18 @@ class OperatorRouter:
 
         # 1) Nothing discovered yet → recon first.
         if not state.open_ports and not state.has_vulns and not state.has_creds:
-            consider("recon_operator", 10.0, "no ports known — run reconnaissance")
+            consider("recon_operator", 10.0, "no ports known - run reconnaissance")
 
         # 2) Findings drive the chain forward (these dominate once their
         #    preconditions hold, so the supervisor advances rather than loops).
         if state.has_creds:
             consider("post_operator", 9.0,
-                     "credentials present — post-exploitation")
+                     "credentials present - post-exploitation")
         if state.has_vulns:
             consider("exploit_operator", 8.0,
-                     "vulnerabilities present — attempt exploitation")
+                     "vulnerabilities present - attempt exploitation")
 
-        # 3) Service/port triggers — strong for INITIAL enumeration, but ranked
+        # 3) Service/port triggers - strong for INITIAL enumeration, but ranked
         #    below exploitation so a discovered vuln takes priority; stays available
         #    as a fallback (anti-loop can drop to it).
         for name in suggest_operators(state.open_ports, state.services):
@@ -233,7 +233,7 @@ class OperatorRouter:
         if default:
             consider(default, 3.0, f"phase default ({state.phase})")
 
-        # 5) Exploration ladder (P3) — low-priority speculative fallbacks so the
+        # 5) Exploration ladder (P3) - low-priority speculative fallbacks so the
         #    supervisor keeps trying DIFFERENT specialists when the findings-driven
         #    routes are exhausted (a stalled operator surfaced nothing), rather than
         #    stopping after one. Each is still capped by the per-state anti-loop and
@@ -348,7 +348,7 @@ class Supervisor:
         # Parallel operator fan-out (#5): when a single operator has stalled (its
         # round left the state signature unchanged) for `fanout_after` rounds, deploy
         # the top `fanout_width` DISTINCT usable specialists CONCURRENTLY to break the
-        # plateau, then re-route on the merged findings — instead of trying one more
+        # plateau, then re-route on the merged findings - instead of trying one more
         # single operator. Off by default (single-dispatch behaviour preserved).
         self.fanout = fanout
         self.fanout_width = max(2, int(fanout_width or 2))
@@ -361,7 +361,7 @@ class Supervisor:
         self.per_sig_cap = max(1, min(int(max_per_operator), 2))
         # Tier-2 routing brain (P1): an async callable that, when the deterministic
         # router runs dry, picks the next (operator, subtask) from the state + roster.
-        # See `make_model_planner`. Optional — omitted keeps routing purely rule-based.
+        # See `make_model_planner`. Optional - omitted keeps routing purely rule-based.
         self.planner = planner
         # Optional OPPLAN (P1): when set, a pending objective that names an owning
         # operator is routed first (plan-driven), and its status is folded back.
@@ -455,7 +455,7 @@ class Supervisor:
                 break
             sig = state.signature()
 
-            # Parallel fan-out (#5): a single operator has stalled — deploy several
+            # Parallel fan-out (#5): a single operator has stalled - deploy several
             # distinct specialists at once to break the plateau, then re-route on the
             # merged findings. Takes precedence over another single dispatch.
             if self.fanout and stall_streak >= self.fanout_after:
@@ -471,13 +471,13 @@ class Supervisor:
                     angles = _fanout_angles(state.phase, len(picks))
                     await self._emit("supervisor.fanout", {
                         "round": i, "operators": names,
-                        "reason": f"stall x{stall_streak} — parallel fan-out"})
+                        "reason": f"stall x{stall_streak} - parallel fan-out"})
                     logger.info("Supervisor round %d → FAN-OUT %s", i, names)
                     results = await asyncio.gather(*(
                         self._spawn_safe(
                             f"Engagement objective: {objective}\n\n"
                             f"Your focused task: {c.subtask}"
-                            + (f"\n\nDISTINCT ANGLE for this parallel branch — {angles[j]}"
+                            + (f"\n\nDISTINCT ANGLE for this parallel branch - {angles[j]}"
                                if angles[j] else ""),
                             c.operator, sid, f"fan{i}_{j}", state.target)
                         for j, c in enumerate(picks)))
@@ -491,7 +491,7 @@ class Supervisor:
                 # Too few candidates to fan out → fall through to single dispatch.
 
             # Choose the next operator, in precedence order:
-            #   1) plan-driven — a pending OPPLAN objective that names an owner,
+            #   1) plan-driven - a pending OPPLAN objective that names an owner,
             #   2) deterministic router (triggers/phase/findings),
             #   3) LLM supervisor fallback when the rules run dry.
             operator = subtask = reason = None
@@ -533,7 +533,7 @@ class Supervisor:
                 break
 
             # Fix #2: a re-dispatch of the same operator at the same signature means its
-            # last turn didn't advance — steer it to a materially different technique
+            # last turn didn't advance - steer it to a materially different technique
             # rather than repeating what already stalled.
             retry_n = tried.get((operator, sig), 0)
             tried[(operator, sig)] = retry_n + 1
@@ -541,7 +541,7 @@ class Supervisor:
             steer = ""
             if retry_n >= 1:
                 steer = ("\n\nNOTE: a previous attempt here made NO new progress. Do NOT "
-                         "repeat the same requests/commands — switch technique or attack a "
+                         "repeat the same requests/commands - switch technique or attack a "
                          "different part of the surface (new endpoints, params, auth, or "
                          "an entirely different vulnerability class).")
             await self._emit("supervisor.route", {
@@ -584,7 +584,7 @@ class Supervisor:
 def make_model_planner(controller: Any) -> Planner:
     """A tier-2 planner backed by the controller's model: given the current state and
     the operator roster, it returns the next (operator, subtask) as JSON, or None if
-    nothing useful remains. Best-effort — any model or parse error yields None, so the
+    nothing useful remains. Best-effort - any model or parse error yields None, so the
     supervisor falls back cleanly to 'no route' rather than crashing."""
     async def planner(objective: str, state: "RoutingState", ops: list):
         roster = "\n".join(f"- {o.name} ({o.phase}): {o.description}" for o in ops)

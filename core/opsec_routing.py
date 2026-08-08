@@ -1,5 +1,5 @@
 """
-opsec_routing.py — hybrid OPSEC routing policy (feature O)
+opsec_routing.py - hybrid OPSEC routing policy (feature O)
 
 The hybrid middle ground between "all-local" and "freely-cloud". Feature G let
 cloud models into the routing pool (warn-don't-block); O decides *which work is
@@ -15,7 +15,7 @@ splits into "early/public recon" (cloud-eligible) vs "exploitation/loot"
 (local-only). Two signals pin a child local:
 
   1. an OPSEC-sensitive operator role (`Operator.prefer_local`), and
-  2. a sensitive *shared state* — once credentials have been captured, every
+  2. a sensitive *shared state* - once credentials have been captured, every
      later delegation carries them in context, so it stays on-box regardless of
      which operator runs it.
 
@@ -76,24 +76,24 @@ class OpsecPolicy:
         attack_state: Any = None,
     ) -> OpsecDecision:
         if not self.allow_cloud:
-            return OpsecDecision(False, "cloud disabled — already local-only")
+            return OpsecDecision(False, "cloud disabled - already local-only")
         if not self.pin_sensitive:
             return OpsecDecision(False, "OPSEC pinning disabled")
         if self.operator_is_sensitive(operator):
             name = getattr(operator, "name", "operator")
-            return OpsecDecision(True, f"{name} is an OPSEC-sensitive role — pinned local")
+            return OpsecDecision(True, f"{name} is an OPSEC-sensitive role - pinned local")
         if self.state_is_sensitive(attack_state):
             return OpsecDecision(
-                True, "captured credentials in attack state — pinned local")
-        return OpsecDecision(False, "non-sensitive — cloud routing permitted")
+                True, "captured credentials in attack state - pinned local")
+        return OpsecDecision(False, "non-sensitive - cloud routing permitted")
 
     # -- introspection (CLI `/opsec`) ----------------------------------- #
 
     def explain(self, operators: Optional[list[Any]] = None) -> str:
         if not self.allow_cloud:
-            return ("OPSEC routing: cloud disabled — all work runs on local models.")
+            return ("OPSEC routing: cloud disabled - all work runs on local models.")
         if not self.pin_sensitive:
-            return ("OPSEC routing: pinning DISABLED — sensitive work may route to "
+            return ("OPSEC routing: pinning DISABLED - sensitive work may route to "
                     "cloud (per-call cloud warnings still fire).")
         lines = ["OPSEC routing (hybrid): sensitive delegations pinned to local models.",
                  "  Pinned local once credentials are captured, regardless of operator.",

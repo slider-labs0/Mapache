@@ -1,5 +1,5 @@
 """
-routed_model.py — Mapache routed model provider
+routed_model.py - Mapache routed model provider
 
 A model-provider facade that routes each call to the best installed model
 for the role, via RoutingEngine + ModelRegistry + ModelPool. It is a drop-in
@@ -124,7 +124,7 @@ class RoutedModel:
         """A sibling whose loop runs under a different default role (feature P).
 
         Shares this model's routing engine and provider pool, so per-operator
-        routing just changes which role the executor loop is scored as — a
+        routing just changes which role the executor loop is scored as - a
         reasoning-heavy specialist can run as PLANNER (the quality model), an
         action specialist as EXECUTOR (the fast one). Accepts a ModelRole or its
         string name; an unknown name falls back to the current default role.
@@ -155,7 +155,7 @@ class RoutedModel:
         Shares this model's provider pool and registry but uses a local-only
         clone of the routing engine, so a sub-agent handed this variant keeps all
         of its context on-box. If there is NO on-box model available, the pin
-        can't be honored — return self so the sub-agent stays on the current model
+        can't be honored - return self so the sub-agent stays on the current model
         rather than crashing on a missing Ollama model (the caller warns).
         """
         if not self.can_pin_local():

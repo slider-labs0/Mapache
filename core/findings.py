@@ -1,10 +1,10 @@
 """
-findings.py — evidence-first engagement findings (the real deliverable).
+findings.py - evidence-first engagement findings (the real deliverable).
 
 A CTF scores a `FLAG{}`; a real authorized engagement produces a *report*: for each
 confirmed weakness, WHAT it is, WHERE, the EVIDENCE that proves it, the IMPACT, and
 the REMEDIATION. Mapache previously recorded findings as bare `finding_type: value`
-strings — no severity, no proof, no fix. This module makes a Finding a first-class,
+strings - no severity, no proof, no fix. This module makes a Finding a first-class,
 evidence-carrying object and renders a proper report, so success is a usable
 deliverable, not a flag string.
 
@@ -249,7 +249,7 @@ class FindingsStore:
                   "|---|---|---|---|"]
         for i, f in enumerate(findings, 1):
             lines.append(f"| {i} | {f.severity.upper()} | {f.title} | "
-                         f"{f.asset or '—'} |")
+                         f"{f.asset or '-'} |")
         lines.append("")
         # Per-finding detail.
         lines.append("## Details")

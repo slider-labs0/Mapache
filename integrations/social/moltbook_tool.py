@@ -1,17 +1,17 @@
 """
-moltbook_tool.py — Mapache Moltbook integration
+moltbook_tool.py - Mapache Moltbook integration
 
-Gives Mapache a social presence on Moltbook — the social network for AI agents.
+Gives Mapache a social presence on Moltbook - the social network for AI agents.
 Handles registration, authentication, posting, commenting, voting, and feed reading.
 
 API base: https://www.moltbook.com/api/v1
 Docs:     https://www.moltbook.com/skill.md
 
 Registration flow:
-    1. moltbook_register  — creates account, returns api_key + claim_url
+    1. moltbook_register  - creates account, returns api_key + claim_url
     2. Human opens claim_url, verifies email, posts claim tweet on X
-    3. moltbook_status    — confirms account is claimed and active
-    4. moltbook_post      — Mapache starts posting autonomously
+    3. moltbook_status    - confirms account is claimed and active
+    4. moltbook_post      - Mapache starts posting autonomously
 
 Verification:
     Moltbook uses obfuscated math challenges to verify posts are from real AI agents.
@@ -183,7 +183,7 @@ def solve_verification_challenge(challenge_text: str) -> Optional[str]:
 class MoltbookRegisterTool(BaseTool):
     name = "moltbook_register"
     description = (
-        "Register Mapache as an AI agent on Moltbook — the social network for AI agents. "
+        "Register Mapache as an AI agent on Moltbook - the social network for AI agents. "
         "Creates an account, saves credentials locally, and returns a claim_url for the human "
         "owner to verify via X (Twitter). Must be called once before using other Moltbook tools."
     )
@@ -245,7 +245,7 @@ class MoltbookRegisterTool(BaseTool):
             f"",
             f"API key saved to: {CREDENTIALS_FILE}",
             f"",
-            f"NEXT STEP — Human action required:",
+            f"NEXT STEP - Human action required:",
             f"1. Open this URL: {claim_url}",
             f"2. Verify your email address",
             f"3. Post this tweet on X: 'Claiming my AI agent {agent_name} on @moltbook #{verification_code}'",
@@ -258,7 +258,7 @@ class MoltbookRegisterTool(BaseTool):
 
 class MoltbookStatusTool(BaseTool):
     name = "moltbook_status"
-    description = "Check Moltbook account status — whether the account is registered, claimed, and active."
+    description = "Check Moltbook account status - whether the account is registered, claimed, and active."
     parameters = {"type": "object", "properties": {}, "required": []}
     permissions = {Permission.NETWORK}
     tags = ["social", "moltbook"]
@@ -283,11 +283,11 @@ class MoltbookStatusTool(BaseTool):
 
         if status == "pending_claim":
             lines.append(f"")
-            lines.append(f"  ⚠ Not yet claimed. Your human needs to:")
+            lines.append(f"  [!] Not yet claimed. Your human needs to:")
             lines.append(f"  1. Open: {creds.get('claim_url', 'unknown')}")
             lines.append(f"  2. Verify email and post a claim tweet on X")
         elif status == "claimed":
-            lines.append(f"  ✓ Account is active and ready to post!")
+            lines.append(f"  ok Account is active and ready to post!")
 
         return ToolResult.ok("\n".join(lines))
 
@@ -387,7 +387,7 @@ class MoltbookPostTool(BaseTool):
 class MoltbookFeedTool(BaseTool):
     name = "moltbook_feed"
     description = (
-        "Read the Moltbook feed — see what other AI agents are posting and discussing. "
+        "Read the Moltbook feed - see what other AI agents are posting and discussing. "
         "Returns recent posts with titles, authors, and vote counts."
     )
     parameters = {
@@ -434,7 +434,7 @@ class MoltbookFeedTool(BaseTool):
         if not posts:
             return ToolResult.ok("No posts found.")
 
-        lines = [f"Moltbook feed ({sort}){f' — m/{submolt}' if submolt else ''}:\n"]
+        lines = [f"Moltbook feed ({sort}){f' - m/{submolt}' if submolt else ''}:\n"]
         for i, post in enumerate(posts[:limit], 1):
             author = post.get("author", {}).get("name", "unknown")
             title = post.get("title", "")
@@ -513,7 +513,7 @@ class MoltbookSearchTool(BaseTool):
     name = "moltbook_search"
     description = (
         "Semantically search Moltbook posts and comments. "
-        "Uses AI-powered search — describe what you're looking for in natural language."
+        "Uses AI-powered search - describe what you're looking for in natural language."
     )
     parameters = {
         "type": "object",
@@ -562,7 +562,7 @@ class MoltbookSearchTool(BaseTool):
             title = r.get("title") or r.get("content", "")[:80]
             similarity = r.get("similarity", 0)
             post_id = r.get("post_id", r.get("id", ""))
-            lines.append(f"• {title}")
+            lines.append(f"- {title}")
             lines.append(f"  by {author} | similarity: {similarity:.0%} | id:{post_id}")
             lines.append("")
 
