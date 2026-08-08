@@ -1,4 +1,16 @@
+<div align="center">
+
+<img src="assets/mapache-logo.png" alt="Mapache" width="220">
+
 # Mapache
+
+**autonomous offensive-security agent**
+
+[![Website](https://img.shields.io/badge/Website-visit-6C5CE7?style=for-the-badge&logo=googlechrome&logoColor=white)](https://your-website.example)
+[![YouTube](https://img.shields.io/badge/YouTube-watch-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://youtube.com/@your-channel)
+[![Kickstarter](https://img.shields.io/badge/Kickstarter-back%20us-05CE78?style=for-the-badge&logo=kickstarter&logoColor=white)](https://kickstarter.com/projects/your-project)
+
+</div>
 
 A full-spectrum offensive-security AI agent. Mapache runs an observe-act (ReAct) loop
 over a local model (via [Ollama](https://ollama.com)) or a frontier cloud model, with
