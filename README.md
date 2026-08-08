@@ -1,25 +1,60 @@
 <div align="center">
+  <img src="assets/mapache-logo.png" alt="Mapache" width="450">
+</div>
 
-<img src="assets/mapache-logo.png" alt="Mapache" width="450">
+<h1 align="center">Mapache</h1>
 
-# Mapache
+<p align="center"><i>Autonomous offensive-security agent. It does not just run nmap and write a report, it proves the finding.</i></p>
 
-**autonomous offensive-security agent**
+<div align="center">
 
-[![Website](https://img.shields.io/badge/Website-visit-6C5CE7?style=for-the-badge&logo=googlechrome&logoColor=white)](https://your-website.example)
-[![YouTube](https://img.shields.io/badge/YouTube-watch-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://youtube.com/@your-channel)
-[![Kickstarter](https://img.shields.io/badge/Kickstarter-back%20us-05CE78?style=for-the-badge&logo=kickstarter&logoColor=white)](https://kickstarter.com/projects/your-project)
+<a href="https://github.com/slider-labs0/Mapache/stargazers">
+  <img src="https://img.shields.io/github/stars/slider-labs0/Mapache?style=for-the-badge&color=yellow" alt="Stars">
+</a>
+<a href="https://github.com/slider-labs0/Mapache/commits">
+  <img src="https://img.shields.io/github/last-commit/slider-labs0/Mapache?style=for-the-badge&color=orange" alt="Last commit">
+</a>
+<img src="https://img.shields.io/badge/python-3.10+-blue?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+">
+
+<br/>
+
+<a href="https://your-website.example">
+  <img src="https://img.shields.io/badge/Website-visit-6C5CE7?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Website">
+</a>
+<a href="https://youtube.com/@your-channel">
+  <img src="https://img.shields.io/badge/YouTube-watch-FF0000?style=for-the-badge&logo=youtube&logoColor=white" alt="YouTube">
+</a>
+<a href="https://kickstarter.com/projects/your-project">
+  <img src="https://img.shields.io/badge/Kickstarter-back%20us-05CE78?style=for-the-badge&logo=kickstarter&logoColor=white" alt="Kickstarter">
+</a>
 
 </div>
 
-A full-spectrum offensive-security AI agent. Mapache runs an observe-act (ReAct) loop
-over a local model (via [Ollama](https://ollama.com)) or a frontier cloud model, with
-phase-aware attack-state tracking, an autonomous multi-agent supervisor, a large
-offensive toolchain, evidence-first reporting, rules-of-engagement guardrails, and
-optional Telegram/Discord operation.
+---
 
-> `STATUS.md` is the source of truth for architecture and progress; `ROADMAP.md` tracks
-> planned work.
+Mapache runs an observe-act (ReAct) loop over a local model (via [Ollama](https://ollama.com))
+or a frontier cloud model, with phase-aware attack-state tracking, an autonomous
+multi-agent supervisor, a large offensive toolchain, evidence-first reporting,
+rules-of-engagement guardrails, and optional Telegram/Discord operation.
+
+## Install
+
+Kali/ParrotOS is the recommended platform (the offensive toolchain is packaged there).
+Requires Python 3.10+.
+
+```bash
+git clone https://github.com/slider-labs0/Mapache.git && cd Mapache
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e .        # installs the `mapache` command
+mapache setup           # interactive: pick a provider + model
+mapache serve           # launch the agent
+```
+
+For local models, install [Ollama](https://ollama.com) (`ollama serve`, then pull a
+model). For a cloud model, set the provider key (for example `ANTHROPIC_API_KEY` or
+`OPENROUTER_API_KEY`) and run with `--allow-cloud`. Missing offensive binaries degrade
+gracefully; the tool reports it and the agent adapts. See [docs/usage.md](docs/usage.md)
+for flags, slash commands, and config.
 
 ## What it does
 
@@ -40,17 +75,6 @@ optional Telegram/Discord operation.
 - **Safe to run unattended.** Rules-of-engagement scope gating, an always-on
   prompt-injection shield with active detection, an append-only engagement audit log,
   and an optional replayable session recording (asciicast).
-
-## Quickstart
-
-```bash
-pip install -r requirements.txt
-python -m cli setup      # pick a provider + model (local via Ollama, or a cloud key)
-python -m cli            # start the agent
-```
-
-Needs Python 3.10+. Kali/ParrotOS is the recommended platform (the offensive toolchain
-is packaged there). Missing tools degrade gracefully.
 
 ## Documentation
 

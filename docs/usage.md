@@ -2,17 +2,20 @@
 
 ## Launching
 
+Installing the package (`pip install -e .`) provides the `mapache` command; `python -m cli`
+is the equivalent if you have not installed it.
+
 ```bash
-python -m cli                          # interactive REPL, uses the configured default model
-python -m cli --model qwen2.5:32b      # pick a local Ollama model
-python -m cli --model claude-opus-4-8 --allow-cloud   # a cloud model (needs an API key)
+mapache serve                          # launch the agent (full-screen TUI)
+mapache serve --model qwen2.5:32b      # pick a local Ollama model
+mapache serve --model claude-opus-4-8 --allow-cloud   # a cloud model (needs an API key)
 ```
 
 Set up once with the wizard (chooses provider + model, writes `~/.mapache/config.json`):
 
 ```bash
-python -m cli setup
-python -m cli config show              # inspect the merged config
+mapache setup
+mapache config show                    # inspect the merged config
 ```
 
 At the prompt, type a natural-language objective ("pentest 10.0.0.5", "find the IDOR
@@ -38,7 +41,7 @@ real result before the next step.
 | `--egress tor\|<proxy-url>` | Hide the operator IP behind Tor or a proxy. |
 | `--vaccine` | Generate a detection + remediation note per confirmed vulnerability. |
 
-Run `python -m cli --help` for the full list.
+Run `mapache --help` for the full list.
 
 ## Slash commands (inside the REPL)
 
