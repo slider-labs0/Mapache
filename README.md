@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/mapache-logo.png" alt="Mapache" width="360">
+<img src="assets/mapache-logo.png" alt="Mapache" width="450">
 
 # Mapache
 
