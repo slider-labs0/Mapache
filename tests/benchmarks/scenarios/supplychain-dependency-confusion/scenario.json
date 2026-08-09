@@ -1,0 +1,19 @@
+{
+  "id": "supplychain-dependency-confusion",
+  "discipline": "supply-chain",
+  "title": "Dependency-confusion / malicious postinstall in an npm project",
+  "difficulty": "hard",
+  "win_condition": "finding",
+  "target": {"kind": "analysis"},
+  "objective": "You are reviewing a project's software supply chain (artifacts directory: package.json and a lockfile excerpt). Identify the most serious supply-chain risk, cite the exact dependency/behavior as evidence, name the class, and recommend the mitigation.",
+  "artifacts_dir": "artifacts",
+  "tags": ["supply-chain", "npm", "dependency-confusion", "typosquat"],
+  "rubric": {
+    "cwe": "CWE-1104",
+    "vuln_keywords": ["dependency confusion", "substitution attack", "typosquat", "malicious package", "unpinned", "postinstall", "namespace"],
+    "evidence_markers": ["@acme/internal-auth", "postinstall", "curl", "registry.npmjs.org", "^", "preinstall"],
+    "grounded_markers": ["\"@acme/internal-auth\"", "\"postinstall\":"],
+    "remediation_keywords": ["scope", "private registry", "pin", "lockfile", "namespace", "verify", "ignore-scripts", "internal registry"],
+    "min_evidence": 2
+  }
+}

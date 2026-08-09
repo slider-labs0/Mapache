@@ -1,0 +1,12 @@
+# Live web target: vulnerable Orders API (IDOR). Stdlib only -> stock python image,
+# no build, source mounted read-only. Bound to loopback so the agent (RoE = 127.0.0.1)
+# can reach it and nothing else can.
+services:
+  app:
+    image: python:3.11-slim
+    command: python /app/server.py
+    volumes:
+      - ./app:/app:ro
+    ports:
+      - "127.0.0.1:0:8080"   # host port auto-assigned; harness discovers it
+    restart: "no"

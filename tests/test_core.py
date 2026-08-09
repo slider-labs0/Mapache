@@ -3009,6 +3009,63 @@ def test_next_step_is_discipline_aware():
     print("  PASS  next_step_is_discipline_aware")
 
 
+def test_discipline_benchmarks_valid():
+    # The real-world, multi-discipline Docker benchmark suite must be well-formed
+    # and self-consistent WITHOUT needing Docker or a model: every scenario is
+    # loadable, every discipline is covered, each planted weakness is present in its
+    # target, and the evidence-first grader rewards a grounded correct finding while
+    # rejecting a guess.
+    import sys as _sys
+    from pathlib import Path as _Path
+    bench = _Path(__file__).resolve().parent / "benchmarks"
+    _sys.path.insert(0, str(bench))
+    from grader import load_all, grade  # noqa: E402
+    from benchmark_disciplines import check_scenarios  # noqa: E402
+
+    scenarios = load_all(bench / "scenarios")
+    assert len(scenarios) >= 16, f"expected >=16 scenarios, got {len(scenarios)}"
+
+    # Full-spectrum: every non-web discipline Mapache claims is represented, so the
+    # suite can never quietly regress into a web/CTF-only benchmark.
+    disciplines = {s.discipline for s in scenarios}
+    for d in ["web", "network", "cloud", "code-audit", "smart-contract", "binary",
+              "mobile", "iot", "ics", "wireless", "phishing", "supply-chain",
+              "dfir", "osint", "active-directory", "llm"]:
+        assert d in disciplines, f"discipline not covered by any benchmark: {d}"
+
+    # There is at least one LIVE service target (agent attacks over the network),
+    # not only static analysis.
+    assert any(s.is_service for s in scenarios), "no live-service scenario"
+
+    # Self-consistency (compose parses; planted weakness present in the target).
+    problems = check_scenarios(scenarios)
+    assert not problems, f"scenario integrity problems: {problems}"
+
+    # Grader: a grounded, correct, actionable finding PASSES.
+    web = next(s for s in scenarios if s.id == "web-idor-orders")
+    good = grade(
+        web,
+        final_answer="Confirmed IDOR (broken access control, CWE-639): as alice I "
+                     "fetched /api/orders/1002 which belongs to bob. Fix: add a "
+                     "per-object ownership check so a user can only read their own order.",
+        tool_corpus='GET /api/orders/1002 -> {"user":"bob",'
+                    '"note":"MERGER-ACME-CONFIDENTIAL"}')
+    assert good.passed and good.score == 4, good
+
+    # A guess with the right words but NO evidence the agent touched the target FAILS
+    # (not grounded) - this is the anti-fabrication guarantee.
+    guess = grade(web,
+                  final_answer="This is probably an IDOR; add an ownership check.",
+                  tool_corpus="(no relevant tool output)")
+    assert not guess.passed and "grounded" in guess.missing, guess
+
+    # A wrong diagnosis FAILS even if grounded.
+    wrong = grade(web, final_answer="The app looks secure, no issues found.",
+                  tool_corpus="MERGER-ACME-CONFIDENTIAL")
+    assert not wrong.passed and "diagnosis" in wrong.missing, wrong
+    print("  PASS  discipline_benchmarks_valid")
+
+
 async def test_delegate_operator_dispatch():
     # delegate(operator="web_operator") runs the subtask as the specialist: the
     # operator label flows to agent.delegate.start (so the engagement log records
@@ -5916,6 +5973,7 @@ async def run_all():
     test_operator_roster()
     test_lead_prompt_routes_by_discipline()
     test_next_step_is_discipline_aware()
+    test_discipline_benchmarks_valid()
     await test_delegate_operator_dispatch()
     await test_delegate_parallel_fans_out()
     test_dispatcher_with_backend_rebinds_tools()

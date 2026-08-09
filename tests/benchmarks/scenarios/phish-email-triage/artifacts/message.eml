@@ -1,0 +1,20 @@
+Return-Path: <billing@rn1crosoft-login.com>
+Received: from mail.rn1crosoft-login.com (unknown [185.203.116.9])
+Authentication-Results: mx.corp.example.com;
+    spf=fail (sender IP is 185.203.116.9) smtp.mailfrom=rn1crosoft-login.com;
+    dkim=none;
+    dmarc=fail (p=reject) header.from=microsoft.com
+From: "Microsoft Account Team" <security@microsoft.com>
+Reply-To: <recovery@rn1crosoft-login.com>
+To: <j.doe@corp.example.com>
+Subject: [Action Required] Unusual sign-in activity on your account
+Date: Tue, 05 Aug 2026 03:14:22 +0000
+Content-Type: text/html
+
+<html><body>
+<p>We detected an unusual sign-in to your Microsoft account. If this wasn't you,
+your account may be compromised.</p>
+<p><a href="http://rn1crosoft-login.com/verify-account?u=j.doe@corp.example.com">
+Verify your account now</a> within 24 hours or it will be suspended.</p>
+<p>Thank you,<br>The Microsoft Account Team</p>
+</body></html>

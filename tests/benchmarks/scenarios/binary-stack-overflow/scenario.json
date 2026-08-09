@@ -1,0 +1,19 @@
+{
+  "id": "binary-stack-overflow",
+  "discipline": "binary",
+  "title": "Stack buffer overflow in a network service (reversing)",
+  "difficulty": "medium",
+  "win_condition": "finding",
+  "target": {"kind": "analysis", "service": "target", "workdir": "/target"},
+  "objective": "You are reverse-engineering a small C network service. The artifacts directory holds the decompiled source and a checksec-style protection report. Identify the memory-safety vulnerability, cite the vulnerable function and the missing mitigation as evidence, name the class (with CWE), and recommend the fix.",
+  "artifacts_dir": "artifacts",
+  "tags": ["reversing", "pwn", "memory-safety", "buffer-overflow"],
+  "rubric": {
+    "cwe": "CWE-121",
+    "vuln_keywords": ["stack buffer overflow", "buffer overflow", "stack overflow", "out-of-bounds write", "overrun", "memory corruption"],
+    "evidence_markers": ["strcpy", "char buf[64]", "handle_client", "No canary found", "recv"],
+    "grounded_markers": ["strcpy(buf", "void handle_client"],
+    "remediation_keywords": ["bounds", "strncpy", "length check", "canary", "fortify", "size limit", "snprintf"],
+    "min_evidence": 2
+  }
+}

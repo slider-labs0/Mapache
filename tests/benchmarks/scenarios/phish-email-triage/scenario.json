@@ -1,0 +1,19 @@
+{
+  "id": "phish-email-triage",
+  "discipline": "phishing",
+  "title": "Phishing email triage - spoofed sender and lookalike domain",
+  "difficulty": "easy",
+  "win_condition": "finding",
+  "target": {"kind": "analysis"},
+  "objective": "You are the analyst triaging a reported suspicious email (raw message with headers in the artifacts directory). Determine whether it is a phishing attempt, cite the specific indicators as evidence (spoofing, lookalike domain, malicious link), name the technique, and recommend the response. Do NOT send anything - this is analysis only.",
+  "artifacts_dir": "artifacts",
+  "tags": ["social-engineering", "phishing", "email", "iocs", "blue-team"],
+  "rubric": {
+    "cwe": "T1566",
+    "vuln_keywords": ["phishing", "spoof", "credential harvest", "social engineering", "lookalike", "typosquat", "impersonation"],
+    "evidence_markers": ["dmarc=fail", "spf=fail", "rn1crosoft", "microsoft.com", "Return-Path", "verify-account", "reply-to"],
+    "grounded_markers": ["dmarc=fail", "http://rn1crosoft-login.com/verify-account"],
+    "remediation_keywords": ["do not click", "report", "block", "quarantine", "reset password", "user awareness", "delete"],
+    "min_evidence": 2
+  }
+}

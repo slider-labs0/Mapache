@@ -1,0 +1,27 @@
+# Public repo: github.com/acme-corp/billing-utils  (mirrored)
+# `git log --oneline` + a `git show` of a suspicious historical commit.
+
+$ git log --oneline -5
+a1b2c3d (HEAD) chore: move config to environment variables
+9f8e7d6 fix: typo in README
+7c6b5a4 add billing sync script
+4d3c2b1 initial import
+1a2b3c4 wip
+
+$ git show 7c6b5a4 -- config.py
+commit 7c6b5a4
+Author: dev <dev@acme-corp.example.com>
+Date:   Fri Jun 20 09:31:10 2026 +0000
+
+    add billing sync script
+
++++ b/config.py
+@@
++# TODO: move these to env before open-sourcing
++aws_access_key_id = "AKIAZ7QEXAMPLE9KACME"
++aws_secret_access_key = "kQ9x/PdX2mExampleSecretACMEbillingKey7z0"
++S3_BUCKET = "acme-billing-exports"
+
+# NOTE: commit a1b2c3d "moved config to env vars" in the CURRENT tree, but the
+# secret above is STILL present in the repo history (commit 7c6b5a4) and remains
+# valid unless rotated.

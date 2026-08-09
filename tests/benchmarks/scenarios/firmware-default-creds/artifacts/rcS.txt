@@ -1,0 +1,13 @@
+# /etc/init.d/rcS  (device boot script, from squashfs-root)
+#!/bin/sh
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+
+# Bring up the LAN interface
+ifconfig br0 192.168.1.1 netmask 255.255.255.0 up
+
+# Remote management: start telnet with a root shell, no auth prompt hardening.
+telnetd -l /bin/sh -p 23 &
+
+# Web admin
+httpd -h /www &

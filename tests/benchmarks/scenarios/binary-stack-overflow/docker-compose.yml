@@ -1,0 +1,9 @@
+# Reversing target container: holds the compiled binary + source + checksec notes at
+# /target with binutils installed. The agent analyzes it in-container (docker exec).
+services:
+  target:
+    build:
+      context: .
+    command: sleep infinity
+    network_mode: none    # reversing is offline; no network needed
+    restart: "no"

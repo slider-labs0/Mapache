@@ -1,0 +1,9 @@
+$ checksec --file=./authd
+RELRO           STACK CANARY      NX            PIE
+Partial RELRO   No canary found   NX enabled    No PIE (0x400000)
+
+$ file ./authd
+./authd: ELF 64-bit LSB executable, x86-64, dynamically linked, not stripped
+
+$ nm ./authd | grep -Ei 'strcpy|gets|system'
+                 U strcpy@GLIBC_2.2.5

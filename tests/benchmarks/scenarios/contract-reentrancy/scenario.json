@@ -1,0 +1,19 @@
+{
+  "id": "contract-reentrancy",
+  "discipline": "smart-contract",
+  "title": "Reentrancy in a Solidity vault withdraw()",
+  "difficulty": "medium",
+  "win_condition": "finding",
+  "target": {"kind": "analysis"},
+  "objective": "You are auditing a Solidity smart contract (in the artifacts directory) before mainnet deployment. Review it for a state-changing vulnerability, identify the exact function and the ordering flaw as evidence, name the vulnerability class, and give the correct remediation pattern.",
+  "artifacts_dir": "artifacts",
+  "tags": ["web3", "solidity", "reentrancy", "defi"],
+  "rubric": {
+    "cwe": "CWE-841",
+    "vuln_keywords": ["reentrancy", "re-entrancy", "checks-effects-interactions", "reentrant"],
+    "evidence_markers": ["withdraw", "call{value", "balances[msg.sender]", "external call"],
+    "grounded_markers": ["function withdraw", "msg.sender.call{value"],
+    "remediation_keywords": ["checks-effects-interactions", "reentrancyguard", "nonreentrant", "update state before", "mutex", "before the external call"],
+    "min_evidence": 2
+  }
+}

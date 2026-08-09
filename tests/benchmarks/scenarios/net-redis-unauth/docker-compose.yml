@@ -1,0 +1,9 @@
+# Live network target: unauthenticated Redis. Stock image, no build. protected-mode
+# off + no requirepass = anyone who can reach 6379 gets full access (CWE-306).
+services:
+  redis:
+    image: redis:7-alpine
+    command: redis-server --protected-mode no --bind 0.0.0.0
+    ports:
+      - "127.0.0.1:0:6379"
+    restart: "no"

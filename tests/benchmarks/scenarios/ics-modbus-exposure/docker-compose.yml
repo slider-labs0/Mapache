@@ -1,0 +1,11 @@
+# Live OT target: unauthenticated Modbus/TCP PLC. Stdlib only -> stock python image,
+# no build. READ-ONLY assessment expected; writes must never be sent to production.
+services:
+  plc:
+    image: python:3.11-slim
+    command: python /app/modbus_server.py
+    volumes:
+      - ./app:/app:ro
+    ports:
+      - "127.0.0.1:0:502"
+    restart: "no"

@@ -1,0 +1,19 @@
+{
+  "id": "code-sqli",
+  "discipline": "code-audit",
+  "title": "SQL injection via string-formatted query",
+  "difficulty": "easy",
+  "win_condition": "finding",
+  "target": {"kind": "analysis"},
+  "objective": "You are running an authorized static application security review (SAST) over the source in the artifacts directory. Find the injection vulnerability, cite the exact function and the tainted query as evidence, name the class (with CWE), and give the correct remediation.",
+  "artifacts_dir": "artifacts",
+  "tags": ["sast", "sqli", "injection", "code-review"],
+  "rubric": {
+    "cwe": "CWE-89",
+    "vuln_keywords": ["sql injection", "sqli", "injection", "unsanitized", "tainted", "string concatenation"],
+    "evidence_markers": ["authenticate", "SELECT * FROM users", "f\"", "cursor.execute", "username"],
+    "grounded_markers": ["SELECT * FROM users WHERE", "def authenticate"],
+    "remediation_keywords": ["parameterized", "prepared statement", "bind", "placeholder", "?", "escape"],
+    "min_evidence": 2
+  }
+}

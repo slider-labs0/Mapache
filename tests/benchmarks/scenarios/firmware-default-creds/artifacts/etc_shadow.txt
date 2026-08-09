@@ -1,0 +1,12 @@
+# /etc/shadow  (recovered from squashfs-root via binwalk extraction)
+root:$1$Md5SaltX$e8Xq0mNq3l3n7hZl2p9Qk/:19000:0:99999:7:::
+admin:$1$Md5SaltY$Kf3nA0pQ8rLmZ1vT6yUwe0:19000:0:99999:7:::
+nobody:*:19000:0:99999:7:::
+
+# --- also present ---
+# /etc/passwd
+#   root:x:0:0:root:/root:/bin/sh
+#   admin:x:0:0:admin:/root:/bin/sh   <- second uid-0 account
+#
+# The hash root:$1$Md5SaltX$... cracks to "admin" with a wordlist in seconds
+# (MD5-crypt, shared across every unit of this model = a backdoor account).

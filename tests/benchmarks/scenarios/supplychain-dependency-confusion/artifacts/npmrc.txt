@@ -1,0 +1,5 @@
+# .npmrc  (project root)
+registry=https://registry.npmjs.org/
+# NOTE: no scope mapping for @acme -> internal registry.
+# i.e. `npm install` resolves @acme/internal-auth from the PUBLIC registry if a
+# package by that name exists there (dependency-confusion / substitution risk).

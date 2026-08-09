@@ -1,0 +1,19 @@
+{
+  "id": "dfir-log-triage",
+  "discipline": "dfir",
+  "title": "Incident triage - web exploitation to reverse shell in server logs",
+  "difficulty": "medium",
+  "win_condition": "finding",
+  "target": {"kind": "analysis"},
+  "objective": "You are the DFIR analyst triaging logs from a possibly-compromised web server (artifacts directory). Reconstruct what happened, identify the attack and the point of compromise, cite the log evidence and the attacker IOCs, and recommend containment. This is read-only analysis.",
+  "artifacts_dir": "artifacts",
+  "tags": ["dfir", "forensics", "log-analysis", "incident-response"],
+  "rubric": {
+    "cwe": "CWE-77",
+    "vuln_keywords": ["command injection", "webshell", "web shell", "remote code execution", "rce", "reverse shell", "exploitation", "compromise"],
+    "evidence_markers": ["185.220.101.47", "cmd=", "/upload.php", "shell.php", "bash -i", "200"],
+    "grounded_markers": ["POST /upload.php", "GET /uploads/shell.php?cmd="],
+    "remediation_keywords": ["isolate", "contain", "block", "rebuild", "rotate", "remove the webshell", "reset credentials", "patch"],
+    "min_evidence": 2
+  }
+}
