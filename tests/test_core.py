@@ -2944,6 +2944,71 @@ def test_operator_roster():
     print("  PASS  operator_roster")
 
 
+def test_lead_prompt_routes_by_discipline():
+    # The lead SYSTEM_PROMPT must be full-spectrum, not a web/CTF-only script: it
+    # routes by discipline (so cloud/contract/mobile/firmware/etc. don't get
+    # shoehorned into a network scan) and centers the real-world deliverable
+    # (evidence-backed finding + remediation) over flag-hunting.
+    from cli.mapache_cli import SYSTEM_PROMPT as P
+
+    # Every non-network discipline the roster supports is reachable from the lead
+    # prompt's routing table by its specialist name.
+    for op in ["cloud_hunter", "contract_auditor", "mobile_operator", "reverser",
+               "iot_operator", "wireless_operator", "ics_operator", "phisher",
+               "supply_chain_operator", "forensicator", "analyst"]:
+        assert op in P, f"lead prompt never routes to {op}"
+
+    # The network kill chain is framed as ONE path, not THE workflow.
+    assert "ROUTE BY DISCIPLINE" in P
+    assert "NETWORK-HOST WORKFLOW" in P
+    assert "ONE path" in P
+
+    # Success is the real-world deliverable; the flag is demoted to CTF-only.
+    assert "report_finding" in P
+    assert "CTF" in P and "there is no flag" in P
+    print("  PASS  lead_prompt_routes_by_discipline")
+
+
+def test_next_step_is_discipline_aware():
+    # The per-turn "Next step" nudge (injected into the attack-state block every
+    # turn) must not be a network/CTF-only script. It routes by target kind and
+    # centers the evidence-first deliverable over flag-hunting.
+    from core.conversation_chain import AttackState
+
+    # No target: ask WHAT the target is, don't assume a scan.
+    st = AttackState()
+    assert "route by discipline" in st.suggest_next_step().lower()
+
+    # A web target (recorded endpoints) => read the attack surface + web_operator,
+    # NOT nmap.
+    web = AttackState()
+    web.target = "shop.example.com"
+    web.endpoints = ["/api/orders"]
+    s = web.suggest_next_step()
+    assert web.target_kind() == "web" and "web_operator" in s and "nmap" not in s.lower()
+
+    # A source-tree target => analyst / SAST, no port scan.
+    code = AttackState()
+    code.target = "./repo/src"
+    s = code.suggest_next_step()
+    assert code.target_kind() == "code" and "analyst" in s and "no port scan" in s.lower()
+
+    # A bare host still gets the network path, but framed as ONE discipline.
+    host = AttackState()
+    host.target = "10.10.10.5"
+    s = host.suggest_next_step()
+    assert host.target_kind() == "host" and "nmap_scan" in s and "discipline" in s.lower()
+
+    # Post-exploit: evidence-first (report_finding), flags demoted to CTF-only.
+    post = AttackState()
+    post.target = "10.10.10.5"
+    post.open_ports = ["22/tcp"]
+    post.current_phase = "post"
+    s = post.suggest_next_step()
+    assert "report_finding" in s and "CTF" in s
+    print("  PASS  next_step_is_discipline_aware")
+
+
 async def test_delegate_operator_dispatch():
     # delegate(operator="web_operator") runs the subtask as the specialist: the
     # operator label flows to agent.delegate.start (so the engagement log records
@@ -5849,6 +5914,8 @@ async def run_all():
     await test_http_repeater_burp_lite()
     await test_route_enumeration()
     test_operator_roster()
+    test_lead_prompt_routes_by_discipline()
+    test_next_step_is_discipline_aware()
     await test_delegate_operator_dispatch()
     await test_delegate_parallel_fans_out()
     test_dispatcher_with_backend_rebinds_tools()

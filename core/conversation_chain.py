@@ -241,12 +241,41 @@ class AttackState:
         if vuln and vuln not in self.vulnerabilities:
             self.vulnerabilities.append(vuln)
 
+    def target_kind(self) -> str:
+        """Classify the engagement so the per-turn nudge is discipline-aware and
+        NOT a network/CTF-only script. Mapache is full-spectrum: a URL, a repo, a
+        cloud account and an IP each want a different entry path (see the lead's
+        ROUTE BY DISCIPLINE table). Signals: recorded web artifacts or a URL-shaped
+        target => web; a filesystem/repo path => code; otherwise a host/IP."""
+        t = (self.target or "").strip().lower()
+        if self.endpoints or self.forms or "://" in t or t.startswith(("http", "www.")):
+            return "web"
+        if t and ("\\" in t or t.startswith((".", "/", "~"))
+                  or ("/" in t and not re.match(r"^\d{1,3}(\.\d{1,3}){3}", t))):
+            return "code"
+        return "host"
+
     def suggest_next_step(self) -> str:
         if not self.target:
-            return "No target set. Ask the user for a target IP or hostname."
+            return ("No target set. Ask the user WHAT the target is (host/IP, web app/URL, "
+                    "cloud account, source repo, mobile app, binary, contract, etc.) and "
+                    "route by discipline - do NOT assume a network scan.")
 
         if not self.open_ports:
-            return f"Run nmap_scan on {self.target} to discover open ports and services."
+            kind = self.target_kind()
+            if kind == "web":
+                return (f"web_fetch {self.target} and READ its real attack surface (form "
+                        "actions/fields, endpoints, comments) before guessing anything, then "
+                        "delegate operator=web_operator to test injection / IDOR / SSRF / "
+                        "upload / auth. No port scan needed for a web app.")
+            if kind == "code":
+                return (f"{self.target} is a source tree - delegate operator=analyst for SAST "
+                        "(semgrep/bandit/gitleaks) + a dependency-CVE sweep and exploit-chain "
+                        "review. No port scan needed for a code audit.")
+            return (f"Run nmap_scan on {self.target} to discover open ports/services (the "
+                    f"network-host path). But if {self.target} is really a web app, cloud "
+                    "account, mobile app, contract, or code audit, take THAT discipline's path "
+                    "instead - delegate to the matching specialist (see /operators).")
 
         if self.current_phase == "enumeration":
             suggestions = []
@@ -292,11 +321,18 @@ class AttackState:
             return "Search for exploits matching discovered service versions"
 
         if self.current_phase == "post":
-            if not self.flags:
-                return "Search for flags: find / -name user.txt 2>/dev/null and find / -name root.txt 2>/dev/null"
-            return "Escalate privileges if not root, then capture remaining flags"
+            # Evidence-first deliverable, NOT flag-hunting. On a real engagement the
+            # product is a confirmed weakness + its fix; flags are a CTF/lab artifact only.
+            base = ("On this foothold: enumerate for privilege escalation (SUID, sudo, "
+                    "kernel, cron), loot and crack credentials, and record each confirmed "
+                    "weakness with report_finding (evidence + remediation) - that is the "
+                    "deliverable.")
+            ctf = (" CTF/HTB context only: also capture flags with "
+                   "`find / \\( -name user.txt -o -name root.txt \\) 2>/dev/null`.")
+            return base + (ctf if not self.flags else " Then capture any remaining flags.")
 
-        return "Continue the attack"
+        return ("Record confirmed findings (report_finding with evidence + remediation) and "
+                "continue toward the objective.")
 
     def to_prompt_block(self) -> str:
         if not (self.target or self.open_ports or self.endpoints or self.forms
