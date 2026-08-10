@@ -1043,6 +1043,20 @@ class AgentController:
         if not isinstance(raw, str):
             return {"type": "response", "content": str(raw)}
 
+        # Fabrication guard: the untrusted-data fences are added by the SYSTEM around
+        # REAL tool output only, so they must never appear in a model-authored
+        # message. When they do, the model invented tool results instead of calling a
+        # tool and waiting (observed with agentic models that know the wrapper format
+        # from the shield clause). Reject and reask rather than accept fabricated
+        # evidence as a final answer - the native tool_calls path above still runs
+        # first, so a genuine call is never blocked by this.
+        from core.injection_shield import contains_sentinels
+        if contains_sentinels(raw):
+            return {"type": "malformed", "content": raw,
+                    "reason": "you wrote fake tool-result fences and invented tool "
+                              "output; do NOT narrate results - emit ONE real tool "
+                              "call and wait for the system to return the result"}
+
         data = self._extract_json_object(raw)
         if data is None:
             # No JSON - but tool-native models (esp. "thinking" ones) sometimes
@@ -1114,6 +1128,15 @@ class AgentController:
                 rtype = "tool_calls"
             elif data.get("tool"):
                 rtype = "tool_call"
+            elif data.get("name") and ("arguments" in data or "args" in data):
+                # OpenAI/Ornith function-call shape: {"name": ..., "arguments": {...}}
+                # (some tool-native models emit this as text instead of a native
+                # tool_call). Gate on a real tool name so an ordinary JSON answer
+                # that merely has a "name" field is never dispatched.
+                if data["name"] in set(self.context.active_tool_names()):
+                    rtype = "tool_call"
+                else:
+                    return {"type": "response", "content": data.get("content", raw)}
             elif data.get("first_tool") or data.get("steps") or data.get("todos"):
                 rtype = "plan"
             elif "completed" in data:
@@ -1143,14 +1166,13 @@ class AgentController:
             return {"type": "tool_calls", "calls": calls}
 
         if rtype == "tool_call":
-            tool = data.get("tool") or ""
-            if not tool:
+            # Route through _normalize_call so both the native {"tool", "args"} and
+            # the function-call {"name", "arguments"} shapes are accepted.
+            norm = self._normalize_call(data)
+            if norm is None:
                 return {"type": "malformed", "content": raw,
                         "reason": "tool_call missing 'tool' name"}
-            args = data.get("args")
-            if not isinstance(args, dict):
-                args = {}
-            return {"type": "tool_call", "tool": tool, "args": args}
+            return {"type": "tool_call", **norm}
 
         if rtype == "plan":
             # A plan seeds/updates the persistent todo list and carries the

@@ -242,6 +242,7 @@ class OllamaProvider:
             "command-r", "command-r-plus",
             "firefunction-v2",
             "hermes3",
+            "ornith",  # agentic-coding family, native tool calling
         }
         base = model.split(":")[0].lower()
         return any(base.startswith(t) for t in tool_capable)

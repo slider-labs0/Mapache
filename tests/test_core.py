@@ -329,6 +329,70 @@ async def test_prose_non_call_stays_answer():
     print("  PASS  prose_non_call_stays_answer")
 
 
+async def test_function_call_shape_dispatched():
+    # Ornith-style: the model emits its tool call as text in the OpenAI
+    # function-call shape {"name","arguments"} wrapped in its own sentinels,
+    # inside prose - not as a native tool_call. It must still be dispatched.
+    model = MockModel()
+    model.queue({"message": {"content":
+        "I'll assess this now. Let me probe the endpoint.\n"
+        "⟨tool_call⟩\n"
+        '{"name": "shell", "arguments": {"cmd": "whoami"}}\n'
+        "⟨end_call⟩"}})
+    model.queue({"message": {"content": "The user is root."}})
+    controller = AgentController(model_provider=model, mode=AgentMode.AGENT)
+    controller.register_tool(ToolSchema(
+        name="shell", description="Run a shell command",
+        parameters={"type": "object", "properties": {"cmd": {"type": "string"}},
+                    "required": ["cmd"]}))
+    await controller.start()
+    response = await controller.run("assess it", session_id="fncall")
+    assert "shell" in response.tool_calls_made, response.tool_calls_made
+    assert response.iterations == 2
+    print("  PASS  function_call_shape_dispatched")
+
+
+async def test_function_call_shape_unknown_name_stays_answer():
+    # A JSON answer that merely has a "name" field (not a real tool) must NOT be
+    # dispatched - the name gate keeps ordinary answers from being hijacked.
+    model = MockModel()
+    model.queue({"message": {"content":
+        '{"name": "Acme Corp", "arguments": {"note": "just data"}}'}})
+    controller = AgentController(model_provider=model, mode=AgentMode.AGENT)
+    controller.register_tool(ToolSchema(
+        name="shell", description="Run a shell command",
+        parameters={"type": "object", "properties": {"cmd": {"type": "string"}},
+                    "required": ["cmd"]}))
+    await controller.start()
+    response = await controller.run("who?", session_id="fncall2")
+    assert "shell" not in response.tool_calls_made
+    print("  PASS  function_call_shape_unknown_name_stays_answer")
+
+
+async def test_fabricated_tool_output_reasked():
+    # A model that INVENTS fenced tool results (instead of calling a tool and
+    # waiting) must be reasked, not accepted - fabricated evidence is rejected.
+    # Here it self-corrects to a real call on the reask, which then dispatches.
+    from core.injection_shield import wrap_untrusted
+    fake = wrap_untrusted("shell", "AccessKeyId: AKIAEXAMPLE\nrole: admin")
+    model = MockModel()
+    model.queue({"message": {"content":
+        f"I checked the target.\n{fake}\nDone - credentials exposed."}})
+    model.queue({"message": {"content": 'shell(cmd="whoami")'}})  # corrected real call
+    model.queue({"message": {"content": "The user is root."}})
+    controller = AgentController(model_provider=model, mode=AgentMode.AGENT)
+    controller.register_tool(ToolSchema(
+        name="shell", description="Run a shell command",
+        parameters={"type": "object", "properties": {"cmd": {"type": "string"}},
+                    "required": ["cmd"]}))
+    await controller.start()
+    response = await controller.run("assess", session_id="fab")
+    # The fabricated message was NOT accepted as the answer; the real tool ran.
+    assert "shell" in response.tool_calls_made, response.tool_calls_made
+    assert "credentials exposed" not in response.content
+    print("  PASS  fabricated_tool_output_reasked")
+
+
 async def test_unknown_tool_returns_available_list():
     # A hallucinated tool name is corrected with the available list, not run.
     # Requires an authoritative dispatcher so a real name isn't mistaken for one.
@@ -5879,6 +5943,9 @@ async def run_all():
     await test_agent_json_mode_tool_call()
     await test_prose_tool_call_recovered()
     await test_prose_non_call_stays_answer()
+    await test_function_call_shape_dispatched()
+    await test_function_call_shape_unknown_name_stays_answer()
+    await test_fabricated_tool_output_reasked()
     await test_unknown_tool_returns_available_list()
     test_skills_playbook_web_matching()
     test_skills_playbook_network_matching()
