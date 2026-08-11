@@ -403,6 +403,11 @@ async def run_agent(port: int, meta: dict, flag: str, provider, *, max_iters: in
         use_function_calling=provider.supports_tools,
         system_prompt=SYSTEM_PROMPT, scope=scope, enable_verifier=False)
     controller.MAX_ITERATIONS = max_iters
+    # XBOW is FLAG-hunting, not report_finding-based, so the "no new findings in N
+    # steps" stall abort would kill a run at 8 iterations regardless of real progress
+    # toward the flag. Disable that no-progress abort; the duplicate-call abort
+    # (STALL_ABORT_DUP) and MAX_ITERATIONS still bound the loop.
+    controller.STALL_ABORT_NOPROG = max_iters + 1
     if reflect:
         from core.agent_middlewares import ReflectionMiddleware
         controller.add_middleware(ReflectionMiddleware(every=reflect_every))

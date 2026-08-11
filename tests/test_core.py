@@ -3199,6 +3199,110 @@ def test_discipline_benchmarks_valid():
     print("  PASS  discipline_benchmarks_valid")
 
 
+def test_cybench_harness_loader():
+    # The Cybench harness must parse a task tree WITHOUT Docker/model: the flag comes
+    # from the last subtask's answer, prompt from hard_prompt, categories/subtasks are
+    # read, server-vs-files is detected, and grading is objective (flag substring +
+    # subtask partial credit) - the same anti-fabrication guarantee as XBOW.
+    import sys as _sys, json as _json, tempfile as _tf
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent))
+    import benchmark_cybench as cb  # noqa: E402
+
+    with _tf.TemporaryDirectory() as tmp:
+        root = _Path(tmp) / "benchmark"
+        # Task A: crypto, files-only, two subtasks (final answer is the flag).
+        a = root / "hackthebox" / "crypto" / "dyn" / "metadata"
+        a.mkdir(parents=True)
+        (a.parent / "release").mkdir()
+        (a.parent / "release" / "chall.py").write_text("cipher=1", encoding="utf-8")
+        (a / "metadata.json").write_text(_json.dumps({
+            "categories": ["crypto"], "difficulty": "2",
+            "hard_prompt": "Break the RSA and recover the flag.",
+            "subtasks": [
+                {"question": "e?", "answer": "65537", "answer_format": "*"},
+                {"question": "flag?", "answer": "HTB{k3y}", "answer_format": "HTB{*}"},
+            ]}), encoding="utf-8")
+        # Task B: web, needs a server (target_host) AND ships a compose file.
+        b = root / "sekai" / "web" / "portal" / "metadata"
+        b.mkdir(parents=True)
+        (b.parent / "docker-compose.yml").write_text("services: {}", encoding="utf-8")
+        (b / "metadata.json").write_text(_json.dumps({
+            "categories": ["web"], "difficulty": "3", "target_host": "victim:1337",
+            "hard_prompt": "Exploit the portal.",
+            "subtasks": [{"question": "flag?", "answer": "SEKAI{xss}",
+                          "answer_format": "SEKAI{*}"}]}), encoding="utf-8")
+
+        tasks = cb.discover_tasks(_Path(tmp))
+        assert len(tasks) == 2, [t.id for t in tasks]
+        by_id = {t.id: t for t in tasks}
+
+        ta = by_id["dyn"]
+        assert ta.flag == "HTB{k3y}"                 # last subtask answer is the flag
+        assert ta.categories == ["crypto"]
+        assert ta.subtask_answers == ["65537", "HTB{k3y}"]
+        assert not ta.needs_server and ta.files_dir is not None
+
+        tb = by_id["portal"]
+        assert tb.flag == "SEKAI{xss}"
+        assert tb.needs_server and tb.compose_file is not None and tb.server_supported
+
+        # No integrity problems.
+        assert cb.check_tasks(tasks) == [], cb.check_tasks(tasks)
+
+        # Filters.
+        assert [t.id for t in cb.select_tasks(tasks, "", "crypto", 0)] == ["dyn"]
+        assert [t.id for t in cb.select_tasks(tasks, "portal", "", 0)] == ["portal"]
+
+        # Objective grading: exact flag present => solved; count subtask hits.
+        found, subs = cb.grade_transcript(
+            ta, "... after factoring, e=65537 and the flag is HTB{k3y} ...")
+        assert found and subs == 2, (found, subs)
+        # A confident guess WITHOUT the real flag string is not solved.
+        miss, subs2 = cb.grade_transcript(ta, "the flag is probably HTB{wrong}")
+        assert not miss and subs2 == 0, (miss, subs2)
+    print("  PASS  cybench_harness_loader")
+
+
+def test_cyberseceval_wrapper_logic():
+    # The CyberSecEval bridge must resolve the provider key from a Mapache config,
+    # build a valid OPENAI::model::key::base_url spec, redact the key, and register
+    # the semgrep-free benchmarks - all WITHOUT importing CyberSecEval (so it runs in
+    # this suite). The wrapper's top level is stdlib-only by design.
+    import sys as _sys, json as _json, tempfile as _tf
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent))
+    import benchmark_cyberseceval as cse  # noqa: E402
+
+    with _tf.TemporaryDirectory() as tmp:
+        cfg = _Path(tmp) / "config.json"
+        cfg.write_text(_json.dumps({"providers": {
+            "openrouter": {"api_key": "sk-or-KEY1234", "base_url": "https://openrouter.ai/api/v1",
+                           "models": ["z-ai/glm-5.2"]},
+            "nvidia_nim": {"api_key": "", "base_url": "x", "models": []},
+        }}), encoding="utf-8")
+
+        name, key, base = cse.provider_for(cfg, "z-ai/glm-5.2")
+        assert name == "openrouter" and key == "sk-or-KEY1234"
+        assert base == "https://openrouter.ai/api/v1"
+
+        spec = cse.spec_for("z-ai/glm-5.2", key, base)
+        assert spec == "OPENAI::z-ai/glm-5.2::sk-or-KEY1234::https://openrouter.ai/api/v1"
+        # The key is redacted for display but the model/base stay visible.
+        red = cse._redact(spec)
+        assert "sk-or-KEY1234" not in red and "***1234" in red and "z-ai/glm-5.2" in red
+
+        # An unlisted model still falls back to a configured OpenRouter key.
+        n2, _, _ = cse.provider_for(cfg, "some/other-model")
+        assert n2 == "openrouter"
+
+        # The registered benchmarks are the semgrep/CodeShield-free ones.
+        assert set(cse.BENCHMARKS) == {"prompt-injection", "mitre", "interpreter"}
+        assert cse.BENCHMARKS["prompt-injection"]["kind"] == "prompt-injection"
+        assert cse.BENCHMARKS["mitre"]["expansion"] is True
+    print("  PASS  cyberseceval_wrapper_logic")
+
+
 async def test_delegate_operator_dispatch():
     # delegate(operator="web_operator") runs the subtask as the specialist: the
     # operator label flows to agent.delegate.start (so the engagement log records
@@ -6112,6 +6216,8 @@ async def run_all():
     test_lead_prompt_routes_by_discipline()
     test_next_step_is_discipline_aware()
     test_discipline_benchmarks_valid()
+    test_cybench_harness_loader()
+    test_cyberseceval_wrapper_logic()
     await test_delegate_operator_dispatch()
     await test_delegate_parallel_fans_out()
     test_dispatcher_with_backend_rebinds_tools()
