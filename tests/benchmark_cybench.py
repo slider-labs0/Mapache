@@ -72,7 +72,7 @@ from plugins.sdk.base_tool import Permission                          # noqa: E4
 from security_tools.shell_tool import ShellTool                       # noqa: E402
 from tools.filesystem_tool import FileReadTool                        # noqa: E402
 from cli.mapache_cli import SYSTEM_PROMPT                             # noqa: E402
-from benchmark_xbow import build_provider  # same provider wiring     # noqa: E402
+from benchmark_xbow import build_provider, patch_eol_debian  # reuse XBOW helpers  # noqa: E402
 
 
 # --------------------------------------------------------------------------- #
@@ -247,6 +247,48 @@ def _compose(compose_file: Path, project: str, *args: str, timeout: int = 900):
                 timeout=timeout, cwd=str(compose_file.parent))
 
 
+_YAML_KEY = re.compile(r"^(\s*)([A-Za-z_][\w-]*):\s*(.*)$")
+_PORT_ITEM = re.compile(r"""^(\s*)-\s*['"]?([0-9.:]+?)(/\w+)?['"]?\s*$""")
+
+
+def _ephemeralize_ports(compose_file: Path) -> bool:
+    """Rewrite each `ports:` mapping to publish the container port on an EPHEMERAL
+    host port (bare `"<container>"` form). Cybench composes hardcode host ports like
+    9999 that fall in Windows' WinNAT reserved ranges (bind: access forbidden);
+    letting Docker pick a free host port sidesteps that, and server_up discovers the
+    real port from `compose ps`. Scoped to `ports:` blocks only (never `expose:`)."""
+    try:
+        lines = compose_file.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return False
+    out: list[str] = []
+    in_ports = False
+    ports_indent = -1
+    changed = False
+    for line in lines:
+        m_key = _YAML_KEY.match(line)
+        if m_key:
+            indent, key = len(m_key.group(1)), m_key.group(2)
+            if key == "ports":
+                in_ports, ports_indent = True, indent
+                out.append(line)
+                continue
+            if in_ports and indent <= ports_indent:
+                in_ports = False
+        if in_ports:
+            m = _PORT_ITEM.match(line)
+            if m:
+                container_port = m.group(2).split(":")[-1]  # last segment = container port
+                proto = m.group(3) or ""
+                out.append(f'{m.group(1)}- "{container_port}{proto}"')
+                changed = True
+                continue
+        out.append(line)
+    if changed:
+        compose_file.write_text("\n".join(out) + "\n", encoding="utf-8")
+    return changed
+
+
 def _ensure_external_networks(compose_file: Path) -> None:
     """Cybench composes attach services to an EXTERNAL docker network (usually
     `shared_net`) that the task's start_docker.sh normally creates first. Create any
@@ -266,6 +308,14 @@ def server_up(task: Task, project: str, *, build_timeout: int) -> str:
     should target. Only called when task.compose_file is set."""
     assert task.compose_file is not None
     _ensure_external_networks(task.compose_file)
+    # Many Cybench challenge images use EOL Debian bases (python:*-slim-buster,
+    # openjdk:11-slim, …) whose apt repos moved to archive.debian.org, so `apt-get
+    # update` fails the build. Patch the Dockerfiles the same way the XBOW harness does.
+    try:
+        patch_eol_debian(task.root)
+    except Exception:
+        pass
+    _ephemeralize_ports(task.compose_file)  # avoid Windows WinNAT-reserved fixed ports
     up = _compose(task.compose_file, project, "up", "-d", "--build", timeout=build_timeout)
     if up.returncode != 0:
         raise RuntimeError(f"compose up failed: {(up.stderr or up.stdout)[:300]}")
