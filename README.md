@@ -113,7 +113,7 @@ Notes for Windows:
 ### Cloud models
 
 ```bash
-export ANTHROPIC_API_KEY=...     # or OPENAI_API_KEY / XAI_API_KEY / OPENROUTER_API_KEY
+export ANTHROPIC_API_KEY=...     # or OPENAI_API_KEY / XAI_API_KEY / OPENROUTER_API_KEY / NVIDIA_API_KEY
 mapache serve --model claude-opus-4-8 --allow-cloud
 ```
 
@@ -146,7 +146,8 @@ Mapache works with a single model, or routes calls to the best model per role/ti
 | Routed (`--strategy pipeline\|auto\|hybrid`) | Best installed model per role (planner vs executor); hybrid keeps reasoning in the cloud and execution local. | Mixed local/cloud fleets. |
 | Tiered (`--tier-model <id>`) | Low-tier discovery operators (recon, OSINT, scanning) run on a cheaper model; hacking-critical operators stay on the strong one. | Cutting swarm cost. |
 
-Providers: Anthropic, OpenAI-compatible, Grok, OpenRouter, and local Ollama.
+Providers: Anthropic, OpenAI-compatible, Grok, OpenRouter, NVIDIA NIM (hosted catalog or a
+self-hosted container via `NVIDIA_NIM_URL`), and local Ollama.
 
 ## Documentation
 

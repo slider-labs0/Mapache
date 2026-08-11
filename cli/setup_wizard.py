@@ -41,6 +41,7 @@ from core.config import (
     ANTHROPIC_MODELS,
     DEFAULT_ANTHROPIC_URL,
     DEFAULT_NOUS_URL,
+    DEFAULT_NVIDIA_NIM_URL,
     DEFAULT_OPENAI_URL,
     DEFAULT_OPENROUTER_URL,
     DEFAULT_XAI_URL,
@@ -48,6 +49,7 @@ from core.config import (
     KIND_ANTHROPIC,
     KIND_OLLAMA,
     KIND_OPENAI,
+    NVIDIA_NIM_MODELS,
     OPENAI_MODELS,
     load_config,
     load_global_raw,
@@ -79,6 +81,7 @@ PROVIDER_MENU = [
     ("openai", KIND_OPENAI, DEFAULT_OPENAI_URL, "OPENAI_API_KEY", True),
     ("grok", KIND_OPENAI, DEFAULT_XAI_URL, "XAI_API_KEY", True),
     ("nous", KIND_OPENAI, DEFAULT_NOUS_URL, "NOUS_API_KEY", True),
+    ("nvidia_nim", KIND_OPENAI, DEFAULT_NVIDIA_NIM_URL, "NVIDIA_API_KEY", True),
 ]
 
 # Suggested model ids per cloud provider for the chooser's pick list.
@@ -89,6 +92,7 @@ MODEL_SUGGESTIONS: dict[str, list[str]] = {
     "openai": list(OPENAI_MODELS),
     "grok": list(GROK_MODELS),
     "nous": ["Hermes-4-405B"],
+    "nvidia_nim": list(NVIDIA_NIM_MODELS),
 }
 
 

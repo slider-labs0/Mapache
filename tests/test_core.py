@@ -1875,7 +1875,31 @@ def test_model_pool_routes_anthropic():
     # Grok (xAI) is OpenAI-compatible and routes to its own provider entry.
     assert cfg.provider_for_model("grok-4").name == "grok"
     assert isinstance(mp.get("grok-4"), OpenAICompatibleProvider)
+    # NVIDIA NIM is OpenAI-compatible; a listed catalog model routes to its entry.
+    nim = cfg.provider_for_model("deepseek-ai/deepseek-r1")
+    assert nim.name == "nvidia_nim"
+    assert nim.base_url == "https://integrate.api.nvidia.com/v1"
+    assert isinstance(mp.get("deepseek-ai/deepseek-r1"), OpenAICompatibleProvider)
     print("  PASS  model_pool_routes_anthropic")
+
+
+def test_config_nvidia_nim_env_key_and_url():
+    # NVIDIA_API_KEY / NGC_API_KEY populate the key; NVIDIA_NIM_URL overrides the
+    # base URL for a self-hosted container. With a key, the provider is usable.
+    with tempfile.TemporaryDirectory() as tmp:
+        gpath = _CfgPath(tmp) / "nope.json"
+        cfg = load_config(working_dir=tmp, global_path=gpath,
+                          environ={"NVIDIA_API_KEY": "nvapi-abc123"})
+        p = cfg.providers["nvidia_nim"]
+        assert p.is_cloud and p.is_usable and p.api_key == "nvapi-abc123"
+
+        cfg2 = load_config(working_dir=tmp, global_path=gpath,
+                           environ={"NGC_API_KEY": "ngc-xyz",
+                                    "NVIDIA_NIM_URL": "http://localhost:8000/v1"})
+        p2 = cfg2.providers["nvidia_nim"]
+        assert p2.api_key == "ngc-xyz"
+        assert p2.base_url == "http://localhost:8000/v1"  # self-hosted override
+    print("  PASS  config_nvidia_nim_env_key_and_url")
 
 
 def test_config_precedence_chain():
@@ -2154,11 +2178,11 @@ async def test_openai_provider_stream_surfaces_error_body():
                                  api_key="sk-test")
 
     class _FakeResp:
-        status_code = 429
+        status_code = 401  # permanent (non-retryable) so it surfaces immediately
         def __init__(self):
             self.text = ""
         async def aread(self):
-            self.text = '{"error":"rate limit exceeded"}'
+            self.text = '{"error":"invalid api key"}'
         async def aiter_lines(self):  # pragma: no cover - error path never streams
             if False:
                 yield ""
@@ -2177,9 +2201,54 @@ async def test_openai_provider_stream_surfaces_error_body():
             pass
     except RuntimeError as exc:
         err = str(exc)
-    assert err and "429" in err and "rate limit exceeded" in err, err
+    assert err and "401" in err and "invalid api key" in err, err
     await p.close()
     print("  PASS  openai_provider_stream_surfaces_error_body")
+
+
+async def test_openai_provider_retries_rate_limit():
+    """A 429 on stream-open is retried with backoff, then the retry streams
+    normally - a throttled call waits instead of aborting the engagement."""
+    import models.providers.openai_compatible as oc
+    p = oc.OpenAICompatibleProvider(model="grok-4", base_url="https://api.x.ai/v1",
+                                    api_key="sk-test")
+    orig_delay = oc._retry_after_seconds
+    oc._retry_after_seconds = lambda headers, attempt: 0.0  # no real waiting in test
+
+    calls = {"n": 0}
+
+    class _Resp429:
+        status_code = 429
+        text = ""
+        async def aread(self):
+            self.text = "slow down"
+        async def aiter_lines(self):  # pragma: no cover
+            if False:
+                yield ""
+
+    class _Resp200:
+        status_code = 200
+        async def aiter_lines(self):
+            yield 'data: {"choices":[{"delta":{"content":"hello"}}]}'
+            yield "data: [DONE]"
+
+    class _FakeStream:
+        async def __aenter__(self):
+            calls["n"] += 1
+            return _Resp429() if calls["n"] == 1 else _Resp200()
+        async def __aexit__(self, *a):
+            return False
+
+    p._client.stream = lambda *a, **k: _FakeStream()
+    try:
+        out = "".join([c async for c in p.chat_stream(messages=[{"role": "user", "content": "hi"}])
+                       if isinstance(c, str)])
+    finally:
+        oc._retry_after_seconds = orig_delay
+        await p.close()
+    assert calls["n"] == 2, calls          # retried exactly once
+    assert out == "hello", out             # the retry streamed normally
+    print("  PASS  openai_provider_retries_rate_limit")
 
 
 async def test_provider_usage_and_token_accounting():
@@ -5990,6 +6059,7 @@ async def run_all():
     test_config_defaults()
     await test_anthropic_provider_translation_and_chat()
     test_model_pool_routes_anthropic()
+    test_config_nvidia_nim_env_key_and_url()
     test_config_precedence_chain()
     test_config_env_layer_and_interpolation()
     test_config_provider_for_model_and_redaction()
@@ -6006,6 +6076,7 @@ async def run_all():
     print("\nCloud providers (feature G)")
     await test_openai_provider_normalizes_response()
     await test_openai_provider_stream_surfaces_error_body()
+    await test_openai_provider_retries_rate_limit()
     await test_provider_usage_and_token_accounting()
     test_model_pool_provider_selection()
     test_model_profile_is_local_gate()

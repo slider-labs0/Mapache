@@ -39,6 +39,7 @@ class Provider(str, Enum):
     ANTHROPIC   = "anthropic"
     NOUS        = "nous"
     GROK        = "grok"
+    NIM         = "nvidia_nim"
 
 
 @dataclass

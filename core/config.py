@@ -48,6 +48,10 @@ DEFAULT_ANTHROPIC_URL = "https://api.anthropic.com"
 DEFAULT_OPENAI_URL = "https://api.openai.com/v1"
 # xAI's Grok API is OpenAI-compatible (KIND_OPENAI), served from api.x.ai.
 DEFAULT_XAI_URL = "https://api.x.ai/v1"
+# NVIDIA NIM is OpenAI-compatible (KIND_OPENAI). The hosted API catalog lives at
+# integrate.api.nvidia.com; a SELF-HOSTED NIM container serves the same protocol at
+# e.g. http://localhost:8000/v1 (override base_url + drop the key for that).
+DEFAULT_NVIDIA_NIM_URL = "https://integrate.api.nvidia.com/v1"
 
 KIND_OLLAMA = "ollama"
 KIND_OPENAI = "openai_compatible"
@@ -60,6 +64,18 @@ ANTHROPIC_MODELS = [
 ]
 OPENAI_MODELS = ["gpt-4.1", "gpt-4o", "o4-mini"]
 GROK_MODELS = ["grok-4", "grok-3", "grok-3-mini"]
+# NVIDIA API-catalog model ids are namespaced (publisher/model). A small current
+# set so a key + one of these + --allow-cloud routes out of the box; add more (or a
+# self-hosted container's model id) via `mapache setup` / config.
+NVIDIA_NIM_MODELS = [
+    "nvidia/llama-3.3-nemotron-super-49b-v1",
+    "nvidia/llama-3.1-nemotron-70b-instruct",
+    "meta/llama-3.3-70b-instruct",
+    "meta/llama-3.1-405b-instruct",
+    "deepseek-ai/deepseek-r1",
+    "qwen/qwen2.5-coder-32b-instruct",
+    "mistralai/mixtral-8x22b-instruct-v0.1",
+]
 
 
 def _default_config() -> dict[str, Any]:
@@ -92,6 +108,10 @@ def _default_config() -> dict[str, Any]:
             "grok": {
                 "kind": KIND_OPENAI, "base_url": DEFAULT_XAI_URL,
                 "api_key": "", "models": list(GROK_MODELS), "enabled": True,
+            },
+            "nvidia_nim": {
+                "kind": KIND_OPENAI, "base_url": DEFAULT_NVIDIA_NIM_URL,
+                "api_key": "", "models": list(NVIDIA_NIM_MODELS), "enabled": True,
             },
         },
         "messaging": {"telegram_token": "", "discord_token": ""},
@@ -128,6 +148,9 @@ _ENV_MAP: dict[str, tuple[str, ...]] = {
     "OPENAI_API_KEY": ("providers", "openai", "api_key"),
     "XAI_API_KEY": ("providers", "grok", "api_key"),
     "GROK_API_KEY": ("providers", "grok", "api_key"),
+    "NVIDIA_API_KEY": ("providers", "nvidia_nim", "api_key"),
+    "NGC_API_KEY": ("providers", "nvidia_nim", "api_key"),
+    "NVIDIA_NIM_URL": ("providers", "nvidia_nim", "base_url"),
     "TELEGRAM_BOT_TOKEN": ("messaging", "telegram_token"),
     "DISCORD_BOT_TOKEN": ("messaging", "discord_token"),
 }

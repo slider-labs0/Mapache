@@ -20,7 +20,9 @@ feature G's routing + warning wiring.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import random
 from typing import Any, AsyncIterator, Optional
 
 try:
@@ -34,6 +36,22 @@ from core.logger import get_logger
 logger = get_logger(__name__)
 
 DEFAULT_TIMEOUT = 300.0
+# Retry transient failures (rate limits, 5xx) with backoff so a throttled call
+# waits instead of failing the whole engagement. Rate-limited tiers (e.g. NVIDIA
+# NIM's free catalog) 429 readily under a benchmark's call rate.
+DEFAULT_MAX_RETRIES = 5
+_RETRY_STATUSES = {429, 500, 502, 503, 504}
+
+
+def _retry_after_seconds(headers: Any, attempt: int) -> float:
+    """Honor a Retry-After header if present; else exponential backoff with jitter."""
+    try:
+        ra = headers.get("Retry-After") if headers is not None else None
+        if ra is not None:
+            return min(float(ra), 60.0)
+    except (TypeError, ValueError):
+        pass
+    return min(2.0 ** attempt, 30.0) + random.uniform(0, 0.5)
 
 
 def _norm_usage(usage: Any) -> dict[str, int]:
@@ -133,89 +151,111 @@ class OpenAICompatibleProvider:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
 
-        # Tool calls stream as fragments (name in the first delta, arguments
-        # across several) - accumulate, then emit once at the end.
-        tc_name = ""
-        tc_args = ""
-        try:
-            async with self._client.stream(
-                "POST", f"{self.base_url}/chat/completions", json=payload,
-            ) as response:
-                if response.status_code >= 400:
+        url = f"{self.base_url}/chat/completions"
+        # Retry the stream-open on transient failures (rate limits / 5xx) with
+        # backoff, so a throttled call waits instead of aborting the engagement.
+        for attempt in range(DEFAULT_MAX_RETRIES + 1):
+            # Tool calls stream as fragments (name in the first delta, arguments
+            # across several) - accumulate, then emit once at the end.
+            tc_name = ""
+            tc_args = ""
+            try:
+                async with self._client.stream("POST", url, json=payload) as response:
                     # Read the error body while the stream is still OPEN - a streamed
                     # response's .text isn't available until aread(), and touching it
-                    # after the context closes raises the confusing "Attempted to
-                    # access streaming response content, without having called read()"
-                    # error that MASKS the real API failure (rate limit, bad key, …).
-                    await response.aread()
-                    raise RuntimeError(
-                        f"{self.base_url} API error {response.status_code}: "
-                        f"{response.text[:300]}"
-                    )
-                async for line in response.aiter_lines():
-                    line = line.strip()
-                    if not line or not line.startswith("data:"):
-                        continue
-                    body = line[len("data:"):].strip()
-                    if body == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(body)
-                    except json.JSONDecodeError:
-                        continue
-                    # The usage chunk (from stream_options) has empty choices and
-                    # arrives just before [DONE] - surface it to the caller.
-                    if chunk.get("usage"):
-                        yield {"type": "usage", **_norm_usage(chunk["usage"])}
-                        continue
-                    delta = (chunk.get("choices") or [{}])[0].get("delta", {})
-                    for tc in delta.get("tool_calls") or []:
-                        fn = tc.get("function", {})
-                        if fn.get("name"):
-                            tc_name = fn["name"]
-                        if fn.get("arguments"):
-                            tc_args += fn["arguments"]
-                    content = delta.get("content")
-                    if content:
-                        yield content
-        except httpx.HTTPStatusError as exc:
-            # Fallback if a non-2xx slips through as an exception elsewhere.
-            try:
-                await exc.response.aread()
-                detail = exc.response.text[:300]
-            except Exception:
-                detail = "(unreadable error body)"
-            raise RuntimeError(
-                f"{self.base_url} API error {exc.response.status_code}: {detail}"
-            )
-        except httpx.ConnectError:
-            raise ConnectionError(f"Cannot connect to {self.base_url}.")
-
-        if tc_name:
-            try:
-                args = json.loads(tc_args) if tc_args else {}
-            except json.JSONDecodeError:
-                args = {}
-            yield {"type": "tool_call", "tool": tc_name, "args": args}
+                    # after the context closes raises a confusing error that MASKS the
+                    # real API failure (rate limit, bad key, …).
+                    if response.status_code in _RETRY_STATUSES and attempt < DEFAULT_MAX_RETRIES:
+                        await response.aread()
+                        delay = _retry_after_seconds(getattr(response, "headers", None), attempt)
+                        logger.warning(
+                            "%s stream %s - retrying in %.1fs (attempt %d/%d)",
+                            self.base_url, response.status_code, delay,
+                            attempt + 1, DEFAULT_MAX_RETRIES)
+                    else:
+                        if response.status_code >= 400:
+                            await response.aread()
+                            raise RuntimeError(
+                                f"{self.base_url} API error {response.status_code}: "
+                                f"{response.text[:300]}")
+                        async for line in response.aiter_lines():
+                            line = line.strip()
+                            if not line or not line.startswith("data:"):
+                                continue
+                            body = line[len("data:"):].strip()
+                            if body == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(body)
+                            except json.JSONDecodeError:
+                                continue
+                            # The usage chunk (from stream_options) has empty choices
+                            # and arrives just before [DONE] - surface it to the caller.
+                            if chunk.get("usage"):
+                                yield {"type": "usage", **_norm_usage(chunk["usage"])}
+                                continue
+                            delta = (chunk.get("choices") or [{}])[0].get("delta", {})
+                            for tc in delta.get("tool_calls") or []:
+                                fn = tc.get("function", {})
+                                if fn.get("name"):
+                                    tc_name = fn["name"]
+                                if fn.get("arguments"):
+                                    tc_args += fn["arguments"]
+                            content = delta.get("content")
+                            if content:
+                                yield content
+                        if tc_name:
+                            try:
+                                args = json.loads(tc_args) if tc_args else {}
+                            except json.JSONDecodeError:
+                                args = {}
+                            yield {"type": "tool_call", "tool": tc_name, "args": args}
+                        return  # streamed a good response - done
+            except httpx.HTTPStatusError as exc:
+                # Fallback if a non-2xx slips through as an exception elsewhere.
+                try:
+                    await exc.response.aread()
+                    detail = exc.response.text[:300]
+                except Exception:
+                    detail = "(unreadable error body)"
+                raise RuntimeError(
+                    f"{self.base_url} API error {exc.response.status_code}: {detail}")
+            except httpx.ConnectError:
+                raise ConnectionError(f"Cannot connect to {self.base_url}.")
+            await asyncio.sleep(delay)  # only reached on a retryable status
 
     # ------------------------------------------------------------------ #
     # Utilities
     # ------------------------------------------------------------------ #
 
     async def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-        try:
-            response = await self._client.post(f"{self.base_url}{path}", json=payload)
-            response.raise_for_status()
+        response = None
+        for attempt in range(DEFAULT_MAX_RETRIES + 1):
+            try:
+                response = await self._client.post(f"{self.base_url}{path}", json=payload)
+            except httpx.ConnectError:
+                raise ConnectionError(f"Cannot connect to {self.base_url}.")
+            except Exception as exc:
+                raise RuntimeError(f"{self.base_url} request failed: {exc}")
+            # Retry transient failures (rate limits / 5xx) with backoff.
+            if response.status_code in _RETRY_STATUSES and attempt < DEFAULT_MAX_RETRIES:
+                delay = _retry_after_seconds(getattr(response, "headers", None), attempt)
+                logger.warning("%s %s - retrying in %.1fs (attempt %d/%d)",
+                               self.base_url, response.status_code, delay,
+                               attempt + 1, DEFAULT_MAX_RETRIES)
+                await asyncio.sleep(delay)
+                continue
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise RuntimeError(
+                    f"{self.base_url} API error {exc.response.status_code}: "
+                    f"{exc.response.text[:300]}"
+                )
             return response.json()
-        except httpx.ConnectError:
-            raise ConnectionError(f"Cannot connect to {self.base_url}.")
-        except httpx.HTTPStatusError as exc:
-            raise RuntimeError(
-                f"{self.base_url} API error {exc.response.status_code}: "
-                f"{exc.response.text[:300]}"
-            )
-        except Exception as exc:
-            raise RuntimeError(f"{self.base_url} request failed: {exc}")
+        raise RuntimeError(
+            f"{self.base_url} API error {response.status_code} after "
+            f"{DEFAULT_MAX_RETRIES} retries: {response.text[:300]}")
 
     async def list_models(self) -> list[str]:
         try:

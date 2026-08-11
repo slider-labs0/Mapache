@@ -756,7 +756,7 @@ class MapacheCLI:
         name_map = {
             "openrouter": Provider.OPENROUTER, "nous": Provider.NOUS,
             "openai": Provider.OPENAI, "anthropic": Provider.ANTHROPIC,
-            "grok": Provider.GROK,
+            "grok": Provider.GROK, "nvidia_nim": Provider.NIM,
         }
         for prov in self.config.usable_providers():
             if not prov.is_cloud:
