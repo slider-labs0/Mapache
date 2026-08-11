@@ -172,12 +172,13 @@ def patch_eol_debian(bench_dir: Path) -> int:
     stage that runs apt-get, right before the first such RUN so it precedes any
     `apt-get update`. Idempotent (marker-guarded); returns Dockerfiles patched."""
     patched = 0
+    uses_apt = re.compile(r"\bapt(-get)?\b")  # `apt-get ...` OR bare `apt update/install`
     for df in list(bench_dir.rglob("Dockerfile")) + list(bench_dir.rglob("Dockerfile.*")):
         try:
             text = df.read_text(encoding="utf-8")
         except Exception:
             continue
-        if "mapache-apt-fix" in text or "apt-get" not in text:
+        if "mapache-apt-fix" in text or not uses_apt.search(text):
             continue
         out, changed, stage_fixed = [], False, False
         for line in text.splitlines():
@@ -185,7 +186,7 @@ def patch_eol_debian(bench_dir: Path) -> int:
             if s.upper().startswith("FROM "):
                 stage_fixed = False  # new build stage - fix again if it uses apt
             elif (not stage_fixed and s.upper().startswith("RUN ")
-                  and "apt-get" in s):
+                  and uses_apt.search(s)):
                 out.append(_APT_FIX.rstrip("\n"))
                 stage_fixed, changed = True, True
             out.append(line)

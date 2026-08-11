@@ -289,6 +289,44 @@ def _ephemeralize_ports(compose_file: Path) -> bool:
     return changed
 
 
+def _patch_dead_bases(root: Path) -> int:
+    """Fix two build-killers patch_eol_debian can't: base image tags REMOVED from
+    Docker Hub (openjdk:* was retired -> eclipse-temurin), and EOL buster apt repos
+    added INLINE by the Dockerfile itself (so they don't exist when a pre-RUN fix
+    checks sources). Rewrites Dockerfiles in place (disposable clone). Idempotent."""
+    n = 0
+    for df in list(root.rglob("Dockerfile")) + list(root.rglob("Dockerfile.*")):
+        try:
+            text = df.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        orig = text
+        # Retired official openjdk images -> maintained Temurin equivalents.
+        text = re.sub(r"openjdk:(\d+)-slim", r"eclipse-temurin:\1-jre-jammy", text)
+        text = re.sub(r"openjdk:(\d+)\b(?!-)", r"eclipse-temurin:\1-jdk", text)
+        # Buster repos the Dockerfile echoes inline -> archive.debian.org (and drop the
+        # non-security buster-updates line, which is not archived), + skip stale checks.
+        if "buster" in text and "debian.org" in text:
+            text = text.replace("http://deb.debian.org/debian-security",
+                                "http://archive.debian.org/debian-security")
+            text = text.replace("http://security.debian.org",
+                                "http://archive.debian.org")
+            text = text.replace("http://deb.debian.org/debian",
+                                "http://archive.debian.org/debian")
+            text = "\n".join(l for l in text.splitlines() if "buster-updates" not in l)
+            # archive.debian.org Release files are expired; disable the validity check
+            # once, before the first apt update, so `apt-get update` doesn't reject them.
+            if "99-archive-novalid" not in text:
+                text = text.replace(
+                    "apt-get update",
+                    "echo 'Acquire::Check-Valid-Until \"false\";' "
+                    "> /etc/apt/apt.conf.d/99-archive-novalid && apt-get update", 1)
+        if text != orig:
+            df.write_text(text, encoding="utf-8")
+            n += 1
+    return n
+
+
 def _ensure_external_networks(compose_file: Path) -> None:
     """Cybench composes attach services to an EXTERNAL docker network (usually
     `shared_net`) that the task's start_docker.sh normally creates first. Create any
@@ -312,7 +350,8 @@ def server_up(task: Task, project: str, *, build_timeout: int) -> str:
     # openjdk:11-slim, …) whose apt repos moved to archive.debian.org, so `apt-get
     # update` fails the build. Patch the Dockerfiles the same way the XBOW harness does.
     try:
-        patch_eol_debian(task.root)
+        _patch_dead_bases(task.root)   # retired base images + inline buster repos
+        patch_eol_debian(task.root)    # EOL buster/stretch/jessie base-image repos
     except Exception:
         pass
     _ephemeralize_ports(task.compose_file)  # avoid Windows WinNAT-reserved fixed ports
