@@ -1,7 +1,8 @@
 # Reversing target: build the vulnerable daemon (no mitigations) and drop it, its
 # source, and the checksec notes into /target with real binutils installed, so the
 # agent can run strings/nm/objdump on an actual binary via `docker exec`.
-FROM gcc:13-slim
+# The official gcc image has no -slim variant; gcc:13 is the valid Debian-based tag.
+FROM gcc:13
 RUN apt-get update \
     && apt-get install -y --no-install-recommends binutils file \
     && rm -rf /var/lib/apt/lists/*
