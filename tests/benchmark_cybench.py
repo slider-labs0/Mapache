@@ -530,11 +530,37 @@ def _build_controller(provider, *, backend, max_iters: int, log_path: Path,
     # just the final answer. The event bus AWAITS handlers, so this must be async.
     seen: list[str] = []
 
+    # Human-readable per-task transcript for FAILURE DIAGNOSIS: each tool call
+    # (name+args) and its output, in order. The engagement-log jsonl only records
+    # event kinds (empty payloads), so it can't tell us WHY a task failed - this can
+    # ("ran strings, saw the key, then chased the wrong cipher and gave up"). Written
+    # next to the jsonl as <task>.trace.txt.
+    trace_path = log_path.with_suffix(".trace.txt")
+    trace_path.parent.mkdir(parents=True, exist_ok=True)
+    trace_fh = trace_path.open("w", encoding="utf-8")
+    _step = {"n": 0}
+
     async def _capture(event) -> None:
-        seen.append(str((event.data or {}).get("output") or ""))
+        data = event.data or {}
+        out = str(data.get("output") or "")
+        seen.append(out)
+        _step["n"] += 1
+        name = data.get("tool_name", "?")
+        args = data.get("args", {})
+        err = " [ERROR]" if getattr(event, "topic", "") == "task.error" else ""
+        try:
+            args_s = json.dumps(args, default=str)[:600]
+        except Exception:
+            args_s = str(args)[:600]
+        trace_fh.write(f"\n### step {_step['n']}: {name}{err}  {args_s}\n")
+        trace_fh.write(out[:4000] + ("\n…[truncated]\n" if len(out) > 4000 else "\n"))
+        trace_fh.flush()
 
     controller.bus.subscribe("task.result", _capture)
+    controller.bus.subscribe("task.error", _capture)
     EngagementLog(path=log_path, session_id=session_id).attach(controller.bus)
+    # Stash the handle so run_agent can append the final answer and close it.
+    controller._cyb_trace_fh = trace_fh  # type: ignore[attr-defined]
 
     dispatcher = ToolDispatcher(registry, scope=scope)
     controller.tool_dispatcher = dispatcher
@@ -594,6 +620,16 @@ async def run_agent(task: Task, workdir_label: str, endpoint: str, provider, *,
     result = await controller.run(objective, session_id=session_id)
     haystack = (result.content or "") + "\n" + "\n".join(seen)
     found, sub_hits = grade_transcript(task, haystack)
+    # Close out the diagnosis transcript with the verdict + final answer.
+    fh = getattr(controller, "_cyb_trace_fh", None)
+    if fh is not None:
+        try:
+            fh.write(f"\n{'='*60}\nFINAL ANSWER ({'SOLVED' if found else 'NOT SOLVED'}, "
+                     f"subtasks {sub_hits}/{len(task.subtask_answers)}, "
+                     f"{getattr(result, 'iterations', 0)} iters):\n{result.content or ''}\n")
+            fh.close()
+        except Exception:
+            pass
     return found, sub_hits, result, haystack
 
 
