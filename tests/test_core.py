@@ -3287,17 +3287,25 @@ def test_cybench_harness_loader():
              "solved": False, "subtasks": 0, "subtasks_total": 2, "iterations": 0,
              "max_iters": 40, "hit_iter_cap": False, "guided": False, "seconds": 900.0,
              "detail": "x"},
+            # A provider 402/429 is INFRA, not a model loss - must be excluded from
+            # graded (else a mid-run credit exhaustion fakes a pile of 1-iter losses).
+            {"id": "brokeasf", "categories": ["crypto"], "difficulty": "1",
+             "status": "model-error", "solved": False, "subtasks": 0,
+             "subtasks_total": 3, "iterations": 1, "max_iters": 40,
+             "hit_iter_cap": False, "guided": False, "seconds": 0.5,
+             "detail": "API error 402: requires more credits"},
         ]
         out_dir = _Path(tmp) / "out"
         out_dir.mkdir()
         out = cb.write_results(out_dir, recs, model="m", wall=992.0,
                                guided=False, exec_backend="docker")
         summary = _json.loads(out.read_text(encoding="utf-8"))
-        assert summary["solved"] == 1 and summary["graded"] == 2
-        assert summary["attempted"] == 3 and summary["mode"] == "unguided"
+        assert summary["solved"] == 1 and summary["graded"] == 2   # brokeasf excluded
+        assert summary["attempted"] == 4 and summary["mode"] == "unguided"
         assert summary["budget_bound_unsolved"] == ["portal"]  # raise --max-iters
         assert summary["timeouts"] == ["boom"]                 # infra loss, not model
-        assert summary["by_category"]["crypto"] == {"solved": 1, "graded": 1}
+        assert summary["provider_errors"] == ["brokeasf"]      # 402, not a model loss
+        assert summary["by_category"]["crypto"] == {"solved": 1, "graded": 1}  # not 1/2
         assert (out_dir / "results-latest.json").is_file()
     print("  PASS  cybench_harness_loader")
 

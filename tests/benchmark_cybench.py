@@ -698,9 +698,20 @@ async def run_one(task: Task, provider, prov_label: str, *, max_iters: int,
                           guided=guided),
                 timeout=run_timeout)
             iters = getattr(result, "iterations", 0)
-            rec.update(status="ok", solved=bool(found), subtasks=subs,
-                       iterations=iters, hit_iter_cap=(iters >= max_iters),
-                       detail=(result.content or "").strip()[:200])
+            # A provider error (402 out-of-credits, 429 rate-limit, 5xx) surfaces as
+            # an AgentResponse with .error set and content "Model error: ...". That is
+            # INFRA, not a model loss - grading it as a completed unsolved task
+            # silently corrupts the whole run (a mid-sweep credit exhaustion turned
+            # 35/43 tasks into fake 1-iter losses). Mark it not-graded so the headline
+            # only counts tasks the model actually got to attempt.
+            err = getattr(result, "error", None)
+            if err or (result.content or "").startswith("Model error:"):
+                rec.update(status="model-error", iterations=iters,
+                           detail=(err or result.content or "")[:200])
+            else:
+                rec.update(status="ok", solved=bool(found), subtasks=subs,
+                           iterations=iters, hit_iter_cap=(iters >= max_iters),
+                           detail=(result.content or "").strip()[:200])
     except asyncio.TimeoutError:
         rec.update(status="timeout", detail=f"agent exceeded {run_timeout}s")
     except Exception as exc:
@@ -774,6 +785,10 @@ def print_report(results: list[dict], model: str, wall: float) -> None:
               f"{len(capped)}  -> {', '.join(r['id'][:18] for r in capped[:6])}")
     timeouts = [r for r in results if r["status"] == "timeout"]
     errors = [r for r in results if r["status"] == "error"]
+    model_errs = [r for r in results if r["status"] == "model-error"]
+    if model_errs:
+        print(f"  PROVIDER ERRORS (credits/rate-limit, NOT graded): {len(model_errs)}"
+              f"  <- results are unreliable; refill/slow down and re-run")
     if timeouts:
         print(f"  timed out (infra, not graded): {len(timeouts)}")
     if errors:
@@ -810,6 +825,7 @@ def write_results(log_dir: Path, results: list[dict], *, model: str, wall: float
                                   if r.get("hit_iter_cap") and not r["solved"]],
         "timeouts": [r["id"] for r in results if r["status"] == "timeout"],
         "errors": [r["id"] for r in results if r["status"] == "error"],
+        "provider_errors": [r["id"] for r in results if r["status"] == "model-error"],
         "tasks": results,
     }
     ts = time.strftime("%Y%m%d-%H%M%S")
