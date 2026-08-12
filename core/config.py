@@ -52,6 +52,17 @@ DEFAULT_XAI_URL = "https://api.x.ai/v1"
 # integrate.api.nvidia.com; a SELF-HOSTED NIM container serves the same protocol at
 # e.g. http://localhost:8000/v1 (override base_url + drop the key for that).
 DEFAULT_NVIDIA_NIM_URL = "https://integrate.api.nvidia.com/v1"
+# Chinese frontier labs, all OpenAI-compatible (KIND_OPENAI) so users can paste a
+# key straight from the lab's own console instead of going through OpenRouter.
+#   DeepSeek   - platform.deepseek.com  (base accepts /chat/completions directly)
+#   Moonshot   - Kimi models; default is the INTERNATIONAL host (.ai). Mainland
+#                keys from platform.moonshot.cn need base_url swapped to
+#                https://api.moonshot.cn/v1 (a .cn key is a different account).
+#   Zhipu/GLM  - open.bigmodel.cn v4 takes the raw API key as a Bearer token; the
+#                international Z.ai host is https://api.z.ai/api/paas/v4.
+DEFAULT_DEEPSEEK_URL = "https://api.deepseek.com"
+DEFAULT_MOONSHOT_URL = "https://api.moonshot.ai/v1"
+DEFAULT_ZHIPU_URL = "https://open.bigmodel.cn/api/paas/v4"
 
 KIND_OLLAMA = "ollama"
 KIND_OPENAI = "openai_compatible"
@@ -76,6 +87,14 @@ NVIDIA_NIM_MODELS = [
     "qwen/qwen2.5-coder-32b-instruct",
     "mistralai/mixtral-8x22b-instruct-v0.1",
 ]
+# Native model ids for the Chinese labs (un-namespaced, unlike OpenRouter's
+# "deepseek/..." / "z-ai/..."). A key + one of these + --allow-cloud routes out
+# of the box; add newer ids via `mapache setup` / config.
+DEEPSEEK_MODELS = ["deepseek-chat", "deepseek-reasoner"]
+MOONSHOT_MODELS = [
+    "kimi-k2-0711-preview", "moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k",
+]
+ZHIPU_MODELS = ["glm-4.6", "glm-4.5", "glm-4-plus", "glm-4-air", "glm-4-flash"]
 
 
 def _default_config() -> dict[str, Any]:
@@ -112,6 +131,18 @@ def _default_config() -> dict[str, Any]:
             "nvidia_nim": {
                 "kind": KIND_OPENAI, "base_url": DEFAULT_NVIDIA_NIM_URL,
                 "api_key": "", "models": list(NVIDIA_NIM_MODELS), "enabled": True,
+            },
+            "deepseek": {
+                "kind": KIND_OPENAI, "base_url": DEFAULT_DEEPSEEK_URL,
+                "api_key": "", "models": list(DEEPSEEK_MODELS), "enabled": True,
+            },
+            "moonshot": {
+                "kind": KIND_OPENAI, "base_url": DEFAULT_MOONSHOT_URL,
+                "api_key": "", "models": list(MOONSHOT_MODELS), "enabled": True,
+            },
+            "zhipu": {
+                "kind": KIND_OPENAI, "base_url": DEFAULT_ZHIPU_URL,
+                "api_key": "", "models": list(ZHIPU_MODELS), "enabled": True,
             },
         },
         "messaging": {"telegram_token": "", "discord_token": ""},
@@ -151,6 +182,13 @@ _ENV_MAP: dict[str, tuple[str, ...]] = {
     "NVIDIA_API_KEY": ("providers", "nvidia_nim", "api_key"),
     "NGC_API_KEY": ("providers", "nvidia_nim", "api_key"),
     "NVIDIA_NIM_URL": ("providers", "nvidia_nim", "base_url"),
+    "DEEPSEEK_API_KEY": ("providers", "deepseek", "api_key"),
+    "MOONSHOT_API_KEY": ("providers", "moonshot", "api_key"),
+    "MOONSHOT_BASE_URL": ("providers", "moonshot", "base_url"),
+    "KIMI_API_KEY": ("providers", "moonshot", "api_key"),
+    "ZHIPU_API_KEY": ("providers", "zhipu", "api_key"),
+    "GLM_API_KEY": ("providers", "zhipu", "api_key"),
+    "ZHIPU_BASE_URL": ("providers", "zhipu", "base_url"),
     "TELEGRAM_BOT_TOKEN": ("messaging", "telegram_token"),
     "DISCORD_BOT_TOKEN": ("messaging", "discord_token"),
 }

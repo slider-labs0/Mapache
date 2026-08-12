@@ -40,6 +40,9 @@ class Provider(str, Enum):
     NOUS        = "nous"
     GROK        = "grok"
     NIM         = "nvidia_nim"
+    DEEPSEEK    = "deepseek"
+    MOONSHOT    = "moonshot"
+    ZHIPU       = "zhipu"
 
 
 @dataclass
@@ -284,6 +287,53 @@ class ModelRegistry:
             "vram_gb": 0.0,
             "cost_per_1k_tokens": 0.003,
             "tags": ["cloud", "balanced", "recommended-cloud"],
+        },
+        # ── DeepSeek (native, OpenAI-compatible) ──────────────────────
+        {
+            "id": "deepseek-reasoner",
+            "provider": Provider.DEEPSEEK,
+            "display_name": "DeepSeek R1 (reasoner)",
+            "planner_score": 0.92, "executor_score": 0.82, "verifier_score": 0.90,
+            "capabilities": ModelCapabilities(
+                supports_tools=True, supports_json_mode=True, context_window=64000),
+            "speed_score": 0.55, "quality_score": 0.90, "vram_gb": 0.0,
+            "cost_per_1k_tokens": 0.0022,
+            "tags": ["cloud", "planner", "reasoning", "cheap"],
+        },
+        {
+            "id": "deepseek-chat",
+            "provider": Provider.DEEPSEEK,
+            "display_name": "DeepSeek V3 (chat)",
+            "planner_score": 0.85, "executor_score": 0.88, "verifier_score": 0.82,
+            "capabilities": ModelCapabilities(
+                supports_tools=True, supports_json_mode=True, context_window=64000),
+            "speed_score": 0.78, "quality_score": 0.85, "vram_gb": 0.0,
+            "cost_per_1k_tokens": 0.0011,
+            "tags": ["cloud", "executor", "cheap"],
+        },
+        # ── Moonshot / Kimi (native, OpenAI-compatible) ───────────────
+        {
+            "id": "kimi-k2-0711-preview",
+            "provider": Provider.MOONSHOT,
+            "display_name": "Kimi K2",
+            "planner_score": 0.88, "executor_score": 0.88, "verifier_score": 0.85,
+            "capabilities": ModelCapabilities(
+                supports_tools=True, supports_json_mode=True, context_window=128000),
+            "speed_score": 0.72, "quality_score": 0.88, "vram_gb": 0.0,
+            "cost_per_1k_tokens": 0.0025,
+            "tags": ["cloud", "planner", "agentic", "large-context"],
+        },
+        # ── Zhipu / GLM (native, OpenAI-compatible) ───────────────────
+        {
+            "id": "glm-4.6",
+            "provider": Provider.ZHIPU,
+            "display_name": "GLM-4.6",
+            "planner_score": 0.87, "executor_score": 0.87, "verifier_score": 0.84,
+            "capabilities": ModelCapabilities(
+                supports_tools=True, supports_json_mode=True, context_window=128000),
+            "speed_score": 0.75, "quality_score": 0.87, "vram_gb": 0.0,
+            "cost_per_1k_tokens": 0.0012,
+            "tags": ["cloud", "agentic", "coding"],
         },
     ]
 
