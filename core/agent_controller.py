@@ -1784,6 +1784,17 @@ class AgentController:
             # prior findings through it and records its own for the next stage.
             knowledge_graph=self.knowledge_graph,
         )
+        # Stall/iteration tuning lives as per-INSTANCE overrides on the lead (a
+        # flag-hunt harness, for example, raises STALL_ABORT_NOPROG so the "no new
+        # findings in N steps" backstop doesn't kill a legitimate flag hunt that
+        # records no report_finding). A freshly-minted child reverts to the class
+        # defaults, so a delegated flag-hunt would silently die at NOPROG=8 again.
+        # Carry the lead's tuning onto the child so delegation inherits the policy.
+        # In a normal run the lead holds the class defaults, so this is a no-op there.
+        for _attr in ("MAX_ITERATIONS", "STALL_ABORT_NOPROG", "STALL_ABORT_DUP",
+                      "STALL_NUDGE_STEPS"):
+            setattr(child, _attr, getattr(self, _attr))
+
         # Give the child its tools: an operator gets only its curated subset
         # (intersected with what's registered); a generalist gets everything.
         # The delegation tools are never copied (a sub-agent can't re-delegate).

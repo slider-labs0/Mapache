@@ -3241,6 +3241,7 @@ def test_cybench_harness_loader():
         assert ta.flag == "HTB{k3y}"                 # last subtask answer is the flag
         assert ta.categories == ["crypto"]
         assert ta.subtask_answers == ["65537", "HTB{k3y}"]
+        assert ta.subtask_questions == ["e?", "flag?"]   # questions parsed too
         assert not ta.needs_server and ta.files_dir is not None
 
         tb = by_id["portal"]
@@ -3261,6 +3262,43 @@ def test_cybench_harness_loader():
         # A confident guess WITHOUT the real flag string is not solved.
         miss, subs2 = cb.grade_transcript(ta, "the flag is probably HTB{wrong}")
         assert not miss and subs2 == 0, (miss, subs2)
+
+        # Subtask-guided scaffold (Cybench's biggest solve-rate lever): the ordered
+        # subtask QUESTIONS become a hint, the final "flag?" step is dropped, and
+        # NOTHING gradeable (no answer) leaks - else guided mode would be cheating.
+        scaffold = cb._guided_scaffold(ta)
+        assert "e?" in scaffold and "flag?" not in scaffold   # last step dropped
+        for ans in ta.subtask_answers:
+            assert ans not in scaffold, f"guided scaffold leaked answer {ans}"
+
+        # Results persistence: a completed run writes a diagnosable JSON (headline +
+        # per-category + budget-bound near-misses vs infra timeouts) so "why 18/39"
+        # is answerable after the fact, plus a stable results-latest.json pointer.
+        recs = [
+            {"id": "dyn", "categories": ["crypto"], "difficulty": "2", "status": "ok",
+             "solved": True, "subtasks": 2, "subtasks_total": 2, "iterations": 9,
+             "max_iters": 40, "hit_iter_cap": False, "guided": False, "seconds": 4.0,
+             "detail": ""},
+            {"id": "portal", "categories": ["web"], "difficulty": "3", "status": "ok",
+             "solved": False, "subtasks": 0, "subtasks_total": 1, "iterations": 40,
+             "max_iters": 40, "hit_iter_cap": True, "guided": False, "seconds": 88.0,
+             "detail": ""},
+            {"id": "boom", "categories": ["pwn"], "difficulty": "5", "status": "timeout",
+             "solved": False, "subtasks": 0, "subtasks_total": 2, "iterations": 0,
+             "max_iters": 40, "hit_iter_cap": False, "guided": False, "seconds": 900.0,
+             "detail": "x"},
+        ]
+        out_dir = _Path(tmp) / "out"
+        out_dir.mkdir()
+        out = cb.write_results(out_dir, recs, model="m", wall=992.0,
+                               guided=False, exec_backend="docker")
+        summary = _json.loads(out.read_text(encoding="utf-8"))
+        assert summary["solved"] == 1 and summary["graded"] == 2
+        assert summary["attempted"] == 3 and summary["mode"] == "unguided"
+        assert summary["budget_bound_unsolved"] == ["portal"]  # raise --max-iters
+        assert summary["timeouts"] == ["boom"]                 # infra loss, not model
+        assert summary["by_category"]["crypto"] == {"solved": 1, "graded": 1}
+        assert (out_dir / "results-latest.json").is_file()
     print("  PASS  cybench_harness_loader")
 
 
@@ -3515,6 +3553,50 @@ async def test_subagent_receives_mission_context():
     assert "SUBTASK_MARK" in child_ctx         # its own subtask too
     assert "never invent it" in child_ctx      # honesty directive present
     print("  PASS  subagent_receives_mission_context")
+
+
+async def test_subagent_inherits_stall_tuning():
+    """Stall/iteration tuning is a per-INSTANCE override on the lead (a flag-hunt
+    harness raises STALL_ABORT_NOPROG so a legit flag hunt that records no
+    report_finding isn't killed at the class default of 8 no-progress steps). A
+    freshly-minted child must inherit that policy instead of silently reverting to
+    the class defaults - otherwise a delegated flag-hunt dies at NOPROG=8 again."""
+    children: list = []
+    orig_init = AgentController.__init__
+
+    def rec_init(self, *a, **k):
+        orig_init(self, *a, **k)
+        if k.get("delegation_depth"):          # depth >= 1 => a delegated child
+            children.append(self)
+
+    class Disp:
+        async def dispatch(self, name, args, session_id): return "ok"
+
+    class M:
+        supports_tools = False
+        async def chat(self, messages, tools=None, json_mode=False, stream=False):
+            joined = " ".join(m.get("content", "") for m in messages)
+            if "subagent result" in joined:                    # lead, after child
+                return json.dumps({"type": "response", "content": "done"})
+            if "CHILD_MARK" in joined:                         # the child
+                return json.dumps({"type": "response", "content": "child done"})
+            return json.dumps({"type": "tool_call", "tool": "delegate",
+                               "args": {"task": "CHILD_MARK go"}})
+
+    AgentController.__init__ = rec_init
+    try:
+        lead = AgentController(model_provider=M(), tool_dispatcher=Disp(),
+                               mode=AgentMode.AGENT, use_function_calling=False)
+        lead.STALL_ABORT_NOPROG = 999          # harness-style flag-hunt override
+        lead.MAX_ITERATIONS = 40
+        await lead.start()
+        await lead.run("do the thing", session_id="s")
+    finally:
+        AgentController.__init__ = orig_init
+    assert children, "no child was spawned"
+    assert children[0].STALL_ABORT_NOPROG == 999   # inherited, not the default 8
+    assert children[0].MAX_ITERATIONS == 40
+    print("  PASS  subagent_inherits_stall_tuning")
 
 
 async def test_fabrication_guard_flags_unverified():
@@ -6223,6 +6305,7 @@ async def run_all():
     test_dispatcher_with_backend_rebinds_tools()
     await test_subagent_gets_own_backend_and_teardown()
     await test_subagent_receives_mission_context()
+    await test_subagent_inherits_stall_tuning()
     await test_fabrication_guard_flags_unverified()
 
     print("\nAutonomous multi-agent supervisor (orchestrator)")
