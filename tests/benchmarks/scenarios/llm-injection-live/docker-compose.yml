@@ -1,0 +1,11 @@
+# Live LLM target: an injectable support-bot API (OWASP LLM01). Stdlib only ->
+# stock python image, no build, no model backend required.
+services:
+  bot:
+    image: python:3.11-slim
+    command: python /app/bot.py
+    volumes:
+      - ./app:/app:ro
+    ports:
+      - "127.0.0.1:0:8000"
+    restart: "no"

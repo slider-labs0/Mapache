@@ -1,0 +1,11 @@
+# Live cloud target: an instance metadata service with IMDSv1 enabled (credentials
+# retrievable with no token). Stdlib only -> stock python image, no build.
+services:
+  imds:
+    image: python:3.11-slim
+    command: python /app/imds.py
+    volumes:
+      - ./app:/app:ro
+    ports:
+      - "127.0.0.1:0:8080"
+    restart: "no"

@@ -1,0 +1,16 @@
+# Live AD target. Kerberos assumes FIXED ports (KDC 88, LDAP 389) at the DC IP, so
+# these are published on fixed loopback ports rather than auto-assigned. The agent
+# points impacket at dc-ip 127.0.0.1. Needs a runner with impacket/krb5 to attack.
+services:
+  dc:
+    build:
+      context: .
+    hostname: dc.corp.local
+    ports:
+      - "127.0.0.1:445:445"
+      - "127.0.0.1:389:389"
+      - "127.0.0.1:88:88"
+      - "127.0.0.1:464:464"
+      - "127.0.0.1:636:636"
+    # AD DC wants to manage its own hostname/DNS; give it a stable one.
+    restart: "no"

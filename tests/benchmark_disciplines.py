@@ -263,6 +263,7 @@ def _build_agent(provider, *, session_id: str, max_iters: int, findings_path: Pa
     from core.findings import FindingsStore
     from security_tools.recon_weapons import SecretScanTool, TechDetectTool
     from security_tools.web_weapons import SearchPayloadsTool, JwtTool
+    from security_tools.ad_tools import AdAttackTool
     from browser.scraping_tools import WebSession, WebFetchTool, HttpRequestTool
     from cli.mapache_cli import SYSTEM_PROMPT
 
@@ -275,7 +276,7 @@ def _build_agent(provider, *, session_id: str, max_iters: int, findings_path: Pa
     # ShellTool routes through the DockerBackend for analysis targets (so cat/grep/nm
     # run INSIDE the target container); local for live-service targets.
     tools = [ShellTool(backend=docker_backend), ReportFindingTool(store=findings),
-             SecretScanTool(), SearchPayloadsTool(), JwtTool(),
+             SecretScanTool(), SearchPayloadsTool(), JwtTool(), AdAttackTool(),
              WebFetchTool(session=web_session), HttpRequestTool(session=web_session),
              TechDetectTool(session=web_session)]
     for t in tools:
@@ -321,10 +322,14 @@ async def run_scenario(scenario: Scenario, provider, *, max_iters: int, log_dir:
             proto = str(scenario.target.get("proto", "http"))
             hport = service_host_port(project, str(scenario.root),
                                       scenario.target["service"], cport)
-            if not wait_ready(hport, proto):
+            # Some targets (an AD DC provisions on first boot) need longer to be ready.
+            if not wait_ready(hport, proto, tries=int(scenario.target.get("ready_tries", 30))):
                 raise RuntimeError(f"service not ready on 127.0.0.1:{hport}")
             endpoint = (f"http://127.0.0.1:{hport}" if proto == "http"
                         else f"127.0.0.1:{hport} ({proto})")
+            hint = scenario.target.get("hint")
+            if hint:
+                endpoint += f"\n    {hint}"
         else:  # analysis
             if scenario.has_compose:
                 compose_up(scenario, project, build_timeout=build_timeout)
@@ -399,7 +404,8 @@ async def preflight(scenarios: list[Scenario], build_timeout: int) -> int:
                 cport = int(s.target.get("port", 80))
                 proto = str(s.target.get("proto", "http"))
                 hport = service_host_port(project, str(s.root), s.target["service"], cport)
-                status = "UP+READY" if wait_ready(hport, proto) else "UP-NOT-READY"
+                ready = wait_ready(hport, proto, tries=int(s.target.get("ready_tries", 30)))
+                status = "UP+READY" if ready else "UP-NOT-READY"
             elif s.has_compose:
                 compose_up(s, project, build_timeout=build_timeout)
                 cid = service_container_id(project, str(s.root),
