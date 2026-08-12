@@ -5377,6 +5377,62 @@ def test_config_execution_section():
     assert ic.to_dict()["integrations"][0]["name"] == "x"
 
 
+async def test_code_run_tool():
+    """code_run is the write->compile->run->fix loop primitive: it stages source
+    into the shell's environment, runs it with argv+stdin, and returns a STRUCTURED
+    verdict (OK / RUNTIME ERROR / COMPILE FAILED) so the model can iterate. Backend-
+    aware (docker/ssh route off-host) and it must not litter the cwd."""
+    import os as _os
+    from tools.code_tools import CodeRunTool, _LANGS, _ALIASES
+    from core.exec_backend import ExecResult
+
+    t = CodeRunTool()  # local backend
+
+    # 1. Success path: argv + stdin both reach the program; exit 0 => ok.
+    r = await t.execute(language="python",
+                        code="import sys\nprint('ARGV', sys.argv[1:])\n"
+                             "print('IN', sys.stdin.read().strip())",
+                        args="one 2", stdin="piped")
+    assert r.success and r.metadata["ok"] is True
+    assert "ARGV ['one', '2']" in r.output and "IN piped" in r.output
+    assert "OK (exit 0)" in r.output
+
+    # 2. Runtime error is reported as a non-zero exit with the traceback, NOT a
+    # tool crash - that's the signal the model fixes against.
+    r = await t.execute(language="python", code="raise SystemExit(7)")
+    assert r.metadata["ok"] is False and "RUNTIME ERROR (exit 7)" in r.output
+
+    # 3. Aliases resolve; unsupported language is rejected cleanly.
+    assert _ALIASES["py"] == "python" and "c" in _LANGS
+    bad = await t.execute(language="cobol", code="x")
+    assert not bad.success and "Unsupported" in bad.error
+
+    # 4. A compile step routes through the backend BEFORE running. Use a fake POSIX
+    # backend to prove the compile-first contract without needing gcc on the host:
+    # a non-zero compile returns COMPILE FAILED and never reaches the run command.
+    class FakeBackend:
+        name = "docker"           # non-local => POSIX staging path
+        def __init__(self): self.cmds = []
+        async def run(self, cmd, *, timeout=30, working_dir=""):
+            self.cmds.append(cmd)
+            if "base64 -d" in cmd:            # staging
+                return ExecResult("", exit_code=0)
+            if cmd.split()[0] in ("gcc", "g++"):          # compile step
+                return ExecResult("prog.c:1: error: expected ';'", exit_code=1)
+            return ExecResult("SHOULD-NOT-RUN", exit_code=0)
+    fb = FakeBackend()
+    tf = CodeRunTool(backend=fb)
+    r = await tf.execute(language="c", code="int main(){return 0}")  # missing ;
+    assert "COMPILE FAILED" in r.output and "expected ';'" in r.output
+    assert r.metadata["ok"] is False
+    assert not any("SHOULD-NOT-RUN" in c for c in fb.cmds)   # run never attempted
+    assert any("base64 -d" in c for c in fb.cmds)            # staged via base64
+
+    # 5. No stray files left in the process cwd.
+    assert not _os.path.exists("mapache_prog.py") and not _os.path.exists("mapache_prog.c")
+    print("  PASS  code_run_tool")
+
+
 async def test_external_tools():
     import os
     from tools.external_tools import (build_external_tools, HttpApiTool, CommandTool,
@@ -6309,6 +6365,7 @@ async def run_all():
     test_egress_profile()
     await test_egress_wires_into_tools()
     test_config_execution_section()
+    await test_code_run_tool()
     await test_external_tools()
     await test_command_tool_clone_autoheal()
     test_tool_registry_name_collision_guard()

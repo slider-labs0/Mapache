@@ -99,10 +99,10 @@ _RECON = {"nmap_scan", "web_fetch", "web_search", "http_request", "http_repeater
           "shell", "searchsploit", "tech_detect"}
 _WEB = {"kali_run", "web_fetch", "web_search", "http_request", "http_repeater",
         "browser", "sqlmap", "fuzz", "burp_scan", "burp_proxy", "searchsploit", "shell",
-        "tech_detect", "jwt_tool", "graphql", "llm_inject"}
+        "tech_detect", "jwt_tool", "graphql", "llm_inject", "code_run"}
 _EXPLOIT = {"msf_search", "msf_run", "msf_sessions", "searchsploit", "http_request",
             "http_repeater", "sqlmap", "fuzz", "kali_run", "shell", "jwt_tool", "graphql",
-            "llm_inject", "ad_attack"}
+            "llm_inject", "ad_attack", "code_run"}
 _POST = {"shell", "kali_run", "john_crack", "john_identify", "msf_sessions", "file_read",
          "ad_attack"}
 _ANALYSIS = {"shell", "kali_run", "file_read", "file_list", "file_search",
@@ -192,13 +192,31 @@ _add(Operator(
               "and reason over the source.",
 ))
 _add(Operator(
+    name="exploit_dev", title="Exploit Developer", phase="exploitation",
+    model_role="planner",  # writing correct exploit code is reasoning-heavy
+    description="Write and debug attack scripts / exploits (PoC development in a tight loop).",
+    # code_run is the workhorse: author + compile + run in the target's own
+    # environment. file_* to read the challenge source and refine; shell for the
+    # surrounding setup; http_request to probe a service the exploit will hit.
+    tools={"code_run", "file_read", "file_write", "file_edit", "file_list",
+           "file_search", "shell", "http_request", "binary_analyze"},
+    expertise="develop working exploits/PoCs as CODE, not prose. Loop tightly with "
+              "code_run: write the script, RUN it, read the compiler/runtime error, "
+              "fix, repeat until it actually fires - never hand back untested code. "
+              "Python (pwntools for pwn: cyclic pattern → offset → ROP/ret2libc; "
+              "requests for web), C for shellcode/format-string/heap work, bash for "
+              "glue. Read the challenge source with file_read first and target the "
+              "REAL binary/service; quote the exact recovered artifact (flag, shell, "
+              "leak) as evidence. Prefer deterministic, re-runnable scripts.",
+))
+_add(Operator(
     name="reverser", title="Reverser", phase="analysis",
     model_role="planner",  # reasoning over binaries
     description="Binary analysis and reverse engineering.",
     # binary_analyze: structured triage (checksec/strings/nm/ROPgadget with parsed output);
     # file_search: grep strings/symbols/xrefs across an unpacked binary/firmware tree.
     tools={"shell", "kali_run", "file_read", "file_list", "file_search", "binary_analyze",
-           "create_tool"},
+           "code_run", "create_tool"},
     expertise="ELF/PE/Mach-O triage, packer detection, ROP gadget inventories, and "
               "Ghidra/radare2 static recon driven through shell/kali_run; surface "
               "exploitable primitives.",
@@ -333,7 +351,7 @@ _add(Operator(
 _add(Operator(
     name="exploiter", title="Exploiter", phase="exploitation", model_role="executor",
     description="Vuln-research stage 5 - build a working proof-of-concept.",
-    tools={"msf_search", "msf_run", "kali_run", "shell", "searchsploit"},
+    tools={"msf_search", "msf_run", "kali_run", "shell", "searchsploit", "code_run"},
     expertise="for a verified finding, build a WORKING proof-of-concept against the "
               "in-scope target and capture the exact evidence (session, output, artifact). "
               "Record the PoC + evidence in the knowledge graph.",
