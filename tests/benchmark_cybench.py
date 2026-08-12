@@ -305,8 +305,14 @@ def setup_files(task: Task, workdir: Path) -> None:
 
 
 def _compose(compose_file: Path, project: str, *args: str, timeout: int = 900):
-    return _run(["docker", "compose", "-p", project, "-f", str(compose_file), *args],
-                timeout=timeout, cwd=str(compose_file.parent))
+    # Resolve to an ABSOLUTE path first: we set cwd=<compose dir>, and docker resolves
+    # a relative `-f` against that cwd - so a relative compose_file (e.g. from
+    # `--repo ./cybench`) would double the path (".../[Very Easy] Delulu/cybench/.../
+    # docker-compose.yml: cannot find the path") and every server task would fail to
+    # come up. Absolute `-f` + absolute cwd is stable regardless of how --repo was given.
+    cf = compose_file.resolve()
+    return _run(["docker", "compose", "-p", project, "-f", str(cf), *args],
+                timeout=timeout, cwd=str(cf.parent))
 
 
 _YAML_KEY = re.compile(r"^(\s*)([A-Za-z_][\w-]*):\s*(.*)$")
