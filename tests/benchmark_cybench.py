@@ -65,7 +65,7 @@ def _quiet_and_utf8() -> None:
 from core.agent_controller import AgentController, AgentMode          # noqa: E402
 from core.engagement_scope import EngagementScope                     # noqa: E402
 from core.engagement_log import EngagementLog                         # noqa: E402
-from core.exec_backend import LocalBackend                            # noqa: E402
+from core.exec_backend import LocalBackend, DockerBackend            # noqa: E402
 from tools.tool_registry import ToolRegistry                          # noqa: E402
 from tools.tool_dispatcher import ToolDispatcher                      # noqa: E402
 from plugins.sdk.base_tool import Permission                          # noqa: E402
@@ -220,6 +220,56 @@ def select_tasks(tasks: list[Task], only: str, category: str, limit: int) -> lis
 
 def _run(argv: list[str], *, timeout: int = 300, cwd: str | None = None):
     return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, cwd=cwd)
+
+
+# --------------------------------------------------------------------------- #
+# Linux tools container (docker exec backend). Cybench tasks (reverse/pwn/
+# forensics) need Linux tooling the Windows host lacks - run the agent's shell
+# INSIDE a container that has it, exactly like Cybench's own Kali-based runner.
+# --------------------------------------------------------------------------- #
+
+TOOLS_IMAGE_DEFAULT = "cybench-tools:latest"
+_TOOLS_DOCKERFILE = """FROM ubuntu:22.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \\
+      binutils gdb file xxd bsdmainutils netcat-openbsd python3 python3-pip \\
+      tshark tcpdump binwalk foremost steghide unzip p7zip-full curl wget git \\
+      ltrace strace ca-certificates && \\
+    pip3 install --no-cache-dir --break-system-packages pwntools pycryptodome \\
+      requests scapy || pip3 install --no-cache-dir pwntools pycryptodome requests scapy; \\
+    rm -rf /var/lib/apt/lists/*
+WORKDIR /work
+"""
+
+
+def ensure_tools_image(image: str) -> None:
+    """Build the CTF-tools image once (idempotent). Reused across tasks/runs."""
+    if _run(["docker", "image", "inspect", image], timeout=30).returncode == 0:
+        return
+    print(f"[tools] building {image} (one-time, a few minutes)…")
+    p = subprocess.run(["docker", "build", "-t", image, "-"], input=_TOOLS_DOCKERFILE,
+                       text=True, capture_output=True, timeout=1800)
+    if p.returncode != 0:
+        raise RuntimeError(f"tools image build failed: {(p.stderr or p.stdout)[-400:]}")
+
+
+def tools_container_up(image: str, name: str, workdir: Path) -> None:
+    """Start a long-lived tools container and copy the challenge files into /work."""
+    _run(["docker", "rm", "-f", name], timeout=30)
+    r = _run(["docker", "run", "-d", "--name", name, "-w", "/work",
+              image, "sleep", "infinity"], timeout=120)
+    if r.returncode != 0:
+        raise RuntimeError(f"tools container start failed: {(r.stderr or r.stdout)[:200]}")
+    _run(["docker", "exec", name, "mkdir", "-p", "/work"], timeout=30)
+    if any(workdir.iterdir()):
+        cp = _run(["docker", "cp", f"{workdir}/.", f"{name}:/work"], timeout=180)
+        if cp.returncode != 0:
+            raise RuntimeError(f"copy files into tools container failed: "
+                               f"{(cp.stderr or cp.stdout)[:200]}")
+
+
+def tools_container_down(name: str) -> None:
+    _run(["docker", "rm", "-f", name], timeout=60)
 
 
 def setup_files(task: Task, workdir: Path) -> None:
@@ -417,10 +467,11 @@ class _RootedLocalBackend(LocalBackend):
         return await super().run(cmd, timeout=timeout, working_dir=working_dir or self.root)
 
 
-def _build_controller(provider, workdir: Path, *, max_iters: int, log_path: Path,
+def _build_controller(provider, *, backend, max_iters: int, log_path: Path,
                       session_id: str):
-    """The same broad toolset benchmark_xbow uses, but with shell rooted at the
-    challenge dir and no web target assumed (Cybench is multi-category)."""
+    """The same broad toolset benchmark_xbow uses, but with the shell routed through
+    `backend` (local shell rooted at the challenge dir, or docker-exec into a Linux
+    tools container) and no web target assumed (Cybench is multi-category)."""
     from browser.scraping_tools import WebSession, WebFetchTool, HttpRequestTool, HttpRepeaterTool
     from browser.http_history import HTTPHistory
     from security_tools.web_weapons import SearchPayloadsTool, JwtTool
@@ -436,7 +487,7 @@ def _build_controller(provider, workdir: Path, *, max_iters: int, log_path: Path
     web_session = WebSession()
     history = HTTPHistory()
     findings = FindingsStore(path=log_path.with_name(f"{session_id}-findings.json"))
-    for tool in (ShellTool(backend=_RootedLocalBackend(str(workdir))),
+    for tool in (ShellTool(backend=backend),
                  FileReadTool(),
                  WebFetchTool(session=web_session),
                  HttpRequestTool(session=web_session, history=history),
@@ -484,10 +535,11 @@ def grade_transcript(task: Task, haystack: str) -> tuple[bool, int]:
     return found, sub_hits
 
 
-async def run_agent(task: Task, workdir: Path, endpoint: str, provider, *,
-                    max_iters: int, log_path: Path, session_id: str):
+async def run_agent(task: Task, workdir_label: str, endpoint: str, provider, *,
+                    backend, max_iters: int, log_path: Path, session_id: str):
     controller, registry, seen = _build_controller(
-        provider, workdir, max_iters=max_iters, log_path=log_path, session_id=session_id)
+        provider, backend=backend, max_iters=max_iters, log_path=log_path,
+        session_id=session_id)
     for schema in registry.get_context_schemas():
         controller.register_tool(schema)
     await controller.start(inject_project_context=False)
@@ -499,7 +551,7 @@ async def run_agent(task: Task, workdir: Path, endpoint: str, provider, *,
     objective = OBJECTIVE.format(
         name=task.id, categories=", ".join(task.categories) or "unknown",
         difficulty=task.difficulty or "unknown", server_line=server_line,
-        workdir=str(workdir), prompt=task.prompt, fmt_hint=fmt_hint)
+        workdir=workdir_label, prompt=task.prompt, fmt_hint=fmt_hint)
 
     result = await controller.run(objective, session_id=session_id)
     haystack = (result.content or "") + "\n" + "\n".join(seen)
@@ -509,10 +561,12 @@ async def run_agent(task: Task, workdir: Path, endpoint: str, provider, *,
 
 async def run_one(task: Task, provider, prov_label: str, *, max_iters: int,
                   build_timeout: int, run_timeout: int, log_dir: Path,
+                  exec_backend: str = "docker", tools_image: str = TOOLS_IMAGE_DEFAULT,
                   preflight: bool = False) -> dict:
     # Compose project names must be [a-z0-9_-] only; Cybench ids have spaces/brackets.
     safe = re.sub(r"[^a-z0-9]+", "_", task.id.lower()).strip("_")[:40] or "task"
     project = "cyb_" + safe
+    tools_name = "cybtools_" + safe
     rec = {"id": task.id, "categories": task.categories, "difficulty": task.difficulty,
            "status": "error", "solved": False, "subtasks": 0,
            "subtasks_total": len(task.subtask_answers), "iterations": 0,
@@ -531,19 +585,40 @@ async def run_one(task: Task, provider, prov_label: str, *, max_iters: int,
 
     workdir = Path(tempfile.mkdtemp(prefix=f"cyb-{project}-"))
     endpoint = ""
+    use_docker = exec_backend == "docker"
+    tools_started = False
     try:
         setup_files(task, workdir)
         if task.compose_file is not None:
             endpoint = server_up(task, project, build_timeout=build_timeout)
+        if use_docker:
+            # Run the agent's shell inside a Linux tools container with the files.
+            tools_container_up(tools_image, tools_name, workdir)
+            tools_started = True
+            backend = DockerBackend(container=tools_name, workdir="/work")
+            workdir_label = "/work"
+            if task.needs_server:
+                # Put the tools container on the service's network so it reaches the
+                # service by its in-network name:port (Cybench's target_host), which
+                # also sidesteps host loopback-publish reachability from a container.
+                _run(["docker", "network", "connect", "shared_net", tools_name], timeout=30)
+                if task.target_host:
+                    endpoint = task.target_host
+        else:
+            backend = _RootedLocalBackend(str(workdir))
+            workdir_label = str(workdir)
         if preflight:
             rec.update(status="ready",
                        detail=(f"files+{len(list(workdir.iterdir()))} entries"
-                               + (f", server {endpoint}" if endpoint else "")))
+                               + (f", server {endpoint}" if endpoint else "")
+                               + (f", tools={tools_image}" if use_docker else "")))
         else:
-            print(f"  workdir={workdir}" + (f"  server={endpoint}" if endpoint else "")
+            print(f"  exec={'docker:'+tools_image if use_docker else 'local'}"
+                  + (f"  server={endpoint}" if endpoint else "")
                   + f"  - running agent (max_iters={max_iters})")
             found, subs, result, _ = await asyncio.wait_for(
-                run_agent(task, workdir, endpoint, provider, max_iters=max_iters,
+                run_agent(task, workdir_label, endpoint, provider, backend=backend,
+                          max_iters=max_iters,
                           log_path=log_dir / f"{task.id}.jsonl", session_id=task.id),
                 timeout=run_timeout)
             rec.update(status="ok", solved=bool(found), subtasks=subs,
@@ -554,6 +629,8 @@ async def run_one(task: Task, provider, prov_label: str, *, max_iters: int,
     except Exception as exc:
         rec.update(status="error", detail=str(exc)[:300])
     finally:
+        if tools_started:
+            tools_container_down(tools_name)
         server_down(task, project)
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -644,15 +721,19 @@ async def main_async(args) -> int:
 
     log_dir = Path(args.log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
+    if args.exec_backend == "docker":
+        ensure_tools_image(args.tools_image)  # one-time build of the CTF-tools image
     provider, prov_label = build_provider(args.model, args.base_url)
-    print(f"Running {len(tasks)} Cybench task(s) with {args.model} ({prov_label}).")
+    print(f"Running {len(tasks)} Cybench task(s) with {args.model} ({prov_label})  "
+          f"exec={args.exec_backend}.")
     results: list[dict] = []
     wall0 = time.time()
     for t in tasks:
         results.append(await run_one(
             t, provider, prov_label, max_iters=args.max_iters,
             build_timeout=args.build_timeout, run_timeout=args.run_timeout,
-            log_dir=log_dir, preflight=args.preflight))
+            log_dir=log_dir, exec_backend=args.exec_backend,
+            tools_image=args.tools_image, preflight=args.preflight))
     if not args.preflight:
         print_report(results, args.model, time.time() - wall0)
     return 0
@@ -673,6 +754,12 @@ def main() -> None:
     ap.add_argument("--run-timeout", type=int, default=900,
                     help="per-task agent budget (s)")
     ap.add_argument("--base-url", default="http://127.0.0.1:11434")
+    ap.add_argument("--exec-backend", default="docker", choices=["docker", "local"],
+                    help="where the agent's shell runs: docker = a Linux tools "
+                         "container (has strings/gdb/tshark/pwntools/…); local = the "
+                         "host shell (Windows lacks Linux CTF tooling)")
+    ap.add_argument("--tools-image", default=TOOLS_IMAGE_DEFAULT,
+                    help="docker image for the exec container (built if absent)")
     ap.add_argument("--log-dir", default="engagements/cybench")
     ap.add_argument("--check", action="store_true",
                     help="validate discovered tasks (no Docker/model)")
