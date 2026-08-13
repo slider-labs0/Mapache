@@ -4,7 +4,7 @@
 
 <h1 align="center">Mapache</h1>
 
-<p align="center"><i>Autonomous offensive-security agent. It does not just run nmap and write a report, it proves the finding.</i></p>
+<p align="center"><i>Autonomous offensive-security agent that runs the full kill chain across every discipline — and closes it with a working exploit, not a guess.</i></p>
 
 <div align="center">
 
