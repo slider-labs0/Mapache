@@ -228,11 +228,16 @@ def _run(argv: list[str], *, timeout: int = 300, cwd: str | None = None):
 # INSIDE a container that has it, exactly like Cybench's own Kali-based runner.
 # --------------------------------------------------------------------------- #
 
-TOOLS_IMAGE_DEFAULT = "cybench-tools:latest"
+# v2 adds a C/C++ toolchain (gcc/g++/make) so code_run can compile exploits/
+# shellcode and reverse tasks can build helpers, plus radare2 for decompilation
+# (the earlier sweep showed hard reverse tasks stalling with only gdb+objdump).
+# Bumped tag => a fresh build; the old cybench-tools:latest is never reused stale.
+TOOLS_IMAGE_DEFAULT = "cybench-tools:v2"
 _TOOLS_DOCKERFILE = """FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \\
       binutils gdb file xxd bsdmainutils netcat-openbsd python3 python3-pip \\
+      gcc g++ make radare2 \\
       tshark tcpdump binwalk foremost steghide unzip p7zip-full curl wget git \\
       ltrace strace ca-certificates && \\
     pip3 install --no-cache-dir --break-system-packages pwntools pycryptodome \\
@@ -478,6 +483,8 @@ def _build_controller(provider, *, backend, max_iters: int, log_path: Path,
     from security_tools.recon_weapons import SecretScanTool, TechDetectTool
     from security_tools.reversing_tools import BinaryAnalyzeTool
     from tools.reporting_tools import ReportFindingTool
+    from tools.filesystem_tool import FileWriteTool, FileEditTool
+    from tools.code_tools import CodeRunTool
     from core.findings import FindingsStore
 
     scope = EngagementScope.from_dict({"name": session_id})
@@ -488,7 +495,11 @@ def _build_controller(provider, *, backend, max_iters: int, log_path: Path,
     history = HTTPHistory()
     findings = FindingsStore(path=log_path.with_name(f"{session_id}-findings.json"))
     for tool in (ShellTool(backend=backend),
-                 FileReadTool(),
+                 FileReadTool(), FileWriteTool(), FileEditTool(),
+                 # code_run shares the shell's backend so exploits/PoCs compile+run
+                 # inside the same Linux tools container (pwntools, gcc) - the
+                 # write->run->fix loop crypto/pwn/reverse tasks actually need.
+                 CodeRunTool(backend=backend),
                  WebFetchTool(session=web_session),
                  HttpRequestTool(session=web_session, history=history),
                  HttpRepeaterTool(session=web_session, history=history),

@@ -59,6 +59,7 @@ from tools.filesystem_tool import (
     FileReadTool, FileWriteTool, FileEditTool,
     FileListTool, FileSearchTool,
 )
+from tools.code_tools import CodeRunTool
 from tools.tool_dispatcher import ToolDispatcher
 from tools.tool_registry import ToolRegistry, ToolNameCollisionError
 from tools.generated_tool_manager import GeneratedToolManager, build_meta_tools
@@ -624,6 +625,9 @@ class MapacheCLI:
             self.registry.register(FileEditTool())
             self.registry.register(FileListTool())
             self.registry.register(FileSearchTool())
+            # code_run: write+compile+run in the shell's environment (backend-aware)
+            # so exploits/PoCs are developed in a tight, structured loop.
+            self.registry.register(CodeRunTool(backend=self.exec_backend))
 
             # Recon
             self.registry.register(NmapTool(egress=self.egress))
