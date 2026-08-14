@@ -1277,6 +1277,46 @@ async def test_mcp_client():
     print("  PASS  mcp_client")
 
 
+async def test_mcp_launcher_path_resolution():
+    # A bare launcher like "npx" must be resolved through PATH (honouring
+    # PATHEXT) before exec, or on Windows create_subprocess_exec raises
+    # WinError 2 on the `.cmd` shim and MCP silently no-ops. Guard that
+    # start() passes the *resolved* path to the subprocess.
+    import shutil as _shutil
+    from integrations.mcp.mcp_client import MCPStdioClient, MCPServerConfig
+    import integrations.mcp.mcp_client as _mod
+
+    captured: dict[str, str] = {}
+
+    async def fake_exec(command, *args, **kwargs):
+        captured["command"] = command
+        raise RuntimeError("stop after capture")  # we only need the arg0
+
+    orig_which, orig_exec = _shutil.which, asyncio.create_subprocess_exec
+    _mod.shutil.which = lambda c: r"C:\tools\npx.CMD" if c == "npx" else None
+    _mod.asyncio.create_subprocess_exec = fake_exec
+    try:
+        client = MCPStdioClient(MCPServerConfig(name="x", command="npx", args=[]))
+        try:
+            await client.start()
+        except RuntimeError:
+            pass
+        assert captured.get("command") == r"C:\tools\npx.CMD", captured
+
+        # Unresolvable command falls back to the raw name (same error as before).
+        captured.clear()
+        client2 = MCPStdioClient(MCPServerConfig(name="y", command="nonesuch_zzz", args=[]))
+        try:
+            await client2.start()
+        except RuntimeError:
+            pass
+        assert captured.get("command") == "nonesuch_zzz", captured
+    finally:
+        _mod.shutil.which = orig_which
+        _mod.asyncio.create_subprocess_exec = orig_exec
+    print("  PASS  mcp_launcher_path_resolution")
+
+
 async def test_agent_duplicate_call_guard():
     # The same tool+args repeated within a turn must run once; later identical
     # calls are short-circuited with the cached result, breaking no-progress
@@ -6138,6 +6178,7 @@ async def run_all():
     await test_agent_mid_run_steering()
     await test_agent_delegation()
     await test_mcp_client()
+    await test_mcp_launcher_path_resolution()
     await test_agent_duplicate_call_guard()
     await test_agent_tool_events_carry_timing()
     await test_agent_middleware_hooks()

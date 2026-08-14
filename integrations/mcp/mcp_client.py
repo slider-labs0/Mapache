@@ -31,6 +31,7 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -110,8 +111,16 @@ class MCPStdioClient:
 
     async def start(self) -> None:
         env = {**os.environ, **self.config.env}
+        # Resolve the launcher through PATH honouring PATHEXT so bare commands
+        # like "npx"/"uvx" - the way every Claude-Desktop-style mcp.json writes
+        # them - find their real executable. On Windows create_subprocess_exec
+        # will not resolve the `.cmd`/`.bat` shim itself, so without this the
+        # canonical `"command": "npx"` fails with WinError 2 and MCP silently
+        # no-ops. Fall back to the raw command (surfaces the same error as before)
+        # when which() finds nothing.
+        command = shutil.which(self.config.command) or self.config.command
         self._proc = await asyncio.create_subprocess_exec(
-            self.config.command, *self.config.args,
+            command, *self.config.args,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
