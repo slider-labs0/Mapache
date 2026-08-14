@@ -8,6 +8,15 @@ version = "0.7.0"
 description = "Autonomous offensive-security agent"
 readme = "README.md"
 requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Information Technology",
+  "Topic :: Security",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+]
 dynamic = ["dependencies"]
 
 # `mapache serve` (full-screen TUI), `mapache setup`, `mapache version`, etc.
