@@ -39,18 +39,24 @@ from typing import Any, Optional
 
 from core.config import (
     ANTHROPIC_MODELS,
+    DEEPSEEK_MODELS,
     DEFAULT_ANTHROPIC_URL,
+    DEFAULT_DEEPSEEK_URL,
+    DEFAULT_MOONSHOT_URL,
     DEFAULT_NOUS_URL,
     DEFAULT_NVIDIA_NIM_URL,
     DEFAULT_OPENAI_URL,
     DEFAULT_OPENROUTER_URL,
     DEFAULT_XAI_URL,
+    DEFAULT_ZHIPU_URL,
     GROK_MODELS,
     KIND_ANTHROPIC,
     KIND_OLLAMA,
     KIND_OPENAI,
+    MOONSHOT_MODELS,
     NVIDIA_NIM_MODELS,
     OPENAI_MODELS,
+    ZHIPU_MODELS,
     load_config,
     load_global_raw,
     global_config_path,
@@ -82,6 +88,9 @@ PROVIDER_MENU = [
     ("grok", KIND_OPENAI, DEFAULT_XAI_URL, "XAI_API_KEY", True),
     ("nous", KIND_OPENAI, DEFAULT_NOUS_URL, "NOUS_API_KEY", True),
     ("nvidia_nim", KIND_OPENAI, DEFAULT_NVIDIA_NIM_URL, "NVIDIA_API_KEY", True),
+    ("deepseek", KIND_OPENAI, DEFAULT_DEEPSEEK_URL, "DEEPSEEK_API_KEY", True),
+    ("moonshot", KIND_OPENAI, DEFAULT_MOONSHOT_URL, "MOONSHOT_API_KEY", True),
+    ("zhipu", KIND_OPENAI, DEFAULT_ZHIPU_URL, "ZHIPU_API_KEY", True),
 ]
 
 # Suggested model ids per cloud provider for the chooser's pick list.
@@ -93,6 +102,9 @@ MODEL_SUGGESTIONS: dict[str, list[str]] = {
     "grok": list(GROK_MODELS),
     "nous": ["Hermes-4-405B"],
     "nvidia_nim": list(NVIDIA_NIM_MODELS),
+    "deepseek": list(DEEPSEEK_MODELS),
+    "moonshot": list(MOONSHOT_MODELS),
+    "zhipu": list(ZHIPU_MODELS),
 }
 
 

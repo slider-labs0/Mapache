@@ -1942,6 +1942,38 @@ def test_config_nvidia_nim_env_key_and_url():
     print("  PASS  config_nvidia_nim_env_key_and_url")
 
 
+def test_config_chinese_native_providers():
+    # DeepSeek / Moonshot(Kimi) / Zhipu(GLM) are native OpenAI-compatible providers
+    # so users paste a key straight from the lab's console (not via OpenRouter). A
+    # key + a native model id + --allow-cloud must route to the right base_url.
+    from core.config import (KIND_OPENAI, DEFAULT_DEEPSEEK_URL, DEFAULT_MOONSHOT_URL,
+                             DEFAULT_ZHIPU_URL)
+    with tempfile.TemporaryDirectory() as tmp:
+        gpath = _CfgPath(tmp) / "nope.json"
+        cfg = load_config(working_dir=tmp, global_path=gpath, environ={
+            "DEEPSEEK_API_KEY": "sk-ds", "KIMI_API_KEY": "sk-kimi", "GLM_API_KEY": "sk-glm"})
+        # Each native id resolves to its own provider + endpoint, key applied.
+        for mid, prov_name, url in [
+                ("deepseek-chat", "deepseek", DEFAULT_DEEPSEEK_URL),
+                ("deepseek-reasoner", "deepseek", DEFAULT_DEEPSEEK_URL),
+                ("kimi-k2-0711-preview", "moonshot", DEFAULT_MOONSHOT_URL),
+                ("glm-4.6", "zhipu", DEFAULT_ZHIPU_URL)]:
+            p = cfg.provider_for_model(mid)
+            assert p is not None and p.name == prov_name, (mid, p and p.name)
+            assert p.kind == KIND_OPENAI and p.base_url == url
+            assert p.is_cloud and p.is_usable and p.api_key
+
+        # Mainland Moonshot key is a different account -> base_url is overridable.
+        cfg2 = load_config(working_dir=tmp, global_path=gpath, environ={
+            "MOONSHOT_API_KEY": "sk-cn",
+            "MOONSHOT_BASE_URL": "https://api.moonshot.cn/v1"})
+        assert cfg2.providers["moonshot"].base_url == "https://api.moonshot.cn/v1"
+        # Without a key a cloud provider is not usable (won't be offered/routed).
+        cfg3 = load_config(working_dir=tmp, global_path=gpath, environ={})
+        assert not cfg3.providers["deepseek"].is_usable
+    print("  PASS  config_chinese_native_providers")
+
+
 def test_config_precedence_chain():
     with tempfile.TemporaryDirectory() as tmp:
         gpath = _CfgPath(tmp) / "global.json"
@@ -6205,6 +6237,7 @@ async def run_all():
     await test_anthropic_provider_translation_and_chat()
     test_model_pool_routes_anthropic()
     test_config_nvidia_nim_env_key_and_url()
+    test_config_chinese_native_providers()
     test_config_precedence_chain()
     test_config_env_layer_and_interpolation()
     test_config_provider_for_model_and_redaction()
