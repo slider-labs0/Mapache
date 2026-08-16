@@ -1263,7 +1263,7 @@ class MapacheCLI:
                       "window if you want the --tui layout.)")
 
         from core.updater import local_version as _lv
-        print(theme.render_banner(_lv(), color=theme.supports_color()))
+        print(theme.render_banner(_lv(), color=theme.supports_color(), large=True))
 
         # Session facts as a compact horizontal box (Claude-Code style) instead of
         # a one-per-line vertical list. Labels dim, values highlighted; width is
@@ -1280,7 +1280,6 @@ class MapacheCLI:
                if in_scope else "off (no scope.json)")
         box_rows = [
             sep.join([_kv("Model", self.model),
-                      _kv("Strategy", self.strategy.value),
                       _kv("Tools", f"{tools_n} registered")]),
             sep.join([_kv("Confirm", "on" if self.confirm else "off"),
                       _kv("Verifier", "on (--verify)" if self.args.verify else "off"),
@@ -1296,7 +1295,14 @@ class MapacheCLI:
             print(theme.paint(f"  [!] {self._workdir_note}", "amber", color=c))
 
         if self.routed:
-            print(f"\n{self.routed.explain()}")
+            # In the TUI the strategy + per-role models live in the sidebar's
+            # "Models" panel (a little box), not front-and-center. The classic CLI
+            # has no sidebar, so it still prints the routing explanation inline.
+            if getattr(self, "tui", None) is not None:
+                self.tui.dashboard.set_routing(
+                    self.routed.strategy_name(), self.routed.role_map())
+            else:
+                print(f"\n{self.routed.explain()}")
 
         if self.scope and self.scope.active:
             print(f"\n{self.scope.summary()}")
@@ -1632,6 +1638,14 @@ class MapacheCLI:
                 elapsed = time.monotonic() - getattr(self, "_turn_start_ts", time.monotonic())
                 tokens = getattr(getattr(self, "controller", None), "session_tokens", 0)
                 self.render.thinking(theme.status_line(word, elapsed, tokens))
+                # Refresh the right-hand HUD in step with the status clock.
+                _bud = dict(getattr(self.config, "budget", None) or {})
+                self.tui.dashboard.tick(
+                    elapsed, tokens,
+                    max_tokens=int(getattr(self.args, "budget_tokens", None)
+                                   or _bud.get("max_tokens", 0) or 0),
+                    max_seconds=float(getattr(self.args, "budget_seconds", None)
+                                      or _bud.get("max_seconds", 0) or 0))
             else:
                 action = getattr(self, "_running_action", None)
                 if action:

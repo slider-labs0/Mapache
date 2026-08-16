@@ -84,6 +84,170 @@ class OutputModel:
 
 
 # --------------------------------------------------------------------------- #
+# Right-hand agent dashboard (pure state - no prompt_toolkit, unit-testable)
+# --------------------------------------------------------------------------- #
+
+
+def _clip(text: str, n: int) -> str:
+    text = (text or "").replace("\n", " ")
+    return text if len(text) <= n else text[: max(0, n - 1)] + "…"
+
+
+class DashboardModel:
+    """State for the live agent HUD on the right of the screen: the active agent,
+    the target/phase, the engagement budget (time + tokens), tool-call activity, and
+    any running shells. Fed by `TuiRenderer` events and a periodic `tick`; `render`
+    returns the stacked ANSI panels. No prompt_toolkit here so it's testable."""
+
+    def __init__(self, on_change: Optional[Callable[[], None]] = None,
+                 width: int = 36) -> None:
+        self.width = width
+        self._on_change = on_change
+        self.agent = "lead"
+        self.agent_accent = "green"
+        self.agents = ["lead"]
+        self.phase = ""
+        self.target = ""
+        self.ports: list[str] = []
+        self.vulns = 0
+        self.tool_count = 0
+        self.recent_tools: list[str] = []
+        self.shells_running: "dict[int, str]" = {}
+        self.shells_done = 0
+        self.elapsed = 0.0
+        self.tokens = 0
+        self.max_tokens = 0
+        self.max_seconds = 0.0
+        self.spin = 0
+        self._shell_seq = 0
+        # Routing shown in the sidebar (moved off the front-and-center banner):
+        # the strategy plus the per-role model map (planner/executor/verifier).
+        self.strategy = ""
+        self.role_models: "dict[str, str]" = {}
+
+    def _changed(self) -> None:
+        if self._on_change is not None:
+            self._on_change()
+
+    # -- events (mirrored from the transcript renderer) ----------------- #
+
+    def set_agent(self, name: str, accent: str, *, back: bool = False) -> None:
+        if back:
+            self.agent, self.agent_accent = "lead", "green"
+        else:
+            self.agent, self.agent_accent = name, accent
+            if name not in self.agents:
+                self.agents.append(name)
+        self._changed()
+
+    def add_tool(self, name: str) -> None:
+        self.tool_count += 1
+        self.recent_tools.append(name)
+        self.recent_tools = self.recent_tools[-6:]
+        self._changed()
+
+    def shell_start(self, cmd: str) -> int:
+        self._shell_seq += 1
+        self.shells_running[self._shell_seq] = cmd
+        self._changed()
+        return self._shell_seq
+
+    def shell_end(self, sid: Optional[int] = None) -> None:
+        if sid is None and self.shells_running:
+            sid = next(iter(self.shells_running))
+        if sid is not None and self.shells_running.pop(sid, None) is not None:
+            self.shells_done += 1
+            self._changed()
+
+    def set_routing(self, strategy: str, role_models: "dict[str, str]") -> None:
+        self.strategy = strategy or ""
+        self.role_models = dict(role_models or {})
+        self._changed()
+
+    def set_state(self, state: Any) -> None:
+        if state is None:
+            return
+        self.phase = getattr(state, "current_phase", "") or self.phase
+        target = getattr(state, "target", "") or ""
+        if target:
+            self.target = target
+        self.ports = [str(p) for p in (getattr(state, "open_ports", None) or [])]
+        self.vulns = len(getattr(state, "vulnerabilities", None) or [])
+        self._changed()
+
+    def tick(self, elapsed: float, tokens: int, *, max_tokens: int = 0,
+             max_seconds: float = 0.0) -> None:
+        self.elapsed = elapsed
+        self.tokens = tokens or 0
+        if max_tokens:
+            self.max_tokens = max_tokens
+        if max_seconds:
+            self.max_seconds = max_seconds
+        self.spin = (self.spin + 1) % len(theme.SPINNER_FRAMES)
+        self._changed()
+
+    # -- rendering ------------------------------------------------------ #
+
+    def render(self, *, color: bool = True) -> str:
+        W = self.width
+
+        def c(text: str, *styles: str) -> str:
+            return theme.paint(text, *styles, color=color)
+
+        def kv(key: str, val: str, vstyle: str = "lav") -> str:
+            return f"{c(key.ljust(6), 'grey')} {c(val, vstyle)}"
+
+        blocks: list[str] = []
+
+        agent_lines = [kv("agent", _clip(self.agent, W - 10), self.agent_accent),
+                       kv("phase", _clip(self.phase or "-", W - 10))]
+        if len(self.agents) > 1:
+            agent_lines.append(kv("team", f"{len(self.agents)} operators"))
+        blocks.append(theme.panel("Agent", agent_lines, color=color, width=W))
+
+        # Routing: strategy + per-role models (moved here from the front banner).
+        if self.strategy or self.role_models:
+            mlines = []
+            if self.strategy:
+                mlines.append(kv("strat", _clip(self.strategy, W - 10), "blue"))
+            _labels = {"planner": "plan", "executor": "exec", "verifier": "verify"}
+            for role, label in _labels.items():
+                if role in self.role_models:
+                    mlines.append(kv(label, _clip(self.role_models[role], W - 10)))
+            blocks.append(theme.panel("Models", mlines, color=color, width=W))
+
+        tgt_lines = [kv("target", _clip(self.target or "-", W - 10), "blue"),
+                     kv("ports", _clip(", ".join(self.ports[:6]) or "-", W - 10)),
+                     kv("vulns", str(self.vulns), "amber" if self.vulns else "grey")]
+        blocks.append(theme.panel("Target", tgt_lines, color=color, width=W))
+
+        tok = theme.format_tokens(self.tokens)
+        if self.max_tokens:
+            tok += f" / {theme.format_tokens(self.max_tokens)}"
+        dur = theme.format_duration(self.elapsed)
+        if self.max_seconds:
+            dur += f" / {theme.format_duration(self.max_seconds)}"
+        blocks.append(theme.panel("Budget", [
+            kv("time", dur), kv("tokens", tok),
+            kv("tools", str(self.tool_count)),
+        ], color=color, width=W))
+
+        if self.shells_running:
+            spin = theme.spinner_frame(self.spin)
+            sh = [f"{c(spin, 'amber')} {c(_clip(cmd, W - 6), 'white')}"
+                  for cmd in list(self.shells_running.values())[:3]]
+            title = f"Running shells ({len(self.shells_running)})"
+            blocks.append(theme.panel(title, sh, color=color, width=W))
+
+        if self.recent_tools:
+            blocks.append(theme.panel("Recent tools",
+                          [c(_clip(t, W - 4), "lav") for t in self.recent_tools[-5:]],
+                          color=color, width=W))
+
+        return "\n".join(blocks)
+
+
+# --------------------------------------------------------------------------- #
 # Renderer that writes into the model (mirrors PlainRenderer's semantics)
 # --------------------------------------------------------------------------- #
 
@@ -91,9 +255,12 @@ class OutputModel:
 class TuiRenderer(Renderer):
     is_rich = False
 
-    def __init__(self, model: OutputModel) -> None:
+    def __init__(self, model: OutputModel,
+                 dashboard: "Optional[DashboardModel]" = None) -> None:
         self.model = model
+        self.dashboard = dashboard   # right-hand HUD; None in the plain-transcript tests
         self._streamed = False
+        self._last_shell_sid: Optional[int] = None
         # The active agent's accent colour - "green" for the lead, a per-specialist
         # colour while a sub-agent is running (set by the CLI on delegate start/end).
         self.accent = "green"
@@ -139,15 +306,22 @@ class TuiRenderer(Renderer):
         self._break_stream()
         self.model.commit(theme.tool_call_line(name, summary, accent=self.accent,
                                                color=True))
+        if self.dashboard:
+            self.dashboard.add_tool(name)
 
     def shell_command(self, cmd: str, *, user: str, host: str, cwd: str) -> None:
         self._break_stream()
         self.model.commit(theme.shell_command_block(cmd, user=user, host=host,
                                                     cwd=cwd, accent=self.accent,
                                                     color=True))
+        if self.dashboard:
+            self._last_shell_sid = self.dashboard.shell_start(cmd)
 
     def shell_result(self, exit_code: int, *, empty: bool) -> None:
         self.model.commit(theme.shell_result_line(exit_code, empty=empty, color=True))
+        if self.dashboard:
+            self.dashboard.shell_end(self._last_shell_sid)
+            self._last_shell_sid = None
 
     def handoff(self, title: str, accent: str, *, back: bool = False,
                 detail: str = "") -> None:
@@ -155,6 +329,8 @@ class TuiRenderer(Renderer):
         self._break_stream()
         self.model.commit(theme.handoff_line(title, accent=accent, back=back,
                                              detail=detail, color=True))
+        if self.dashboard:
+            self.dashboard.set_agent(title, accent, back=back)
 
     def _break_stream(self) -> None:
         # After a tool line, the next agent prose should start a fresh '● ' bullet.
@@ -163,6 +339,8 @@ class TuiRenderer(Renderer):
             self._streamed = False
 
     def phase_line(self, state) -> None:
+        if self.dashboard:
+            self.dashboard.set_state(state)
         from cli.render import _phase_summary
         summary = _phase_summary(state)
         if summary is not None:
@@ -263,7 +441,8 @@ class RaccoonTUI:
         self._on_run = on_run
         self._on_steer = on_steer
         self.model = OutputModel(on_change=self._invalidate)
-        self.renderer = TuiRenderer(self.model)
+        self.dashboard = DashboardModel(on_change=self._invalidate)
+        self.renderer = TuiRenderer(self.model, self.dashboard)
         self._turn_task: Optional[asyncio.Task] = None
         self._app = None
         self._build()
@@ -274,13 +453,16 @@ class RaccoonTUI:
         from prompt_toolkit.application import Application
         from prompt_toolkit.formatted_text import ANSI
         from prompt_toolkit.key_binding import KeyBindings
-        from prompt_toolkit.layout import HSplit, Layout, Window
+        from prompt_toolkit.layout import HSplit, Layout, VSplit, Window
         from prompt_toolkit.layout.controls import FormattedTextControl
         from prompt_toolkit.layout.dimension import Dimension
         from prompt_toolkit.widgets import Frame, TextArea
 
         def _output_text():
             return ANSI(self.model.render())
+
+        def _dash_text():
+            return ANSI(self.dashboard.render())
 
         def _cursor_at_end():
             # Reporting a cursor on the last line keeps the Window scrolled to the
@@ -301,10 +483,23 @@ class RaccoonTUI:
         )
         input_frame = Frame(self.input_area, title="you")
 
-        root = HSplit([
+        # Left column: the ANSI mascot banner + scrolling transcript over the input
+        # box (the classic layout). Right column: the live agent HUD, a fixed-width
+        # stack of panels. A thin rule divides them.
+        left = HSplit([
             output,
             Window(height=1, char="─"),  # thin separator above the box
             input_frame,
+        ])
+        dash = Window(
+            content=FormattedTextControl(_dash_text, focusable=False),
+            width=Dimension.exact(self.dashboard.width),
+            wrap_lines=False, dont_extend_width=True,
+        )
+        root = VSplit([
+            left,
+            Window(width=Dimension.exact(1), char="│"),  # vertical divider
+            dash,
         ])
 
         kb = KeyBindings()

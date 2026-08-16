@@ -356,3 +356,9 @@ class RoutingEngine:
                 f"  {role.value:10s} → {decision.model_id:35s} ({decision.reason})"
             )
         return "\n".join(lines)
+
+    def role_map(self) -> "dict[str, str]":
+        """Structured {role: model_id} for planner/executor/verifier - what the TUI
+        sidebar renders instead of the front-and-center explain() text."""
+        return {role.value: self.route(role).model_id
+                for role in (ModelRole.PLANNER, ModelRole.EXECUTOR, ModelRole.VERIFIER)}

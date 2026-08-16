@@ -4600,6 +4600,14 @@ def test_theme_logo_and_thinking():
     uni_logo = theme.render_logo(color=False, unicode=True)
     assert "█" in uni_logo
 
+    # large=True renders the bigger ANSI-Shadow wordmark (taller + wider than default).
+    small = theme.render_logo(color=False, unicode=True)
+    big = theme.render_logo(color=False, unicode=True, large=True)
+    small_w = max(len(theme._visible(l)) for l in small.splitlines())
+    big_w = max(len(theme._visible(l)) for l in big.splitlines())
+    assert big_w > small_w and big.count("\n") > small.count("\n")
+    assert theme.TAGLINE in big
+
     # Colour off = no ANSI; colour on = ANSI escapes present.
     assert "\x1b[" not in theme.render_logo(color=False, unicode=True)
     assert "\x1b[" in theme.render_logo(color=True, unicode=True)
@@ -4679,6 +4687,66 @@ def test_tui_output_model_and_renderer():
     # Token formatting for the status line.
     assert theme.format_tokens(46300) == "46.3k"
     print("  PASS  tui_output_model_and_renderer")
+
+
+def test_tui_dashboard_model():
+    """The right-hand agent HUD: fed by the same transcript events, it tracks the
+    active agent, tools, running shells, target/phase and budget, and renders a
+    fixed-width panel stack. TuiRenderer with no dashboard stays a no-op."""
+    import types
+    from cli.tui import DashboardModel, TuiRenderer, OutputModel
+    from cli import theme
+
+    d = DashboardModel(width=36)
+    tr = TuiRenderer(OutputModel(), d)
+
+    # Handoff → active agent + team count; tools → count + recents.
+    tr.handoff("Recon Operator", "cyan")
+    assert d.agent == "Recon Operator" and d.agent_accent == "cyan"
+    tr.tool_call("nmap_scan", "-sV")
+    tr.tool_call("http_request", "GET /")
+    assert d.tool_count == 2 and d.recent_tools[-1] == "http_request"
+
+    # Shell lifecycle: start adds a running shell, result clears it + bumps done.
+    tr.shell_command("nmap -sV x", user="root", host="k", cwd="~")
+    assert len(d.shells_running) == 1 and d.shells_done == 0
+    tr.shell_result(0, empty=False)
+    assert len(d.shells_running) == 0 and d.shells_done == 1
+
+    # Attack state → target/phase/ports/vulns.
+    st = types.SimpleNamespace(current_phase="exploitation", target="10.0.0.5",
+                               open_ports=["22", "80"], vulnerabilities=["sqli"])
+    tr.phase_line(st)
+    assert d.target == "10.0.0.5" and d.phase == "exploitation"
+    assert d.ports == ["22", "80"] and d.vulns == 1
+
+    # Handoff back returns control to the lead.
+    tr.handoff("Recon Operator", "cyan", back=True)
+    assert d.agent == "lead"
+
+    # Routing → sidebar "Models" panel (strategy in its own little box + per-role
+    # models), moved off the front-and-centre banner.
+    d.set_routing("pipeline", {"planner": "opus", "executor": "qwen", "verifier": "haiku"})
+    assert d.strategy == "pipeline" and d.role_models["executor"] == "qwen"
+
+    # Budget tick + render: panels present, and every rendered line is the same
+    # (fixed) visible width so the column stays aligned.
+    d.tick(83.0, 46300, max_tokens=200000, max_seconds=600)
+    out = d.render(color=True)
+    plain = theme._visible(out)
+    assert "Agent" in plain and "Budget" in plain and "Target" in plain
+    assert "Models" in plain and "pipeline" in plain          # strategy little box
+    assert "plan" in plain and "opus" in plain                # per-role in sidebar
+    assert "10.0.0.5" in plain and "46.3k / 200.0k" in plain and "1m23s" in plain
+    widths = {len(ln) for ln in plain.splitlines() if ln.strip()}
+    assert widths == {36}, widths          # all panels exactly the column width
+
+    # No-dashboard renderer must not touch a dashboard (back-compat with plain tests).
+    tr2 = TuiRenderer(OutputModel())        # dashboard defaults to None
+    tr2.tool_call("x", "y")                 # would AttributeError if unguarded
+    tr2.shell_command("id", user="r", host="h", cwd="/")
+    tr2.shell_result(0, empty=True)
+    print("  PASS  tui_dashboard_model")
 
 
 def test_agent_color_routing():
@@ -6685,6 +6753,7 @@ async def run_all():
     print("\nCLI theme + enhanced input (UI)")
     test_theme_logo_and_thinking()
     test_tui_output_model_and_renderer()
+    test_tui_dashboard_model()
     test_agent_color_routing()
     test_enhanced_input_completion()
     await test_cli_ptk_turn_no_concurrent_prompt()

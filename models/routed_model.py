@@ -174,6 +174,12 @@ class RoutedModel:
     def explain(self) -> str:
         return self.routing.explain()
 
+    def role_map(self) -> "dict[str, str]":
+        return self.routing.role_map()
+
+    def strategy_name(self) -> str:
+        return self.routing.strategy.value
+
     def stats(self) -> dict[str, int]:
         return dict(self._calls)
 
