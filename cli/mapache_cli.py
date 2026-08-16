@@ -327,12 +327,17 @@ class MapacheCLI:
 
         strategy_map = {
             "single":   RoutingStrategy.SINGLE,
+            "solo":     RoutingStrategy.SINGLE,   # friendly alias (wizard)
             "pipeline": RoutingStrategy.PIPELINE,
             "auto":     RoutingStrategy.AUTO,
             "hybrid":   RoutingStrategy.HYBRID,
+            "swarm":    RoutingStrategy.AUTO,     # swarm = auto routing + supervisor
         }
-        self.strategy = strategy_map.get(self.config.default_strategy.lower(),
-                                         RoutingStrategy.AUTO)
+        _strat = self.config.default_strategy.lower()
+        self.strategy = strategy_map.get(_strat, RoutingStrategy.AUTO)
+        # "swarm" is the multi-agent supervisor (a toggle, not a routing enum): the
+        # lead still routes AUTO, but the Supervisor drives operator fan-out.
+        self.swarm = (_strat == "swarm")
 
     @staticmethod
     def _is_writable_dir(path: str) -> bool:
@@ -485,6 +490,13 @@ class MapacheCLI:
             max_vram_gb=float(self.max_vram),
         )
         routing.set_available_models(available or [self.model])
+
+        # Per-role model overrides from config (wizard "customize per role").
+        for _role_name, _role_model in (self.config.model_roles or {}).items():
+            try:
+                routing.override_role(ModelRole(_role_name), _role_model)
+            except Exception:
+                pass  # unknown role name / model: ignore, fall back to default
 
         def _opsec_warn(model_id: str) -> None:
             print(f"\n  [!] OPSEC: routing to CLOUD model '{model_id}' - target/scan/"

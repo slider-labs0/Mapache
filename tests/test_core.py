@@ -2072,25 +2072,35 @@ def test_config_save_and_raw_roundtrip():
 
 
 def test_wizard_prefs_edit_raw():
-    # _step_prefs now handles strategy + VRAM only (model is chosen elsewhere).
+    # _step_prefs now sets the routing strategy via friendly names (Auto/Solo/Swarm),
+    # each mapped to its config value. No VRAM prompt anymore (declutter).
     import builtins
     from cli import setup_wizard
+
+    def _feed(answers, fn):
+        it = iter(answers)
+        orig = builtins.input
+        builtins.input = lambda *a, **k: next(it)
+        try:
+            return fn()
+        finally:
+            builtins.input = orig
 
     with tempfile.TemporaryDirectory() as tmp:
         cfg = load_config(working_dir=tmp, environ={},
                           global_path=_CfgPath(tmp) / "none.json")
         raw: dict = {}
-        answers = iter(["", "16"])  # keep strategy, set vram
-        orig_input = builtins.input
-        builtins.input = lambda *a, **k: next(answers)
-        try:
-            setup_wizard._step_prefs(cfg, raw)
-        finally:
-            builtins.input = orig_input
+        _feed([""], lambda: setup_wizard._step_prefs(cfg, raw))   # Enter keeps current
+        assert raw["default_strategy"] == cfg.default_strategy
+        assert "max_vram_gb" not in raw                           # no longer asked
 
-        assert "default_model" not in raw          # not touched here anymore
-        assert raw["default_strategy"] == cfg.default_strategy  # kept on empty
-        assert raw["max_vram_gb"] == 16.0
+        raw = {}
+        _feed(["3"], lambda: setup_wizard._step_prefs(cfg, raw))  # 3) Swarm
+        assert raw["default_strategy"] == "swarm"
+
+        raw = {}
+        _feed(["auto"], lambda: setup_wizard._step_prefs(cfg, raw))  # label prefix
+        assert raw["default_strategy"] == "auto"
     print("  PASS  wizard_prefs_edit_raw")
 
 
@@ -2140,15 +2150,59 @@ async def test_wizard_choose_cloud_model_interactive():
         orig_input = builtins.input
         builtins.input = lambda *a, **k: next(answers)
         try:
-            model, is_cloud = await setup_wizard._step_choose_provider_model(cfg, raw)
+            model, is_cloud, entry = await setup_wizard._step_choose_provider_model(cfg, raw)
         finally:
             builtins.input = orig_input
 
         assert is_cloud is True
+        assert entry[0] == "openrouter"
         assert model == "anthropic/claude-sonnet-4.6"  # first openrouter suggestion
         assert raw["providers"]["openrouter"]["api_key"] == "sk-or-test"
         assert raw["allow_cloud"] is True
     print("  PASS  wizard_choose_cloud_model_interactive")
+
+
+async def test_wizard_roles_and_model_roles_config():
+    # "One model + optional per-role": choosing per-role writes model_roles, which
+    # round-trips through MapacheConfig; choosing "one" clears it.
+    import builtins
+    from cli import setup_wizard
+    from core.config import MapacheConfig
+
+    async def _feed_async(answers, coro_fn):
+        it = iter(answers)
+        orig = builtins.input
+        builtins.input = lambda *a, **k: next(it)
+        try:
+            return await coro_fn()
+        finally:
+            builtins.input = orig
+
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg = load_config(working_dir=tmp, environ={},
+                          global_path=_CfgPath(tmp) / "none.json")
+        entry = ("openrouter", "openai_compatible", "https://x/", "OPENROUTER_API_KEY", True)
+
+        # "one" → no per-role overrides (and clears any stale ones).
+        raw = {"model_roles": {"planner": "old"}}
+        await _feed_async(["1"], lambda: setup_wizard._step_roles(
+            cfg, raw, "base-model", entry, True))
+        assert "model_roles" not in raw
+
+        # "per-role" → pick a model per role (options are the openrouter suggestions;
+        # answers select by number, then verifier by typed id).
+        raw = {}
+        await _feed_async(["2", "1", "1", "custom/verifier"],
+                          lambda: setup_wizard._step_roles(cfg, raw, "base-model", entry, True))
+        roles = raw["model_roles"]
+        assert set(roles) == {"planner", "executor", "verifier"}
+        assert roles["verifier"] == "custom/verifier"
+
+        # It round-trips and the config carries it.
+        raw["default_model"] = "base-model"
+        conf = MapacheConfig.from_dict(raw)
+        assert conf.model_roles["verifier"] == "custom/verifier"
+    print("  PASS  wizard_roles_and_model_roles_config")
 
 
 def test_wizard_secret_prompt_preserves_on_empty():
@@ -6509,6 +6563,7 @@ async def run_all():
     test_wizard_prefs_edit_raw()
     test_wizard_configure_model_choice()
     await test_wizard_choose_cloud_model_interactive()
+    await test_wizard_roles_and_model_roles_config()
     test_wizard_secret_prompt_preserves_on_empty()
     test_cli_overrides_and_config_precedence()
 

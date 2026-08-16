@@ -299,6 +299,10 @@ class MessagingConfig:
 class MapacheConfig:
     default_model: str = "deepseek-coder:33b"
     default_strategy: str = "single"
+    # Optional per-role model overrides (the wizard's "customize per role"):
+    # {"planner": id, "executor": id, "verifier": id}. Applied to the RoutingEngine
+    # at startup; empty means every role uses default_model / auto routing.
+    model_roles: dict[str, str] = field(default_factory=dict)
     allow_cloud: bool = False
     max_vram_gb: float = 12.0
     providers: dict[str, ProviderConfig] = field(default_factory=dict)
@@ -352,6 +356,7 @@ class MapacheConfig:
         return cls(
             default_model=data.get("default_model", "deepseek-coder:33b"),
             default_strategy=data.get("default_strategy", "single"),
+            model_roles={str(k): str(v) for k, v in (data.get("model_roles") or {}).items()},
             allow_cloud=bool(data.get("allow_cloud", False)),
             max_vram_gb=float(data.get("max_vram_gb", 12.0)),
             providers=providers,
@@ -418,6 +423,7 @@ class MapacheConfig:
         return {
             "default_model": self.default_model,
             "default_strategy": self.default_strategy,
+            "model_roles": dict(self.model_roles),
             "allow_cloud": self.allow_cloud,
             "max_vram_gb": self.max_vram_gb,
             "providers": providers,

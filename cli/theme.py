@@ -76,6 +76,17 @@ _WORDMARK = r"""
  █ ▀ █ █▀█ █▀▀ █▀█ █▄▄ █▀█ ██▄
 """
 
+# A bigger wordmark (ANSI-Shadow block letters) for the startup banner - "logo and
+# text larger". ~58 cols wide; wraps only on very narrow terminals, else reads big.
+_WORDMARK_LARGE = r"""
+███╗   ███╗ █████╗ ██████╗  █████╗  ██████╗██╗  ██╗███████╗
+████╗ ████║██╔══██╗██╔══██╗██╔══██╗██╔════╝██║  ██║██╔════╝
+██╔████╔██║███████║██████╔╝███████║██║     ███████║█████╗
+██║╚██╔╝██║██╔══██║██╔═══╝ ██╔══██║██║     ██╔══██║██╔══╝
+██║ ╚═╝ ██║██║  ██║██║     ██║  ██║╚██████╗██║  ██║███████╗
+╚═╝     ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚══════╝
+"""
+
 TAGLINE = "autonomous offensive-security agent"
 
 # Truecolor pixel mascot - a raster raccoon shipped as an ANSI asset next to this
@@ -108,10 +119,11 @@ def _trim_blank_edges(text: str) -> list[str]:
     return lines
 
 
-def _wordmark_lines(color: bool, indent: int) -> list[str]:
+def _wordmark_lines(color: bool, indent: int, large: bool = False) -> list[str]:
     pad = " " * max(0, indent)
+    art = _WORDMARK_LARGE if large else _WORDMARK
     return [pad + paint(ln, "lav", "bold", color=color)
-            for ln in _WORDMARK.strip("\n").splitlines()]
+            for ln in art.strip("\n").splitlines()]
 
 # ASCII fallback for consoles whose encoding can't render the block art
 # (e.g. a Windows cp1252 terminal without PYTHONUTF8). Never crashes startup.
@@ -134,25 +146,31 @@ def _can_encode(text: str) -> bool:
         return False
 
 
-def render_logo(color: bool = True, unicode: bool | None = None) -> str:
+def render_logo(color: bool = True, unicode: bool | None = None,
+                large: bool = False) -> str:
     """The full startup logo: masked raccoon over the block wordmark + tagline.
 
-    Falls back to an ASCII version when the terminal encoding can't render the
-    block characters (auto-detected unless `unicode` is forced)."""
+    `large=True` uses the big ANSI-Shadow wordmark (bigger logo + text). Falls back
+    to an ASCII version when the terminal encoding can't render the block characters
+    (auto-detected unless `unicode` is forced)."""
+    wordmark = _WORDMARK_LARGE if large else _WORDMARK
     if unicode is None:
-        unicode = _can_encode(_RACCOON + _WORDMARK)
+        unicode = _can_encode(_RACCOON + wordmark)
     if not unicode:
         return paint(_ASCII_LOGO.strip("\n"), "lav", color=color) + \
             "\n" + paint(f"   {TAGLINE}", "lavdim", color=color)
+
+    wm_w = max((len(l) for l in wordmark.strip("\n").splitlines()), default=0)
 
     # Preferred: the truecolor pixel mascot (only meaningful with colour on a TTY,
     # and only if its ANSI asset loaded). Wordmark is centred under the raccoon.
     if color and _MASCOT and _can_encode(_MASCOT):
         art = _trim_blank_edges(_MASCOT)
         art_w = max((len(_visible(ln)) for ln in art), default=0)
-        wm_w = max((len(l) for l in _WORDMARK.strip("\n").splitlines()), default=0)
-        wm = _wordmark_lines(color, indent=(art_w - wm_w) // 2)
-        tag = paint(TAGLINE.center(art_w), "lavdim", color=color)
+        ref_w = max(art_w, wm_w)                       # centre both to the wider one
+        wm = _wordmark_lines(color, indent=(ref_w - wm_w) // 2, large=large)
+        art = [(" " * ((ref_w - art_w) // 2)) + ln for ln in art]
+        tag = paint(TAGLINE.center(ref_w), "lavdim", color=color)
         return "\n".join([*art, "", *wm, tag])
 
     lines: list[str] = []
@@ -163,17 +181,53 @@ def render_logo(color: bool = True, unicode: bool | None = None) -> str:
             style = "dgrey"
         lines.append(paint(ln, style, color=color))
     lines.append("")
-    lines.extend(_wordmark_lines(color, indent=0))
+    lines.extend(_wordmark_lines(color, indent=0, large=large))
     lines.append(paint(f"   {TAGLINE}", "lavdim", color=color))
     return "\n".join(lines)
 
 
 def render_banner(version: str, mode: str = "Attack Mode", color: bool = True,
-                  unicode: bool | None = None) -> str:
+                  unicode: bool | None = None, large: bool = False) -> str:
     """Logo + a compact version/mode line for CLI startup."""
     sub = paint(f"   v{version}", "grey", color=color) + \
         paint(f"  ·  {mode}", "amber", color=color)
-    return render_logo(color=color, unicode=unicode) + "\n" + sub + "\n"
+    return render_logo(color=color, unicode=unicode, large=large) + "\n" + sub + "\n"
+
+
+def panel(title: str, lines: list[str], *, color: bool = True, accent: str = "lav",
+          width: int | None = None) -> str:
+    """A titled rounded panel - the hermes-style neat box:
+
+        ╭─ Title ─────────────────╮
+        │ line one                │
+        │ line two                │
+        ╰─────────────────────────╯
+
+    The title rides in the top border. Inner width auto-fits the content (measured
+    on *visible* text so colour escapes don't skew it) unless `width` (the full
+    outer width) is given, which pads every row to a fixed size - what the two-column
+    HUD needs so panels line up. ASCII corners on a console that can't do the glyphs."""
+    uni = _can_encode("╭─╮│╰╯")
+    tl, tr, bl, br, h, v = ("╭", "╮", "╰", "╯", "─", "│") if uni else ("+", "+", "+", "+", "-", "|")
+    t = f" {title} " if title else ""
+    content_w = max((len(_visible(ln)) for ln in lines), default=0)
+    inner = max(content_w, len(t) + 1)          # room for the title segment
+    if width is not None:
+        inner = max(inner, width - 4)           # width = corners + 2 pad + inner
+    if t:
+        fill = max(0, inner + 1 - len(t))        # dashes after the title segment
+        top = (paint(tl + h, accent, color=color)
+               + paint(t, "bold", accent, color=color)
+               + paint(h * fill + tr, accent, color=color))
+    else:
+        top = paint(tl + h * (inner + 2) + tr, accent, color=color)
+    side = paint(v, accent, color=color)
+    out = [top]
+    for ln in lines:
+        pad = " " * (inner - len(_visible(ln)))
+        out.append(f"{side} {ln}{pad} {side}")
+    out.append(paint(bl + h * (inner + 2) + br, accent, color=color))
+    return "\n".join(out)
 
 
 def box(lines: list[str], *, color: bool = True, accent: str = "lavdim") -> str:

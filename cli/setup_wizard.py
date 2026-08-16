@@ -163,57 +163,117 @@ def _hr(title: str) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Boxed UI (hermes-style neat panels, in Mapache's purple/blue palette)
+# --------------------------------------------------------------------------- #
+
+from cli import theme
+
+_COLOR = theme.supports_color()
+
+
+def _paint(text: str, *styles: str) -> str:
+    return theme.paint(text, *styles, color=_COLOR)
+
+
+def _prompt_char() -> str:
+    glyph = "❯" if theme._can_encode("❯") else ">"
+    return _paint(f"  {glyph} ", "blue")
+
+
+def _panel(title: str, lines: list[str]) -> None:
+    """Print one titled purple panel; every question lives in its own box."""
+    print()
+    print(theme.panel(title, lines, color=_COLOR, accent="lav"))
+
+
+def _read(default: str = "") -> str:
+    """Read one answer at the blue prompt beneath the panel; Enter keeps default."""
+    try:
+        val = input(_prompt_char()).strip().lstrip("﻿")
+    except EOFError:
+        return default
+    return val or default
+
+
+def _read_secret(current: str = "") -> tuple[str, bool]:
+    """Secret answer at the blue prompt. Returns (value, changed); Enter keeps."""
+    try:
+        val = input(_prompt_char()).strip().lstrip("﻿")
+    except EOFError:
+        return current, False
+    return (val, True) if val else (current, False)
+
+
+def _menu(title: str, question: str, options: list[tuple[str, str]], *,
+          default_idx: int = 0, notes: Optional[list[str]] = None) -> int:
+    """Render a numbered menu in a panel and return the chosen index. Accepts a
+    number, or a case-insensitive label prefix; Enter takes the default (marked ▸)."""
+    lines: list[str] = [_paint(question, "white")]
+    for n in (notes or []):
+        lines.append(_paint(n, "grey"))
+    lines.append("")
+    for i, (label, hint) in enumerate(options):
+        mark = _paint("▸", "blue") if i == default_idx else " "
+        num = _paint(f"{i + 1})", "lavdim")
+        lbl = _paint(f"{label:<10}", "bold", "lav")
+        tail = _paint(hint, "grey") if hint else ""
+        lines.append(f"{mark} {num} {lbl} {tail}".rstrip())
+    _panel(title, lines)
+    raw = _read()
+    if not raw:
+        return default_idx
+    if raw.isdigit() and 1 <= int(raw) <= len(options):
+        return int(raw) - 1
+    low = raw.lower()
+    for i, (label, _h) in enumerate(options):
+        if label.lower().startswith(low):
+            return i
+    return default_idx
+
+
+# --------------------------------------------------------------------------- #
 # Wizard steps
 # --------------------------------------------------------------------------- #
 
 
 async def _step_ollama(cfg, raw: dict, default_model: str) -> None:
-    """Detect Ollama, list models, offer to pull the chosen default if absent."""
+    """Detect Ollama, offer to pull the chosen default if absent (boxed)."""
     from models.providers.ollama_provider import OllamaProvider
 
-    _hr("Local models (Ollama)")
-    url = cfg.ollama_url
-    print(f"  Endpoint: {url}")
-    prov = OllamaProvider(model=default_model, base_url=url)
+    prov = OllamaProvider(model=default_model, base_url=cfg.ollama_url)
     try:
         if not await prov.is_available():
-            print("  x  Ollama is not reachable. Start it with:  ollama serve")
-            print("     (Then re-run `mapache setup`, or pull models yourself.)")
+            _panel("Ollama", [_paint("not reachable - start it with:  ollama serve", "amber")])
             return
-
         models = await prov.list_models()
-        if models:
-            print(f"  ok  Ollama up - {len(models)} model(s) installed:")
-            for m in models:
-                print(f"       - {m}")
-        else:
-            print("  ok  Ollama up - no models installed yet.")
-
-        base = default_model.split(":")[0]
-        have = any(base in m for m in models)
+        have = any(default_model.split(":")[0] in m for m in models)
+        status = (_paint(f"up · {len(models)} model(s)", "green") if models
+                  else _paint("up · no models yet", "amber"))
+        lines = [f"{_paint('endpoint', 'grey')}  {cfg.ollama_url}",
+                 f"{_paint('status  ', 'grey')}  {status}"]
         if not have:
-            print(f"  [!]  Default model '{default_model}' is not installed.")
-            if _prompt_bool(f"Pull '{default_model}' now? (large download)", default=False):
-                await prov.pull_model(default_model)
-                print(f"  ok  Pulled {default_model}.")
-            else:
-                print("  - Skipped - pull it later with:  ollama pull " + default_model)
+            lines.append(_paint(f"'{default_model}' not installed", "amber"))
+        _panel("Ollama", lines)
+        if not have and _prompt_bool(f"Pull '{default_model}' now? (large download)",
+                                     default=False):
+            await prov.pull_model(default_model)
+            print(_paint(f"  ok  pulled {default_model}", "green"))
     finally:
         await prov.close()
 
 
 def _step_bins() -> None:
-    """Report which optional offensive bins are on PATH."""
-    _hr("Offensive toolchain (PATH)")
+    """Compact one-panel view of which optional offensive bins are on PATH."""
     present, missing = [], []
     for name, desc in OPTIONAL_BINS:
-        (present if shutil.which(name) else missing).append((name, desc))
-    for name, _desc in present:
-        print(f"  ok  {name}")
-    for name, desc in missing:
-        print(f"  -  {name:14s} not found  ({desc})")
+        (present if shutil.which(name) else missing).append(name)
+    lines = []
+    if present:
+        lines.append(f"{_paint('found  ', 'green')} {', '.join(present)}")
     if missing:
-        print("  Missing tools just disable their feature; nothing here is required.")
+        lines.append(f"{_paint('missing', 'grey')} {', '.join(missing)}")
+        lines.append(_paint("(missing tools just disable their feature - none required)", "grey"))
+    _panel("Offensive toolchain", lines or [_paint("nothing detected", "grey")])
 
 
 def _resolve_provider(sel: str):
@@ -261,7 +321,7 @@ def configure_model_choice(
 
 
 async def _pick_ollama_model(cfg, current: str) -> str:
-    """List installed Ollama models and let the operator pick one (or type an id)."""
+    """List installed Ollama models and return them (empty if none/unreachable)."""
     from models.providers.ollama_provider import OllamaProvider
 
     prov = OllamaProvider(model=current or "qwen2.5:32b", base_url=cfg.ollama_url)
@@ -273,109 +333,144 @@ async def _pick_ollama_model(cfg, current: str) -> str:
         pass
     finally:
         await prov.close()
-
-    if installed:
-        print("  Installed local models:")
-        for i, m in enumerate(installed, 1):
-            print(f"    {i}) {m}")
-        sel = _prompt("Choose a model (number or full name)", current or installed[0])
-        if sel.isdigit() and 1 <= int(sel) <= len(installed):
-            return installed[int(sel) - 1]
-        return sel
-    print("  [!]  Ollama has no installed models (or is unreachable at "
-          f"{cfg.ollama_url}).")
-    return _prompt("Enter a model id to use (you can `ollama pull` it later)",
-                   current or "qwen2.5:32b")
+    return installed
 
 
-def _pick_cloud_model(name: str, cur) -> str:
-    """Offer suggested + already-configured model ids for a cloud provider."""
-    existing = list(cur.models) if cur and cur.models else []
-    options = existing + [s for s in MODEL_SUGGESTIONS.get(name, []) if s not in existing]
+def _choose_model(title: str, question: str, options: list[str], default: str) -> str:
+    """Panel listing candidate model ids; accept a number, a typed id, or Enter."""
+    lines = [_paint(question, "white"), ""]
     if options:
-        print(f"  {name} models:")
         for i, m in enumerate(options, 1):
-            print(f"    {i}) {m}")
-        sel = _prompt("Choose a model (number or full id)", options[0])
-        if sel.isdigit() and 1 <= int(sel) <= len(options):
-            return options[int(sel) - 1]
-        return sel
-    return _prompt(f"{name} model id", "")
+            mark = _paint("▸", "blue") if m == default else " "
+            lines.append(f"{mark} {_paint(str(i) + ')', 'lavdim')} {_paint(m, 'lav')}")
+    else:
+        lines.append(_paint("(no models detected - type an id, pull it later)", "grey"))
+    _panel(title, lines)
+    raw = _read(default)
+    if raw.isdigit() and 1 <= int(raw) <= len(options):
+        return options[int(raw) - 1]
+    return raw or default
 
 
-async def _step_choose_provider_model(cfg, raw: dict) -> tuple[str, bool]:
-    """Ask which provider + model to use by default. Returns (model_id, is_cloud)."""
-    _hr("Model / provider")
-    print("  Which model should Mapache use by default?")
-    for i, (name, _k, _u, _e, is_cloud) in enumerate(PROVIDER_MENU, 1):
-        print(f"    {i}) {name}  ({'cloud' if is_cloud else 'local'})")
+def _cloud_model_options(name: str, cur) -> list[str]:
+    existing = list(cur.models) if cur and cur.models else []
+    return existing + [s for s in MODEL_SUGGESTIONS.get(name, []) if s not in existing]
 
+
+async def _step_choose_provider_model(cfg, raw: dict) -> "tuple[str, bool, tuple]":
+    """Provider + one default model, each in its own panel. Returns
+    (model_id, is_cloud, provider_entry)."""
+    prov_opts = [(nm, "local" if not cloud else "cloud")
+                 for (nm, _k, _u, _e, cloud) in PROVIDER_MENU]
     cur_prov = cfg.provider_for_model(cfg.default_model)
-    default_sel = cur_prov.name if cur_prov else "ollama"
-    entry = (_resolve_provider(_prompt("Provider (number or name)", default_sel))
-             or _resolve_provider(default_sel) or PROVIDER_MENU[0])
+    default_name = cur_prov.name if cur_prov else "ollama"
+    default_idx = next((i for i, (nm, *_r) in enumerate(PROVIDER_MENU)
+                        if nm == default_name), 0)
+    idx = _menu("Model provider", "Which provider should Mapache use?",
+                prov_opts, default_idx=default_idx)
+    entry = PROVIDER_MENU[idx]
     name, kind, base_url, env_var, is_cloud = entry
 
     if not is_cloud:
-        model_id = await _pick_ollama_model(cfg, cfg.default_model)
+        installed = await _pick_ollama_model(cfg, cfg.default_model)
+        model_id = _choose_model("Model", "Pick a local model (Ollama):",
+                                 installed, cfg.default_model or "qwen2.5:32b")
         configure_model_choice(raw, provider_name=name, kind=kind,
                                base_url=cfg.ollama_url, model_id=model_id,
                                is_cloud=False)
     else:
         cur = cfg.providers.get(name)
         cur_key = cur.api_key if cur else ""
-        key, changed = _prompt_secret(f"{name} API key (env: {env_var})", cur_key)
+        _panel(f"API key · {name}", [
+            _paint(f"Paste your {name} key, or leave blank to use ${env_var}.", "white"),
+            _paint("Enter keeps the current key.", "grey") if cur_key else "",
+        ])
+        key, changed = _read_secret(cur_key)
         api_key = key if changed else cur_key
-        model_id = _pick_cloud_model(name, cur)
+        opts = _cloud_model_options(name, cur)
+        model_id = _choose_model("Model", f"Pick a {name} model:", opts,
+                                 opts[0] if opts else "")
         configure_model_choice(raw, provider_name=name, kind=kind, base_url=base_url,
                                model_id=model_id, api_key=api_key or None,
                                is_cloud=True)
-        if not api_key:
-            print(f"  [!]  No API key for {name} yet - add one (or set {env_var}) "
-                  "before launching this model.")
-        else:
-            print("  [!]  OPSEC: cloud models may receive target/scan/cred context.")
 
-    print(f"  ok  Default model: {model_id}  (provider: {name})")
-    return model_id, is_cloud
+    access = _paint("cloud", "amber") if is_cloud else _paint("local", "green")
+    _panel("Selected", [
+        f"{_paint('provider', 'grey')}  {_paint(name, 'bold', 'lav')}",
+        f"{_paint('model   ', 'grey')}  {_paint(model_id, 'bold', 'lav')}",
+        f"{_paint('access  ', 'grey')}  {access}",
+    ])
+    if is_cloud and not (key if changed else cur_key):
+        print(_paint(f"  ! no {name} key yet - set ${env_var} before launch", "amber"))
+    return model_id, is_cloud, entry
+
+
+async def _step_roles(cfg, raw: dict, base_model: str, entry: tuple, is_cloud: bool) -> None:
+    """Optional: one model for everything (default), or a model per role."""
+    idx = _menu("Roles", "Use one model for every role, or customize per role?", [
+        ("one", f"{base_model} drives lead, sub-agents & verifier"),
+        ("per-role", "choose a model for lead / executor / verifier"),
+    ], default_idx=0)
+    if idx == 0:
+        raw.pop("model_roles", None)
+        return
+
+    name, kind, base_url, env_var, is_cloud = entry
+    if is_cloud:
+        options = _cloud_model_options(name, cfg.providers.get(name)) or [base_model]
+    else:
+        options = await _pick_ollama_model(cfg, base_model) or [base_model]
+    roles = [("planner", "Lead / planner  (strategy, decides next move)"),
+             ("executor", "Executor        (runs the tools each turn)"),
+             ("verifier", "Verifier        (checks the final answer)")]
+    chosen: dict[str, str] = {}
+    for role_key, role_label in roles:
+        chosen[role_key] = _choose_model(
+            f"Role · {role_key}", role_label + ":", options, base_model)
+    raw["model_roles"] = chosen
 
 
 def _step_messaging(cfg, raw: dict) -> None:
-    """Prompt for Telegram/Discord bot tokens (optional)."""
-    _hr("Messaging bots (optional)")
-    tg, tg_changed = _prompt_secret("Telegram bot token", cfg.messaging.telegram_token)
+    """Optional Telegram/Discord bot tokens (skipped unless the operator opts in)."""
+    if _menu("Messaging", "Wire up Telegram / Discord control? (optional)",
+             [("skip", "run from the terminal only"),
+              ("set up", "paste bot tokens now")], default_idx=0) == 0:
+        return
+    _panel("Telegram", [_paint("Bot token (Enter to skip):", "white")])
+    tg, tg_changed = _read_secret(cfg.messaging.telegram_token)
     if tg_changed:
         _nested_set(raw, ("messaging", "telegram_token"), tg)
-    dc, dc_changed = _prompt_secret("Discord bot token", cfg.messaging.discord_token)
+    _panel("Discord", [_paint("Bot token (Enter to skip):", "white")])
+    dc, dc_changed = _read_secret(cfg.messaging.discord_token)
     if dc_changed:
         _nested_set(raw, ("messaging", "discord_token"), dc)
 
 
-def _step_prefs(cfg, raw: dict) -> None:
-    """Prompt for the non-secret defaults (strategy + VRAM). The default model is
-    chosen in the model/provider step, not here."""
-    _hr("Defaults")
-    strat = _prompt("Default strategy (single|pipeline|auto|hybrid)", cfg.default_strategy)
-    if strat not in ("single", "pipeline", "auto", "hybrid"):
-        print(f"  [!]  Unknown strategy '{strat}', keeping '{cfg.default_strategy}'.")
-        strat = cfg.default_strategy
-    raw["default_strategy"] = strat
+# Friendly strategy names → the value written to config. "swarm" activates the
+# multi-agent supervisor at launch (mapache_cli maps it to AUTO routing + fan-out).
+_STRATEGIES = [
+    ("auto", "Auto", "smart routing - best model per role"),
+    ("single", "Solo", "one model, no delegation"),
+    ("swarm", "Swarm", "multi-agent team, supervisor-driven"),
+]
 
-    vram = _prompt("Max VRAM budget (GB, for routing)", str(cfg.max_vram_gb))
-    try:
-        raw["max_vram_gb"] = float(vram)
-    except ValueError:
-        print(f"  [!]  '{vram}' is not a number, keeping {cfg.max_vram_gb}.")
+
+def _step_prefs(cfg, raw: dict) -> None:
+    """The routing strategy, in plain-English names."""
+    default_idx = next((i for i, (val, *_r) in enumerate(_STRATEGIES)
+                        if val == cfg.default_strategy.lower()), 0)
+    idx = _menu("Strategy", "How should Mapache route work?",
+                [(label, hint) for _v, label, hint in _STRATEGIES],
+                default_idx=default_idx)
+    raw["default_strategy"] = _STRATEGIES[idx][0]
 
 
 async def _step_smoke_test(default_model: str, working_dir: Path) -> None:
     """Send one trivial turn to the chosen default model and report the reply."""
-    _hr("Smoke test")
     # Reload so the test reflects exactly what we just wrote.
     cfg = load_config(working_dir=working_dir)
     prov_cfg = cfg.provider_for_model(default_model)
     if prov_cfg is None:
-        print("  - No provider resolves the default model; skipping smoke test.")
         return
 
     if prov_cfg.is_cloud:
@@ -397,19 +492,20 @@ async def _step_smoke_test(default_model: str, working_dir: Path) -> None:
             await provider.close()
             return
 
-    print(f"  Asking '{default_model}' to reply with a single word …")
     try:
         resp = await provider.chat(
             messages=[{"role": "user", "content": "Reply with exactly one word: pong"}]
         )
         reply = provider.extract_content(resp).strip()
         if reply:
-            print(f"  ok  Model replied: {reply[:80]!r}")
+            _panel("Smoke test", [f"{_paint('ok', 'green')}  {default_model} replied: "
+                                  f"{_paint(reply[:60], 'lav')}"])
         else:
-            print("  [!]  Model returned an empty reply (config saved, model may be loading).")
+            _panel("Smoke test", [_paint("empty reply (config saved; model may be loading)",
+                                         "amber")])
     except Exception as exc:
-        print(f"  x  Smoke test failed: {exc}")
-        print("     Config was still saved; fix the model/endpoint and retry.")
+        _panel("Smoke test", [_paint(f"failed: {exc}", "amber"),
+                              _paint("config saved - fix the model/endpoint and retry", "grey")])
     finally:
         await provider.close()
 
@@ -430,33 +526,35 @@ async def run_setup(argv: Optional[list[str]] = None) -> int:
     working_dir = Path(os.path.abspath(args.dir))
 
     gpath = global_config_path()
-    print("╔══════════════════════════════════════╗")
-    print("║   Mapache setup                      ║")
-    print("╚══════════════════════════════════════╝")
-    print(f"  Writing to: {gpath}")
-    if gpath.is_file():
-        print("  (existing config found - Enter keeps each current value)")
+    print()
+    print(theme.render_logo(color=_COLOR, large=True))
+    _panel("Setup", [
+        f"{_paint('config', 'grey')}  {gpath}",
+        _paint("existing config found - Enter keeps each value", "grey")
+        if gpath.is_file() else _paint("first run - let's configure Mapache", "grey"),
+    ])
 
     # Effective view drives the shown defaults; the raw file is what we edit.
     cfg = load_config(working_dir=working_dir)
     raw = load_global_raw()
 
-    default_model, is_cloud = await _step_choose_provider_model(cfg, raw)
+    default_model, is_cloud, entry = await _step_choose_provider_model(cfg, raw)
+    await _step_roles(cfg, raw, default_model, entry, is_cloud)
     if not is_cloud:
-        # Offer to pull the chosen local model if it isn't installed yet.
         await _step_ollama(cfg, raw, default_model)
     _step_bins()
     _step_prefs(cfg, raw)
     _step_messaging(cfg, raw)
 
     saved = save_global_config(raw)
-    print(f"\n  ok  Saved {saved}")
+    _panel("Done", [
+        f"{_paint('saved', 'grey')}   {saved}",
+        f"{_paint('launch', 'grey')}  mapache serve",
+        f"{_paint('config', 'grey')}  mapache config show",
+    ])
 
     if not args.no_smoke_test:
         await _step_smoke_test(default_model, working_dir)
-
-    print("\n  Done. Launch with:  python -m cli --model " + default_model)
-    print("  Show config with:   python -m cli config show\n")
     return 0
 
 
