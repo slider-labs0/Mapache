@@ -5066,6 +5066,121 @@ def test_skill_md_format():
     print("  PASS  skill_md_format")
 
 
+async def test_skill_robust_yaml():
+    # Issue 3: the dependency-free fallback parser must handle block-style lists and
+    # `|` / `>` multi-line scalars, not just inline lists + single-line scalars - so
+    # richer SKILL.md files (as authored for other agents) parse faithfully.
+    from core.skill_format import parse_skill_md
+
+    md = ("---\n"
+          "name: rich\n"
+          "description: >\n"
+          "  A folded description that spans\n"
+          "  two source lines but is one line.\n"
+          "keywords:\n"
+          "  - sqli\n"
+          "  - 'or 1=1'\n"
+          "ports:\n"
+          "  - 80\n"
+          "  - 443\n"
+          "when_to_use: |\n"
+          "  First line.\n"
+          "  Second line.\n"
+          "---\n"
+          "BODY here.")
+    spec = parse_skill_md(md)
+    assert spec.name == "rich", spec.name
+    assert spec.description == "A folded description that spans two source lines but is one line.", repr(spec.description)
+    assert spec.keywords == ["sqli", "or 1=1"], spec.keywords
+    assert spec.ports == ["80", "443"], spec.ports
+    assert spec.when_to_use == "First line.\nSecond line.", repr(spec.when_to_use)
+    assert spec.body == "BODY here."
+    print("  PASS  skill_robust_yaml")
+
+
+async def test_skill_bundled_resources():
+    # Issue 2: a nested `<pkg>/SKILL.md` loads with sibling files attached as bundled
+    # resources, and the injected text lists their paths for progressive disclosure.
+    import tempfile
+    from core.skill_format import load_skill_dir
+    from core.skills_playbook import render_skill
+    from core import skills_playbook as sp
+
+    sp.clear_registered_skills()
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            pkg = os.path.join(d, "recon_pack")
+            os.makedirs(os.path.join(pkg, "scripts"))
+            with open(os.path.join(pkg, "SKILL.md"), "w", encoding="utf-8") as f:
+                f.write("---\nname: recon_pack\ndescription: bundled recon helper\n"
+                        "---\nRun the bundled enum script, then read notes.md.")
+            with open(os.path.join(pkg, "scripts", "enum.sh"), "w", encoding="utf-8") as f:
+                f.write("#!/bin/sh\necho hi\n")
+            with open(os.path.join(pkg, "notes.md"), "w", encoding="utf-8") as f:
+                f.write("reference notes")
+            loaded = load_skill_dir(d)
+
+            assert [s.name for s in loaded] == ["recon_pack"], [s.name for s in loaded]
+            skill = loaded[0]
+            assert set(skill.resources) == {"notes.md", "scripts/enum.sh"}, skill.resources
+            rendered = render_skill(skill)
+            assert "BUNDLED RESOURCES" in rendered
+            assert "enum.sh" in rendered and "notes.md" in rendered
+    finally:
+        sp.clear_registered_skills()
+    print("  PASS  skill_bundled_resources")
+
+
+async def test_skill_model_selection_hybrid():
+    # Issue 1: hybrid activation. A trigger-less (foreign) skill never fires a
+    # predicate but IS offered to the model selector via its description; built-ins
+    # (no description) are never candidates. The selector's choice injects, and its
+    # result is cached by state signature (no repeat model call).
+    import types
+    from core.skill_format import parse_skill_md, spec_to_skill
+    from core.skills_playbook import (
+        register_skill, clear_registered_skills, selection_candidates,
+        predicate_matched_skills,
+    )
+    from core.skill_selection import ModelSkillSelector
+
+    clear_registered_skills()
+    try:
+        spec = parse_skill_md(
+            "---\nname: foreign_lfi\ndescription: local file inclusion technique\n"
+            "---\nTry ../../etc/passwd.")           # NO ports/keywords/scheme triggers
+        register_skill(spec_to_skill(spec))
+        state = types.SimpleNamespace(open_ports=[], target="", phase="recon")
+
+        # Predicate never fires for a trigger-less skill; but it IS a model candidate,
+        # while description-less built-ins are not.
+        assert not any(s.name == "foreign_lfi"
+                       for s in predicate_matched_skills(state, "read a file"))
+        cands = selection_candidates(state, "read a file")
+        assert [s.name for s in cands] == ["foreign_lfi"], [s.name for s in cands]
+
+        calls = {"n": 0}
+        async def ask(messages, json_mode):
+            calls["n"] += 1
+            assert json_mode is True
+            return {"message": {"content": '{"relevant": ["foreign_lfi"]}'}}
+
+        sel = ModelSkillSelector(ask=ask)
+        picked = await sel.select(cands, state, "read a file")
+        assert [s.name for s in picked] == ["foreign_lfi"], [s.name for s in picked]
+        assert calls["n"] == 1
+        # Same signature → served from cache, no second model call.
+        await sel.select(cands, state, "read a file")
+        assert calls["n"] == 1, calls
+
+        # Disabled / no-model selector is a pure no-op (predicate-only behaviour).
+        off = ModelSkillSelector(ask=None)
+        assert await off.select(cands, state, "read a file") == []
+    finally:
+        clear_registered_skills()
+    print("  PASS  skill_model_selection_hybrid")
+
+
 async def test_web_session_persists_login():
     """A login via http_request must authenticate the NEXT call - the persistent
     cookie-jar fix for the auth/IDOR failure cluster. Without it, each call built a
@@ -6458,6 +6573,9 @@ async def run_all():
     await test_scoped_bus_tags()
     test_learning_store_and_bias()
     test_skill_md_format()
+    await test_skill_robust_yaml()
+    await test_skill_bundled_resources()
+    await test_skill_model_selection_hybrid()
 
     print("\nWeb tools, grounding + headless browser (P0 / capability #1)")
     await test_web_session_persists_login()

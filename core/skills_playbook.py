@@ -14,8 +14,9 @@ state block).
 
 from __future__ import annotations
 
+import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 # Ports that indicate an HTTP application is in play.
@@ -70,6 +71,14 @@ class Skill:
     name: str
     matches: Callable[[Any, str], bool]
     body: str
+    # Hybrid activation: `description` (from a SKILL.md) lets a model select a skill
+    # semantically when its predicate does NOT fire - the path that makes trigger-less
+    # / foreign (Claude-style) skills activate. Built-ins leave this empty and stay
+    # purely predicate-driven. `resource_dir`/`resources` carry bundled files for
+    # progressive disclosure (paths surfaced to the agent when the skill is injected).
+    description: str = ""
+    resource_dir: str = ""
+    resources: tuple[str, ...] = ()
 
 
 def _is_web_target(state: Any, user_input: str) -> bool:
@@ -769,13 +778,50 @@ def all_skills() -> list[Skill]:
     return SKILLS + _REGISTERED_SKILLS
 
 
-def relevant_skills(state: Any, user_input: str = "") -> list[str]:
-    """Bodies of the skills whose predicate matches the current state/request."""
-    out: list[str] = []
+def render_skill(skill: Skill) -> str:
+    """The text injected for a skill: its body, plus a footer listing any bundled
+    resource files (progressive disclosure) so the agent can read/run them on demand
+    with its existing file / shell / code_run tools."""
+    body = skill.body
+    if skill.resources:
+        listing = "\n".join(
+            f"  - {os.path.join(skill.resource_dir, r)}" for r in skill.resources)
+        body += (
+            "\n\nBUNDLED RESOURCES - this skill ships files alongside its playbook. "
+            "Read a reference file with your file tools before acting, and run a "
+            "bundled script with `code_run`/`shell`:\n" + listing)
+    return body
+
+
+def predicate_matched_skills(state: Any, user_input: str = "") -> list[Skill]:
+    """Skills whose deterministic predicate fires for the current state/request -
+    the fast, offline path (no model call). Built-in domain playbooks live here."""
+    out: list[Skill] = []
     for skill in all_skills():
         try:
             if skill.matches(state, user_input):
-                out.append(skill.body)
+                out.append(skill)
         except Exception:
             continue
     return out
+
+
+def selection_candidates(state: Any, user_input: str = "") -> list[Skill]:
+    """The pool the model-based selector chooses from: skills that carry a
+    `description` but whose predicate did NOT fire - i.e. trigger-less / foreign
+    skills imported from other agents. Predicate-matched skills are excluded (they
+    already inject), and description-less built-ins are excluded (they stay purely
+    predicate-driven), so the model layer only touches what predicates can't."""
+    matched = {s.name for s in predicate_matched_skills(state, user_input)}
+    return [s for s in all_skills() if s.description and s.name not in matched]
+
+
+def skill_catalog(skills: list[Skill]) -> str:
+    """A compact `name: description` listing of skills, for the model selector."""
+    return "\n".join(f"- {s.name}: {s.description}".rstrip() for s in skills)
+
+
+def relevant_skills(state: Any, user_input: str = "") -> list[str]:
+    """Rendered bodies of the skills whose predicate matches (backward-compatible
+    convenience; the controller now also layers model-based selection on top)."""
+    return [render_skill(s) for s in predicate_matched_skills(state, user_input)]

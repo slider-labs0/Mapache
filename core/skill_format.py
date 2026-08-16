@@ -54,6 +54,7 @@ class SkillSpec:
     target_scheme: list[str] = field(default_factory=list)
     phase: str = ""
     tools: list[str] = field(default_factory=list)
+    allowed_tools: list[str] = field(default_factory=list)
     body: str = ""
 
 
@@ -93,15 +94,71 @@ def _unquote(s: str) -> str:
 
 
 def _parse_frontmatter(fm: str) -> dict[str, Any]:
+    """Parse SKILL.md frontmatter. Prefers a real YAML parser when one is installed
+    (so skills authored for other agents with rich YAML parse faithfully); otherwise
+    falls back to a dependency-free parser that still handles block-style lists and
+    `|`/`>` multi-line scalars, not just single-line scalars + inline lists."""
+    try:
+        import yaml  # type: ignore
+        data = yaml.safe_load(fm)
+        if isinstance(data, dict):
+            return {str(k).strip().lower(): v for k, v in data.items()}
+    except Exception:
+        pass
+    return _parse_frontmatter_fallback(fm)
+
+
+def _parse_frontmatter_fallback(fm: str) -> dict[str, Any]:
     data: dict[str, Any] = {}
-    for line in fm.splitlines():
-        line = line.rstrip()
-        if not line.strip() or line.lstrip().startswith("#"):
+    lines = fm.splitlines()
+    i, n = 0, len(lines)
+    while i < n:
+        raw = lines[i]
+        stripped = raw.strip()
+        i += 1
+        if not stripped or stripped.startswith("#") or stripped.startswith("- "):
             continue
-        if ":" not in line:
+        if ":" not in raw:
             continue
-        key, _, val = line.partition(":")
-        data[key.strip().lower()] = _parse_scalar(val)
+        key, _, val = raw.partition(":")
+        key = key.strip().lower()
+        val = val.strip()
+
+        # Block scalar: `key: |` / `key: >` (with optional chomp indicators).
+        if val and val[0] in "|>" and val.rstrip("+-") in ("|", ">"):
+            base = len(raw) - len(raw.lstrip())
+            raw_block: list[str] = []
+            while i < n:
+                nxt = lines[i]
+                if nxt.strip() == "":
+                    raw_block.append("")
+                    i += 1
+                    continue
+                if (len(nxt) - len(nxt.lstrip())) <= base:
+                    break
+                raw_block.append(nxt)
+                i += 1
+            # Dedent by the block's own indentation (the min indent of its non-blank
+            # lines), per YAML block-scalar rules - not a fixed offset from the key.
+            indents = [len(l) - len(l.lstrip()) for l in raw_block if l.strip()]
+            bi = min(indents) if indents else base + 1
+            block = [l[bi:] if len(l) >= bi else l.lstrip() for l in raw_block]
+            text = "\n".join(block).strip("\n")
+            if val[0] == ">":  # folded: newlines become spaces
+                text = re.sub(r"\s*\n\s*", " ", text).strip()
+            data[key] = text
+            continue
+
+        # `key:` with nothing after it may introduce a block list of `- item` lines.
+        if val == "":
+            items: list[str] = []
+            while i < n and lines[i].strip().startswith("- "):
+                items.append(_unquote(lines[i].strip()[2:].strip()))
+                i += 1
+            data[key] = items if items else ""
+            continue
+
+        data[key] = _parse_scalar(val)
     return data
 
 
@@ -127,6 +184,8 @@ def parse_skill_md(text: str) -> SkillSpec:
         target_scheme=[s.lower() for s in _as_list(d.get("target_scheme"))],
         phase=str(d.get("phase", "")).strip(),
         tools=_as_list(d.get("tools")),
+        # Anthropic-style skills use `allowed-tools`; accept both spellings (advisory).
+        allowed_tools=_as_list(d.get("allowed-tools")) or _as_list(d.get("allowed_tools")),
         body=body.strip(),
     )
 
@@ -200,18 +259,52 @@ def _make_matcher(spec: SkillSpec):
     return matches
 
 
-def spec_to_skill(spec: SkillSpec) -> Skill:
-    """Build an injectable Skill whose predicate comes from the spec's triggers."""
-    return Skill(name=spec.name, matches=_make_matcher(spec), body=spec.body)
+def spec_to_skill(
+    spec: SkillSpec,
+    resource_dir: str = "",
+    resources: "tuple[str, ...]" = (),
+) -> Skill:
+    """Build an injectable Skill. Its predicate comes from the spec's triggers (empty
+    for a trigger-less foreign skill, so it never auto-fires); `description` (falling
+    back to `when_to_use`) drives model-based selection instead. Bundled resource
+    files ride along for progressive disclosure."""
+    return Skill(
+        name=spec.name,
+        matches=_make_matcher(spec),
+        body=spec.body,
+        description=(spec.description or spec.when_to_use).strip(),
+        resource_dir=resource_dir,
+        resources=tuple(resources),
+    )
 
 
 # --------------------------------------------------------------------------- #
 # Loading a directory of SKILL.md files
 # --------------------------------------------------------------------------- #
 
+def _bundled_resources(skill_md_path: str) -> "tuple[str, tuple[str, ...]]":
+    """For a `<pkg>/SKILL.md`, return (resource_dir, relative-paths of sibling files)
+    so bundled scripts/references travel with the skill. A plain flat `*.md` skill
+    has no package dir, so no resources."""
+    if os.path.basename(skill_md_path).lower() != "skill.md":
+        return "", ()
+    d = os.path.dirname(skill_md_path)
+    try:
+        rels = tuple(sorted(
+            os.path.relpath(os.path.join(root, f), d).replace(os.sep, "/")
+            for root, _, files in os.walk(d)
+            for f in files
+            if f.lower() != "skill.md"
+        ))
+    except OSError:
+        rels = ()
+    return d, rels
+
+
 def load_skill_file(path: str) -> Optional[Skill]:
     """Parse and register one SKILL.md file. Returns the Skill, or None if the file
-    is unreadable, has no name, or has no body."""
+    is unreadable, has no name, or has no body. When the file is a `<pkg>/SKILL.md`,
+    sibling files in the package are attached as bundled resources."""
     try:
         with open(path, "r", encoding="utf-8") as fh:
             text = fh.read()
@@ -222,23 +315,44 @@ def load_skill_file(path: str) -> Optional[Skill]:
     if not spec.name or not spec.body:
         logger.warning("Skipping %s - a SKILL.md needs a `name` and a body.", path)
         return None
-    skill = spec_to_skill(spec)
+    resource_dir, resources = _bundled_resources(path)
+    skill = spec_to_skill(spec, resource_dir, resources)
     register_skill(skill)
     return skill
 
 
 def load_skill_dir(path: str) -> list[Skill]:
-    """Load every *.md file in `path` (non-recursive) as a SKILL.md and register it.
-    Returns the skills loaded. A missing directory is a no-op (returns [])."""
+    """Load skills from `path`, supporting BOTH layouts and register each:
+      - nested skill packages: `<path>/<name>/SKILL.md` (+ bundled resource files),
+        discovered recursively - the convention other agents (Claude-style) use;
+      - flat single-file skills: `<path>/*.md` at the top level.
+    A missing directory is a no-op (returns []). Returns the skills loaded."""
     if not path or not os.path.isdir(path):
         return []
     loaded: list[Skill] = []
+    seen: set[str] = set()
+
+    # 1) Nested `SKILL.md` packages at any depth (these carry bundled resources).
+    for root, _, files in os.walk(path):
+        for f in files:
+            if f.lower() == "skill.md":
+                fp = os.path.join(root, f)
+                skill = load_skill_file(fp)
+                if skill is not None:
+                    loaded.append(skill)
+                seen.add(os.path.abspath(fp))
+
+    # 2) Flat top-level `*.md` single-file skills not already loaded as a package.
     for name in sorted(os.listdir(path)):
         if not name.lower().endswith(".md"):
             continue
-        skill = load_skill_file(os.path.join(path, name))
+        fp = os.path.join(path, name)
+        if os.path.abspath(fp) in seen or not os.path.isfile(fp):
+            continue
+        skill = load_skill_file(fp)
         if skill is not None:
             loaded.append(skill)
+
     if loaded:
         logger.info("Loaded %d file-authored skill(s) from %s: %s",
                     len(loaded), path, ", ".join(s.name for s in loaded))

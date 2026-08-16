@@ -29,7 +29,10 @@ from .progress_ledger import ProgressLedger, action_label
 from .flag_verifier import FlagVerifier
 from .operators import get_operator, operator_names
 from .opsec_routing import OpsecPolicy
-from .skills_playbook import relevant_skills
+from .skills_playbook import (
+    predicate_matched_skills, render_skill, selection_candidates,
+)
+from .skill_selection import ModelSkillSelector
 from .executor import Executor
 from .logger import get_logger
 from .project_context import build_project_context
@@ -172,6 +175,11 @@ class AgentController:
         knowledge_graph: Optional[Any] = None,
     ) -> None:
         self.model = model_provider
+        # Hybrid skill activation: predicate matching (skills_playbook) stays the fast
+        # path; this selector layers model-based selection on top for description-only
+        # / foreign skills whose predicate can't fire. Uses the primary model in
+        # JSON mode; cost is bounded by candidate-gating + per-state caching.
+        self._skill_selector = ModelSkillSelector(ask=self._call_model_raw)
         # Disk-persisted findings store shared with sub-agents (fresh-context state).
         # Synced from the AttackState blackboard as findings appear; children inherit
         # the same graph so a freshly-spawned specialist can query prior findings.
@@ -602,7 +610,18 @@ class AgentController:
             refreshed = self.chain.get_context_injection()
             if refreshed:
                 snippets.append(refreshed)
-            snippets.extend(relevant_skills(self.chain.attack_state, user_input))
+            # Fast path: deterministic predicate matches (built-in domain playbooks),
+            # offline and free. Then layer model-based selection over description-only
+            # / foreign skills whose predicate can't fire - only when such candidates
+            # exist, so built-in-only engagements pay no extra model call.
+            state = self.chain.attack_state
+            for _skill in predicate_matched_skills(state, user_input):
+                snippets.append(render_skill(_skill))
+            _candidates = selection_candidates(state, user_input)
+            if _candidates:
+                for _skill in await self._skill_selector.select(
+                    _candidates, state, user_input):
+                    snippets.append(render_skill(_skill))
             # Negative knowledge: remind the model of dead ends it already walked so
             # it stops re-spraying the same fruitless endpoints/params across turns.
             ledger = self._progress_ledger.render()
