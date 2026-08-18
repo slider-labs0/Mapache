@@ -2,10 +2,11 @@
   "_comment": "Copy to mcp.json in your working dir (or pass --mcp-config) to connect Mapache to MCP servers. Each server is launched as a subprocess and its tools become mcp__<server>__<tool>. Override the path with --mcp-config.",
   "mcpServers": {
     "playwright": {
-      "_comment": "Drive a real browser like a user: navigate, click, type, fill forms, snapshot the accessibility tree, screenshot. Drop --headless to watch it. First run downloads the package and a browser. The server exposes ~24 tools; the optional 'tools' allowlist keeps only the ones you need so the prompt stays small on local models (remove it to expose all).",
+      "_comment": "Drive a real browser like a user: navigate, click, type, fill forms, snapshot the accessibility tree, screenshot. '--browser chromium' uses Playwright's bundled Chromium (the default 'chrome' channel needs Google Chrome installed). First run: npx @playwright/mcp@latest install-browser chrome-for-testing. To route over Tor, add '--proxy-server','socks5://127.0.0.1:9150' (Tor Browser) or 9050 (system tor). The 'tools' allowlist keeps the prompt small on local models; 'timeout' raises the per-call limit for slow (e.g. Tor) page loads.",
       "command": "npx",
-      "args": ["-y", "@playwright/mcp@latest", "--headless"],
+      "args": ["-y", "@playwright/mcp@latest", "--headless", "--isolated", "--browser", "chromium"],
       "env": {},
+      "timeout": 90,
       "tools": [
         "browser_navigate", "browser_navigate_back", "browser_click", "browser_type",
         "browser_press_key", "browser_fill_form", "browser_snapshot", "browser_find",

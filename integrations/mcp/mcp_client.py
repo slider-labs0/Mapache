@@ -60,6 +60,9 @@ class MCPServerConfig:
     # trimming it here keeps the function-calling payload small enough for local
     # models with a limited context window.
     tools: list[str] = field(default_factory=list)
+    # Per-request timeout (seconds). 0 = use DEFAULT_TIMEOUT. Raise it for a server
+    # whose calls are slow, e.g. a browser routed over Tor (page loads take a while).
+    timeout: float = 0.0
 
 
 def load_mcp_config(path: str) -> list[MCPServerConfig]:
@@ -89,6 +92,7 @@ def load_mcp_config(path: str) -> list[MCPServerConfig]:
             args=list(spec.get("args", []) or []),
             env={str(k): str(v) for k, v in (spec.get("env") or {}).items()},
             tools=[str(t) for t in (spec.get("tools") or [])],
+            timeout=float(spec.get("timeout") or 0.0),
         ))
     return configs
 
@@ -110,6 +114,7 @@ class MCPStdioClient:
         self._next_id = 0
         self._lock = asyncio.Lock()  # serialize request/response on the pipe
         self.server_info: dict[str, Any] = {}
+        self._timeout = config.timeout if config.timeout and config.timeout > 0 else DEFAULT_TIMEOUT
 
     @property
     def name(self) -> str:
@@ -197,7 +202,7 @@ class MCPStdioClient:
             # Read until we see the response with our id, skipping notifications.
             while True:
                 line = await asyncio.wait_for(
-                    self._proc.stdout.readline(), timeout=DEFAULT_TIMEOUT
+                    self._proc.stdout.readline(), timeout=self._timeout
                 )
                 if not line:
                     raise MCPError(f"MCP server {self.name!r} closed the connection")

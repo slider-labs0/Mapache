@@ -107,6 +107,52 @@ Omit `tools` (or leave it empty) to expose every tool the server offers. If a fu
 still overflows on a small-context model, raise the Ollama window with `OLLAMA_NUM_CTX`
 (see [Providers](providers.md)).
 
+### Browsing over Tor (not clearnet Chrome)
+
+To make Mapache browse `.onion` sites and reach the dark web like a user, route the
+Playwright browser through Tor instead of the default Chrome channel:
+
+```json
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "-y", "@playwright/mcp@latest",
+        "--headless", "--isolated",
+        "--browser", "chromium",
+        "--proxy-server", "socks5://127.0.0.1:9150"
+      ],
+      "timeout": 90,
+      "tools": ["browser_navigate", "browser_click", "browser_type", "browser_snapshot",
+                "browser_fill_form", "browser_find", "browser_take_screenshot", "browser_wait_for"]
+    }
+  }
+}
+```
+
+Three things make this work:
+
+- `--browser chromium` uses Playwright's bundled Chromium, not Google Chrome. This is what
+  "use Playwright, not Chrome" means, and it avoids a "chrome is not found" error on a
+  machine without Chrome installed.
+- `--proxy-server socks5://127.0.0.1:9150` sends all browser traffic through Tor. Use port
+  `9150` if you run the Tor Browser bundle, or `9050` for a system `tor` daemon. Tor must
+  be running before you launch Mapache, and Chromium resolves `.onion` hostnames through
+  the proxy, so `browser_navigate` reaches onion services.
+- `timeout: 90` gives slow Tor page loads room, so a request does not hit the default 30s
+  limit and stall.
+
+First run only, install the browser the MCP expects:
+
+```bash
+npx @playwright/mcp@latest install-browser chrome-for-testing
+```
+
+Verify it is actually exiting through Tor by having the agent navigate to
+`https://check.torproject.org` and snapshot the page; it should read
+"Congratulations. This browser is configured to use Tor."
+
 ## The skill hub
 
 The hub lets you browse, install, and publish reusable extensions. Three manifest types

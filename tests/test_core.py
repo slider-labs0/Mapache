@@ -1345,14 +1345,21 @@ async def test_mcp_tool_allowlist():
     finally:
         await mgr2.close_all()
 
-    # load_mcp_config parses the `tools` allowlist from mcp.json.
+    # load_mcp_config parses the `tools` allowlist and per-server `timeout`.
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "mcp.json")
         with open(p, "w", encoding="utf-8") as f:
             f.write('{"mcpServers": {"pw": {"command": "npx", "args": ["x"], '
-                    '"tools": ["browser_click", "browser_type"]}}}')
+                    '"tools": ["browser_click", "browser_type"], "timeout": 90}}}')
         cfgs = load_mcp_config(p)
         assert cfgs[0].tools == ["browser_click", "browser_type"]
+        assert cfgs[0].timeout == 90.0
+
+    # The client honors the per-server timeout (used for slow Tor page loads).
+    from integrations.mcp.mcp_client import MCPStdioClient, DEFAULT_TIMEOUT
+    assert MCPStdioClient(MCPServerConfig(name="a", command="x", timeout=90)).\
+        _timeout == 90.0
+    assert MCPStdioClient(MCPServerConfig(name="b", command="x"))._timeout == DEFAULT_TIMEOUT
     print("  PASS  mcp_tool_allowlist")
 
 
