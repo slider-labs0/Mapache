@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any, AsyncIterator, Optional
 
 try:
@@ -26,6 +27,12 @@ logger = get_logger(__name__)
 DEFAULT_BASE_URL = "http://localhost:11434"
 DEFAULT_MODEL    = "qwen2.5:14b"
 DEFAULT_TIMEOUT  = 600.0  # 10 minutes - long scans need this
+# Ollama defaults a model's context window to a small value (often 4096), so a
+# full Mapache prompt (system prompt + tools + state, ~12-16k tokens) overflows it
+# and Ollama returns HTTP 400 "exceeds the available context size". We request a
+# larger window via options.num_ctx so any model can hold a real engagement prompt.
+# Matches the controller's default max_context_tokens; override with OLLAMA_NUM_CTX.
+DEFAULT_NUM_CTX  = 16384
 
 
 class OllamaProvider:
@@ -39,6 +46,7 @@ class OllamaProvider:
         base_url: str = DEFAULT_BASE_URL,
         timeout: float = DEFAULT_TIMEOUT,
         supports_tools: Optional[bool] = None,
+        num_ctx: int = 0,
     ) -> None:
         if not HAS_HTTPX:
             raise ImportError("httpx is required: pip install httpx")
@@ -46,6 +54,12 @@ class OllamaProvider:
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        # Context window to request from Ollama (see DEFAULT_NUM_CTX). Explicit arg
+        # wins, then the OLLAMA_NUM_CTX env var, then the default.
+        try:
+            self.num_ctx = num_ctx or int(os.environ.get("OLLAMA_NUM_CTX") or DEFAULT_NUM_CTX)
+        except (TypeError, ValueError):
+            self.num_ctx = DEFAULT_NUM_CTX
         self.supports_tools = (
             supports_tools
             if supports_tools is not None
@@ -72,6 +86,7 @@ class OllamaProvider:
             "model": self.model,
             "messages": messages,
             "stream": False,
+            "options": {"num_ctx": self.num_ctx},
         }
 
         if tools and self.supports_tools:
@@ -122,6 +137,7 @@ class OllamaProvider:
             "model": self.model,
             "messages": messages,
             "stream": True,
+            "options": {"num_ctx": self.num_ctx},
         }
 
         if tools and self.supports_tools:

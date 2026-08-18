@@ -97,6 +97,13 @@ class RoutingState:
     def has_creds(self) -> bool:
         return bool(self.credentials) or self.kg_counts.get("credential", 0) > 0
 
+    @property
+    def has_findings(self) -> bool:
+        """Any evidence of a solved objective: a flag, a vulnerability, or captured
+        credentials. Mapache is a full-spectrum agent, not a CTF-flag bot, so success
+        is evidence, not only a flag."""
+        return self.has_flag or self.has_vulns or self.has_creds
+
     def signature(self) -> str:
         """A compact fingerprint used to detect 'no progress' between rounds."""
         return "|".join([
@@ -576,9 +583,12 @@ class Supervisor:
                     pass
 
         final = RoutingState.snapshot(self.controller)
+        # Evidence-based, not flag-only: a vuln or captured creds count as a solved
+        # objective too (Mapache is full-spectrum, not a CTF-flag bot).
+        solved = final.has_findings
         await self._emit("supervisor.done", {"rounds": len(rounds),
-                                             "solved": final.has_flag, "stop": stop})
-        return SupervisorResult(rounds=rounds, stop_reason=stop, solved=final.has_flag)
+                                             "solved": solved, "stop": stop})
+        return SupervisorResult(rounds=rounds, stop_reason=stop, solved=solved)
 
 
 def make_model_planner(controller: Any) -> Planner:

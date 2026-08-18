@@ -111,6 +111,7 @@ class DashboardModel:
         self.ports: list[str] = []
         self.vulns = 0
         self.tool_count = 0
+        self.last_tool = ""          # the most recent tool/command, shown in the Agent panel
         self.recent_tools: list[str] = []
         self.shells_running: "dict[int, str]" = {}
         self.shells_done = 0
@@ -142,6 +143,7 @@ class DashboardModel:
 
     def add_tool(self, name: str) -> None:
         self.tool_count += 1
+        self.last_tool = name
         self.recent_tools.append(name)
         self.recent_tools = self.recent_tools[-6:]
         self._changed()
@@ -149,6 +151,8 @@ class DashboardModel:
     def shell_start(self, cmd: str) -> int:
         self._shell_seq += 1
         self.shells_running[self._shell_seq] = cmd
+        self.tool_count += 1
+        self.last_tool = _clip(cmd, 24)
         self._changed()
         return self._shell_seq
 
@@ -200,7 +204,8 @@ class DashboardModel:
         blocks: list[str] = []
 
         agent_lines = [kv("agent", _clip(self.agent, W - 10), self.agent_accent),
-                       kv("phase", _clip(self.phase or "-", W - 10))]
+                       kv("phase", _clip(self.phase or "-", W - 10)),
+                       kv("tool", _clip(self.last_tool or "-", W - 10), "teal")]
         if len(self.agents) > 1:
             agent_lines.append(kv("team", f"{len(self.agents)} operators"))
         blocks.append(theme.panel("Agent", agent_lines, color=color, width=W))

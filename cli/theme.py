@@ -265,6 +265,11 @@ THINKING_WORDS: list[str] = [
 SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _ASCII_SPINNER = "|/-\\"
 
+# How many spinner frames pass before the thinking WORD changes. The ticker runs at
+# ~0.2s per frame, so 10 means the word changes about every 2 seconds (the spinner
+# still animates every frame). Larger = slower word cadence.
+THINKING_WORD_EVERY = 10
+
 
 # Gradient endpoints for the live "thinking" word - the mascot's lavender warming
 # into a bright teal, so the word shimmers left-to-right like Claude Code's.
@@ -312,7 +317,7 @@ def thinking_line(i: int, *, color: bool = True) -> str:
     an ASCII spinner + '...' when the terminal encoding can't do braille."""
     uni = _can_encode(SPINNER_FRAMES)
     spin = spinner_frame(i, unicode=uni)
-    word = thinking_word(i // 4)
+    word = thinking_word(i // THINKING_WORD_EVERY)
     ell = "…" if _can_encode("…") else "..."
     return (paint(f"  {spin} ", "amber", color=color)
             + gradient(word, color=color)

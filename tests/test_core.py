@@ -4624,9 +4624,12 @@ def test_theme_logo_and_thinking():
     assert theme.thinking_word(len(theme.THINKING_WORDS)) == theme.thinking_word(0)
     f0 = theme.thinking_line(0, color=False)
     assert theme.THINKING_WORDS[0] in f0
-    # frames 0..3 keep the same word (word = i//4), frame 4 advances it
-    assert theme.thinking_word(0 // 4) == theme.thinking_word(3 // 4)
-    assert theme.thinking_word(4 // 4) != theme.thinking_word(0 // 4)
+    # The thinking WORD changes slower than the spinner: it holds for
+    # THINKING_WORD_EVERY frames (~2s at 0.2s/frame), then advances.
+    N = theme.THINKING_WORD_EVERY
+    assert N >= 8
+    assert theme.thinking_word(0 // N) == theme.thinking_word((N - 1) // N)   # stable across the window
+    assert theme.thinking_word(N // N) != theme.thinking_word(0 // N)         # advances after N frames
 
     # Live "running <tool>" line + "ran <tool> · <dur>" completion line.
     rl = theme.running_line(0, "install_github_tool", color=False)
@@ -4706,6 +4709,7 @@ def test_tui_dashboard_model():
     tr.tool_call("nmap_scan", "-sV")
     tr.tool_call("http_request", "GET /")
     assert d.tool_count == 2 and d.recent_tools[-1] == "http_request"
+    assert d.last_tool == "http_request"        # the sidebar shows the current tool
 
     # Shell lifecycle: start adds a running shell, result clears it + bumps done.
     tr.shell_command("nmap -sV x", user="root", host="k", cwd="~")
@@ -4737,6 +4741,7 @@ def test_tui_dashboard_model():
     assert "Agent" in plain and "Budget" in plain and "Target" in plain
     assert "Models" in plain and "pipeline" in plain          # strategy little box
     assert "plan" in plain and "opus" in plain                # per-role in sidebar
+    assert "nmap -sV x" in plain                              # the current tool on the sidebar
     assert "10.0.0.5" in plain and "46.3k / 200.0k" in plain and "1m23s" in plain
     widths = {len(ln) for ln in plain.splitlines() if ln.strip()}
     assert widths == {36}, widths          # all panels exactly the column width
@@ -4907,10 +4912,54 @@ async def test_orchestrator_operator_budget():
         effects={"exploit_operator": lambda st: st.vulnerabilities.append("vuln")})
     ctrl.chain.attack_state.vulnerabilities.append("seed")  # make exploit the top route
     res = await Supervisor(ctrl, max_rounds=20, max_per_operator=3).run("go")
-    assert res.solved is False
+    # Evidence-based success: finding vulnerabilities counts as solved now, not only a
+    # flag (Mapache is full-spectrum, not a CTF-flag bot). The point of this test is the
+    # per-operator budget cap, which still holds.
+    assert res.solved is True
     assert res.operators_run.count("exploit_operator") == 3   # capped, not 20
     assert "no route" in res.stop_reason                       # stopped, didn't spin to 20
     print("  PASS  orchestrator_operator_budget")
+
+
+async def test_coder_operator_and_evidence_signal():
+    # A coding agent exists for plain programming (not only exploits), the swarm
+    # success signal is evidence-based (not CTF-flag-only), and Ollama is asked for a
+    # real context window so a full prompt does not overflow a small default.
+    import os
+    import types
+    from core.operators import get_operator
+    from core.orchestrator import RoutingState
+    from models.providers.ollama_provider import OllamaProvider, DEFAULT_NUM_CTX
+
+    coder = get_operator("coder")
+    assert coder is not None
+    assert "code_run" in coder.tools and coder.model_role == "planner"
+    assert "not only exploits" in coder.expertise      # a coding agent, not a CTF bot
+
+    gen = get_operator("general")                      # a general (non-offensive) agent
+    assert gen is not None and "not an attack" in gen.expertise.lower()
+
+    def _snap(**kw):
+        st = types.SimpleNamespace(vulnerabilities=[], credentials=[], flags=[],
+                                   open_ports=[], services={}, target="", current_phase="")
+        for k, v in kw.items():
+            setattr(st, k, v)
+        return RoutingState.snapshot(types.SimpleNamespace(
+            chain=types.SimpleNamespace(attack_state=st), knowledge_graph=None))
+
+    assert _snap(flags=["F"]).has_findings is True
+    assert _snap(vulnerabilities=["v"]).has_findings is True   # a vuln counts, not just a flag
+    assert _snap(credentials=["c"]).has_findings is True
+    assert _snap().has_findings is False
+
+    p = OllamaProvider(model="x", base_url="http://localhost:11434")
+    assert p.num_ctx == DEFAULT_NUM_CTX and DEFAULT_NUM_CTX >= 16384
+    os.environ["OLLAMA_NUM_CTX"] = "8192"
+    try:
+        assert OllamaProvider(model="x").num_ctx == 8192
+    finally:
+        del os.environ["OLLAMA_NUM_CTX"]
+    print("  PASS  coder_operator_and_evidence_signal")
 
 
 async def test_orchestrator_llm_fallback():
@@ -6688,6 +6737,7 @@ async def run_all():
     await test_orchestrator_supervisor_routing()
     await test_orchestrator_anti_loop()
     await test_orchestrator_operator_budget()
+    await test_coder_operator_and_evidence_signal()
     await test_orchestrator_llm_fallback()
     await test_orchestrator_opplan_sequencing()
     await test_orchestrator_exploration_ladder()

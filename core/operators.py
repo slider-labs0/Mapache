@@ -210,6 +210,39 @@ _add(Operator(
               "leak) as evidence. Prefer deterministic, re-runnable scripts.",
 ))
 _add(Operator(
+    name="general", title="General Agent", phase="analysis", prefer_local=True,
+    model_role="executor",
+    description="General-purpose assistant for questions and non-offensive tasks.",
+    # A light toolset: research + read + a shell for simple, non-attack tasks.
+    tools={"web_search", "web_fetch", "file_read", "file_list", "file_search",
+           "shell", "code_run"},
+    triggers=set(),
+    expertise="handle general, non-offensive requests: answer questions from your own "
+              "knowledge, research with web_search/web_fetch, read files, and run simple "
+              "commands. This is NOT an attack and NOT a capture-the-flag task: do not run "
+              "a kill chain or hunt for flags. Answer directly and concisely, and reach for "
+              "a tool only when you actually need external information.",
+))
+_add(Operator(
+    name="coder", title="Coder", phase="analysis", roe_gated=False,
+    model_role="planner",  # writing correct code is reasoning-heavy
+    prefer_local=True,
+    description="Write, run, and fix general code, scripts, and tooling (not just exploits).",
+    # The coding workhorse: code_run authors + compiles + runs + iterates; file_* to
+    # read and refine source; shell for setup. Distinct from exploit_dev, which is
+    # attack-PoC focused - this operator handles plain programming requests.
+    tools={"code_run", "file_read", "file_write", "file_edit", "file_list",
+           "file_search", "shell", "create_tool"},
+    triggers={"code", "script", "program", "python", "compile", "function", "refactor"},
+    expertise="write, run, and iteratively fix code with code_run for general programming, "
+              "scripting, and tooling - not only exploits. This is NOT a capture-the-flag "
+              "task: a plain coding request is answered with working, tested code, never a "
+              "kill chain. Loop tightly: write, RUN it, read the REAL compiler/runtime error "
+              "or output, fix, repeat until it works. Read existing source with file_read "
+              "before editing. Return the final working code plus a one-line note on what it "
+              "does; do not fabricate output you did not actually run.",
+))
+_add(Operator(
     name="reverser", title="Reverser", phase="analysis",
     model_role="planner",  # reasoning over binaries
     description="Binary analysis and reverse engineering.",

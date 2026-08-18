@@ -37,7 +37,9 @@ routing print inline at startup.
 
 The dashboard panels:
 
-- Agent: the active operator and its accent color, the current phase, and the team size.
+- Agent: the active operator and its accent color, the current phase, the most recent
+  tool or command it called, and the team size. Sub-agent tool calls feed the HUD too, so
+  in swarm mode you see the operators' actual commands live.
 - Models: the routing strategy and the per-role model map (planner, executor, verifier).
   This is where the model details live in the TUI, rather than front and center.
 - Target: the target, the open ports, and the vulnerability count.

@@ -1479,11 +1479,29 @@ class MapacheCLI:
                     fanout=getattr(self.args, "fanout", False),
                 ).run(user_input, session_id=self.session_id)
                 await self._stop_ticker(ticker, clear=True)
-                summary = (f"swarm complete - {sres.stop_reason}\n"
-                           f"        operators: {', '.join(sres.operators_run) or '(none)'}"
-                           f"  ·  rounds: {len(sres.rounds)}  ·  solved: {sres.solved}")
-                self.render.agent_result(summary, sres.operators_run,
-                                         len(sres.rounds), None)
+                st = self.controller.chain.attack_state
+                n_find = (len(getattr(st, "vulnerabilities", []) or [])
+                          + len(getattr(st, "credentials", []) or [])
+                          + len(getattr(st, "flags", []) or []))
+                if n_find == 0:
+                    # De-CTF fallback: the swarm surfaced no offensive evidence, which
+                    # for a general or coding objective means the operators had no job.
+                    # Hand the objective to the lead agent once so it is actually done,
+                    # instead of reporting a bare CTF-style failure.
+                    self.render.info(
+                        "  swarm found no offensive route - handing to the lead agent")
+                    resp = await self.controller.run(
+                        user_input, session_id=self.session_id)
+                    self.session_id = resp.session_id
+                    self.render.agent_result(resp.content, resp.tool_calls_made,
+                                             resp.iterations, resp.error)
+                    self.render.task_list(self.controller.chain.todos)
+                else:
+                    summary = (f"swarm complete - {sres.stop_reason}\n"
+                               f"        operators: {', '.join(sres.operators_run) or '(none)'}"
+                               f"  ·  rounds: {len(sres.rounds)}  ·  findings: {n_find}")
+                    self.render.agent_result(summary, sres.operators_run,
+                                             len(sres.rounds), None)
             except Exception as exc:
                 await self._stop_ticker(ticker, clear=True)
                 self.render.error(str(exc))
@@ -1634,7 +1652,7 @@ class MapacheCLI:
         i = 0
         while True:
             if getattr(self, "tui", None) is not None:
-                word = theme.thinking_word(i // 4)
+                word = theme.thinking_word(i // theme.THINKING_WORD_EVERY)
                 elapsed = time.monotonic() - getattr(self, "_turn_start_ts", time.monotonic())
                 tokens = getattr(getattr(self, "controller", None), "session_tokens", 0)
                 self.render.thinking(theme.status_line(word, elapsed, tokens))
@@ -1683,6 +1701,10 @@ class MapacheCLI:
         if prefix is not None:
             if name not in ("delegate", "delegate_parallel"):
                 print(f"\n{prefix}{theme.action_phrase(name, args)}", flush=True)
+                # Surface a sub-agent's tool/command on the HUD too (its steps otherwise
+                # bypass the renderer, which is why swarm runs showed tools 0).
+                if self.tui is not None:
+                    self.tui.dashboard.add_tool(self._shell_cmd(name, args) or name)
             return
         self._running_tool = name
         self._running_action = theme.action_phrase(name, args)

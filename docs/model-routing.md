@@ -112,8 +112,8 @@ declare `planner`; action specialists default to `executor`:
 
 | Operator | Declared role | Example model from the team above |
 |----------|--------------|-----------------------------------|
-| recon, web, exploit, post, cloud, mobile, wireless, iot, ics | `executor` | Kimi |
-| osint, exploit_dev, contract_auditor, reverser, analyst | `planner` | DeepSeek-Reasoner |
+| recon, web, exploit, post, cloud, mobile, wireless, iot, ics, general | `executor` | Kimi |
+| osint, exploit_dev, contract_auditor, reverser, analyst, coder | `planner` | DeepSeek-Reasoner |
 | verifier checkpoints (with `--verify`) | `verifier` | GLM |
 
 Reasoning specialists get the reasoning model; action specialists get the fast

@@ -42,6 +42,8 @@ letting the supervisor pick runs the child as that specialist.
 
 | Operator | Title | Focus |
 |----------|-------|-------|
+| general | General Agent | General, non-offensive tasks and questions (not a kill chain) |
+| coder | Coder | Write, run, and fix general code, scripts, and tooling |
 | recon_operator | Recon Operator | Broad host and service discovery |
 | osint_operator | OSINT Operator | Passive research and correlation |
 | web_operator | Web Operator | Web application attack surface |
@@ -78,6 +80,22 @@ collects the specialist's conclusions into the shared knowledge, and continues. 
 the mode to use when you want the most visible multi-agent action, and it is where the
 sub-agent model-selection pipeline in [Model routing](model-routing.md) comes into play:
 each specialist can run on a different model based on the role it declares.
+
+### Success is evidence, not a flag
+
+Mapache is a full-spectrum agent, not a capture-the-flag bot, so the supervisor's success
+signal is evidence-based: a captured flag, a confirmed vulnerability, or captured
+credentials all count as a solved objective. The engagement summary reports the number of
+findings, not a bare solved or unsolved flag.
+
+### The generalist fallback
+
+The swarm is built for offensive engagements. If you hand it a general or coding objective,
+the offensive operators have no real job, so rather than flailing and reporting a failure,
+the swarm falls back to the lead agent once when it surfaces no evidence, so the task
+actually gets done. For a plain coding request, prefer running it without swarm (solo
+strategy with a coding model, or delegate to the `coder` operator); the fallback is a
+safety net, not the intended path.
 
 ## Knowledge graph and the operation plan
 
