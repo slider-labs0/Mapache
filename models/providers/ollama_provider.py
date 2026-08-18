@@ -31,8 +31,12 @@ DEFAULT_TIMEOUT  = 600.0  # 10 minutes - long scans need this
 # full Mapache prompt (system prompt + tools + state, ~12-16k tokens) overflows it
 # and Ollama returns HTTP 400 "exceeds the available context size". We request a
 # larger window via options.num_ctx so any model can hold a real engagement prompt.
-# Matches the controller's default max_context_tokens; override with OLLAMA_NUM_CTX.
-DEFAULT_NUM_CTX  = 16384
+# It must exceed the controller's prompt budget (max_context_tokens, 16384) with room
+# left for the model's OUTPUT - otherwise a big prompt (e.g. with MCP browser tools)
+# fills the whole window and the model's tool call is truncated mid-JSON. So this is
+# the prompt budget plus output headroom. Override with OLLAMA_NUM_CTX (raise it for
+# heavy tool sets, lower it if a big model runs short on memory).
+DEFAULT_NUM_CTX  = 24576
 
 
 class OllamaProvider:

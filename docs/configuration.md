@@ -98,7 +98,7 @@ See [Execution and OPSEC](execution-and-opsec.md).
   `OPENAI_API_KEY`, `XAI_API_KEY`, `NOUS_API_KEY`, `NVIDIA_API_KEY`.
 - Base URL overrides where supported, for example `MOONSHOT_BASE_URL`, `ZHIPU_BASE_URL`.
 - `MAPACHE_STRATEGY` maps to `default_strategy`.
-- `OLLAMA_NUM_CTX` sets the context window Mapache requests from Ollama (default 16384).
+- `OLLAMA_NUM_CTX` sets the context window Mapache requests from Ollama (default 24576).
   See [Providers](providers.md).
 - `NO_COLOR` disables colored output.
 

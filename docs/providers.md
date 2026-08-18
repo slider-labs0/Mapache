@@ -35,11 +35,20 @@ test model source; `qwen2.5:32b` is a reliable tool-calling local model.
 Ollama defaults a model's context window to a small value (often 4096 tokens), so a full
 Mapache prompt (system prompt plus tools plus attack state, roughly 12000 to 16000 tokens)
 overflows it and Ollama returns HTTP 400 "exceeds the available context size". Mapache
-requests a larger window automatically via `options.num_ctx` (default 16384), so any model
-can hold a real engagement prompt. Override it with the `OLLAMA_NUM_CTX` environment
-variable. A larger window uses more memory, so if a big model runs out of memory, lower
-`OLLAMA_NUM_CTX`, but keep it above your typical prompt size (around 13000) or large
-prompts will overflow again.
+requests a larger window automatically via `options.num_ctx` (default 24576), so any model
+can hold a real engagement prompt with room left for its answer.
+
+The window must exceed the prompt budget (around 16000 tokens) with headroom for the
+model's output. If it does not, a large prompt fills the whole window and the model's
+reply, including a tool call, gets truncated mid-generation. Loading many tools (for
+example an MCP browser server) makes the prompt bigger, so raise the window for those:
+
+```bash
+OLLAMA_NUM_CTX=32768 mapache serve
+```
+
+A larger window uses more memory. If a big model runs short on memory, lower
+`OLLAMA_NUM_CTX`, but keep it comfortably above your prompt size or replies will truncate.
 
 ## Cloud providers
 
