@@ -4,7 +4,7 @@
 
 <h1 align="center">Mapache</h1>
 
-<p align="center"><i>Autonomous offensive-security agent that runs the full kill chain across every discipline — and closes it with a working exploit, not a guess.</i></p>
+<p align="center"><i>Autonomous offensive-security agent that runs the full kill chain across every discipline, then closes it with a working exploit, not a guess.</i></p>
 
 <div align="center">
 
@@ -21,7 +21,7 @@
 <a href="https://your-website.example">
   <img src="https://img.shields.io/badge/Website-visit-6C5CE7?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Website">
 </a>
-<a href="https://youtube.com/@your-channel">
+<a href="https://youtube.com/@internetanarchy-s?si=kcu2YQKxeL0etik4">
   <img src="https://img.shields.io/badge/YouTube-watch-FF0000?style=for-the-badge&logo=youtube&logoColor=white" alt="YouTube">
 </a>
 <a href="https://kickstarter.com/projects/your-project">
@@ -151,13 +151,23 @@ self-hosted container via `NVIDIA_NIM_URL`), and local Ollama.
 
 ## Documentation
 
+Full reference lives in [docs/](docs/README.md). Highlights:
+
 | Topic | Doc |
 |-------|-----|
-| Running Mapache, CLI flags, slash commands, config | [Usage](docs/usage.md) |
-| The offensive toolchain reference | [Tools](docs/tools.md) |
-| The agent loop, state, model routing, safety | [Architecture](docs/architecture.md) |
-| Agent roster, delegation, supervisor routing | [Agents](docs/agents.md) |
-| The middleware framework and built-in middlewares | [Middleware](docs/middleware.md) |
+| The agent loop, state, phases, context, safety rails | [Architecture](docs/architecture.md) |
+| Single, per-role, and swarm routing; how sub-agents pick a model | [Model routing](docs/model-routing.md) |
+| Delegation, the operator roster, the autonomous supervisor | [Multi-agent](docs/multi-agent.md) |
+| Built-in playbooks, SKILL.md authoring, hybrid activation | [Skills and playbooks](docs/skills-and-playbooks.md) |
+| The offensive toolchain, meta-tools, self-authored tools | [Tools](docs/tools.md) |
+| Local, cloud, and native providers | [Providers](docs/providers.md) |
+| Execution backends, egress, rules of engagement, self-defense | [Execution and OPSEC](docs/execution-and-opsec.md) |
+| Session, knowledge graph, cross-engagement learning | [Memory](docs/memory.md) |
+| Middleware framework and built-in middlewares | [Middleware](docs/middleware.md) |
 | Evidence-first findings and report formats | [Reporting](docs/reporting.md) |
+| Model Context Protocol and the skill hub | [MCP and hub](docs/mcp-and-hub.md) |
+| CLI, the full-screen TUI dashboard, the setup wizard, every command | [User interface](docs/ui.md) |
+| The config file, environment variables, every option | [Configuration](docs/configuration.md) |
+| End-to-end walkthroughs across disciplines | [Use cases](docs/use-cases.md) |
 
 `STATUS.md` and `ROADMAP.md` cover internals and planned work.

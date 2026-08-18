@@ -64,5 +64,5 @@ in the supervisor before routing.
 
 The multi-agent supervisor is not a loop middleware; it is a control loop that drives
 sub-agent turns. Its anti-loop, fan-out, and route enumeration are described in
-[agents](agents.md). A sub-agent is itself an `AgentController`, so any middleware
+[multi-agent](multi-agent.md). A sub-agent is itself an `AgentController`, so any middleware
 registered on it hooks that sub-agent's loop.

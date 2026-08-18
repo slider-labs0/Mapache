@@ -1,62 +1,95 @@
 # Tools
 
-Mapache exposes a curated toolset to the model. `shell` and `kali_run` are the
-workhorses (any installed CLI tool runs through them); the tools below add structured
-input handling and output parsing so the agent acts on real data instead of guessing.
-Missing binaries degrade gracefully: the tool reports it and the agent adapts.
+Mapache drives roughly fifty registered tools plus a set of meta-tools. Tools are
+structured: the model calls them with typed arguments, the result comes back as
+structured output, and schema validation catches a malformed call so the model can
+self-correct. This page groups the toolchain by area.
 
-## Recon and discovery
+## Execution and files
 
-| Tool | What it does |
-|------|--------------|
-| `nmap_scan` | Port and version scanning (standard / version / vuln script modes). |
-| `web_fetch` | Fetch a URL and return readable content plus a parsed attack surface (real form actions and fields, referenced endpoints, HTML comments). |
-| `web_search` | Web search (no API key). |
-| `tech_detect` | Fingerprint the stack from response headers and body (server, framework, CDN, exposed docs). |
-| `tor_fetch` | Fetch through Tor, including .onion. |
-| `egress_check` | Report the public IP a target would see (OPSEC leak test). |
+- `shell` runs a command on the active execution backend (local, Docker, or SSH).
+- `code_run` is a compile, run, and fix loop. It writes code (Python, C, C++, Go, Rust,
+  Bash, and more), compiles it, runs it, and iteratively fixes it, staging into the active
+  target and returning a structured verdict (compile failed, exit code, or ok). This is
+  the exploit-writing primitive.
+- `file_read`, `file_write`, `file_edit`, `file_list`, and `file_search` operate on files.
 
-## Web exploitation
+## Recon and network
 
-| Tool | What it does |
-|------|--------------|
-| `http_request` | Send arbitrary HTTP requests with structured body/headers/params. Every call is recorded for replay. |
-| `http_repeater` | Burp-style repeater: list, show, replay, and tamper recorded requests, and diff responses. Replaying an authenticated request with one id changed and diffing the result is the IDOR / broken-access-control primitive. |
-| `sqlmap` | Automated SQL injection. |
-| `fuzz` | Directory and parameter fuzzing (ffuf-style). |
-| `burp_scan`, `burp_proxy` | Burp integration when available. |
-| `jwt_tool` | Parse, forge, alg=none, and crack JSON Web Tokens. |
-| `graphql` | Introspect a GraphQL endpoint and flag ID-shaped arguments as IDOR candidates. |
-| `llm_inject` | Test an LLM-backed target for prompt injection (OWASP LLM01), confirmed with a canary. |
+- `nmap_scan` runs structured port and service scans with schema validation. If the model
+  omits the target, it is backfilled from the attack state.
+- `kali_run` and `kali_list` drive the packaged Kali tooling; `searchsploit` looks up
+  ExploitDB.
+- Operators drive domain CLIs (aws, kubectl, frida, ghidra, jadx, gophish, and others)
+  through `shell` and `kali_run`.
 
-## Knowledge and grounding
+## Web
 
-| Tool | What it does |
-|------|--------------|
-| `search_payloads` | Look up real payloads/techniques from an offline corpus by vuln class and keyword. |
-| `secret_scan` | Scan text or files for exposed secrets (keys, tokens, private keys, connection strings). |
-| `cve_lookup` | Correlate a service/version to CVEs from the offline catalog. |
+- `http_request` sends a structured HTTP request. Because it is structured JSON, payloads
+  with quotes survive intact, unlike a shell curl. This is the primitive for API testing.
+- `http_repeater` records, replays, tampers, and diffs requests. It is the primitive
+  behind broken-access-control and IDOR testing.
+- `web_fetch` and `web_search` read the surface web; `tor_fetch` routes through Tor.
+- `browser` is a real headless browser (Playwright) that renders JavaScript and single-page
+  apps, so the agent sees what a user sees.
+- `sqlmap` and `fuzz` (ffuf) are disciplined wrappers around those classic tools.
+- Response-grounded acting nudges the agent off blind endpoint spraying and toward the
+  target's real forms and endpoints.
 
-## Exploitation and post-exploitation
+## Exploitation and cracking
 
-| Tool | What it does |
-|------|--------------|
-| `msf_search`, `msf_run`, `msf_sessions` | Metasploit search, run, and session management. |
-| `searchsploit` | Exploit-DB search. |
-| `john_crack`, `john_identify` | Hash cracking and identification. |
-| `ad_attack` | Active Directory: kerberoast, asreproast, secretsdump/dcsync, bloodhound, certipy. Builds correct syntax and parses Kerberos/NTLM loot and ADCS misconfigs. |
-| `binary_analyze` | Binary triage: protections (checksec), interesting strings, dangerous imports, ROP gadgets. |
-| `cloud_metadata` | Query cloud metadata services (AWS IMDSv2, ECS, GCP, Azure) for credentials. |
+- `msf_search` and the Metasploit integration drive MSFRPC.
+- The Burp Suite integration uses the REST API and proxy.
+- `john` identifies and cracks hashes; hashcat and hydra are available through the Kali
+  interface.
 
-## Reporting, memory, and orchestration
+## Grounding and research
 
-| Tool | What it does |
-|------|--------------|
-| `report_finding` | Record a confirmed finding (title, severity, asset, evidence, impact, remediation). The deliverable. |
-| `kg_add`, `kg_query` | Read and write the shared findings knowledge graph across sub-agents. |
-| `memory_save`, `memory_recall`, `memory_target_store` | Persistent memory across sessions. |
-| `opplan_add`, `opplan_update`, `opplan_show` | Operation plan objectives for the supervisor. |
-| `delegate`, `delegate_parallel` | Hand a bounded objective to a specialist sub-agent. |
-| `vuln_research` | Seed the staged vuln-research pipeline (scanner, detector, verifier, patcher, exploiter). |
-| `create_tool`, `tool_list_generated`, `tool_delete` | Author, list, and retire self-written tools. |
-| `shell`, `kali_run`, `file_read/write/edit/list/search` | Run commands and touch the filesystem. |
+- `cve_lookup` correlates discovered services and versions to known CVEs with severity and
+  exploit availability, from an offline catalog.
+- `vuln_research` starts the vulnerability-research pipeline (scanner, detector, verifier,
+  patcher, exploiter).
+- A payload corpus with a search tool provides known-good payloads instead of guesses.
+
+## Memory and planning meta-tools
+
+- `kg_query` and `kg_add` read and write the knowledge graph (the findings store).
+- `opplan_show`, `opplan_add`, and `opplan_update` manage the operation plan.
+- The persistent task list is seeded by a plan response and updated with a todo update.
+
+## Delegation meta-tools
+
+- `delegate(task, operator=...)` spawns a focused specialist child for one subtask.
+- `delegate_parallel(tasks=[...])` fans several operators out over the shared blackboard.
+
+See [Multi-agent orchestration](multi-agent.md) for how these behave.
+
+## Self-authored tools
+
+The `create_tool` meta-tool lets the model author a brand-new reusable tool at runtime. It
+writes the body of an async run function, which is compiled (errors are handed back for
+self-correction) and persisted as a hub-installable package under
+`plugins/generated/<name>/` with a manifest carrying origin, usage, lifecycle state,
+phase, and a sha256 checksum. The tool registers into the tool registry and becomes
+callable on the next loop iteration, never in the same response that created it.
+
+Trust model: an agent-written tool (origin self) loads freely; a downloaded tool (origin
+hub) is sha256-verified before it compiles and refuses to load if it has been tampered
+with. The startup loader is fail-soft, so a bad tool never breaks startup.
+
+Model-facing tools: `create_tool`, `tool_list_generated`, `tool_delete`.
+
+## The curator (tool-library garbage collection)
+
+Self-authored tools move through a reversible lifecycle: active, then stale, then
+archived, so the create-tools loop cannot pile up. A usage rule auto-demotes an unused
+tool to stale (a non-destructive label; using it promotes it back to active). The only
+permissioned step is stale to archived: `/curate` proposes stale tools one at a time and,
+on your per-tool approval, unregisters them and moves their folder out of the load path.
+`/restore <name>` reverses it, and `/purge <name>` hard-deletes an already-archived tool
+as a deliberate two-step.
+
+## MCP tools
+
+Tools exposed by a connected Model Context Protocol server appear as ordinary Mapache
+tools named `mcp__<server>__<tool>`. See [MCP and the skill hub](mcp-and-hub.md).

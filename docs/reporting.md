@@ -1,38 +1,47 @@
 # Reporting
 
-Mapache is evidence-first: success is a proven finding with remediation, not a captured
-flag. A confirmed weakness is recorded as a structured finding and rendered into a report
-the operator can hand off.
+Mapache is evidence-first: success is a proven finding with severity, evidence, impact,
+and remediation, not a captured flag. This page covers how it turns an engagement into a
+report and what formats it exports.
 
-## Findings
+## The report builder
 
-The agent records a finding with the `report_finding` tool the moment it confirms a
-weakness. A finding carries:
+`reporting/report_builder.py` turns the audit-log records and the attack-state blackboard
+into a structured pentest report:
 
-- title, severity (critical / high / medium / low / info), category
-- affected asset (host / URL / endpoint / parameter)
-- evidence: the actual request and response, command output, or observation that proves it
-- impact and remediation (auto-filled from the category if omitted)
+- Findings for vulnerabilities, captured credentials, notable exposed services (telnet,
+  SMB, RDP, Redis, and others), and flags, each with a severity and concrete remediation.
+- First-seen timestamps taken from the audit log.
+- An executive summary with a severity tally.
+- A methodology timeline.
+- A tool-activity appendix.
 
-`report_finding` rejects a finding with no evidence, so unproven or guessed findings do
-not enter the report. Findings dedupe by category, asset, and title, keeping the richest
-evidence.
+The builder is deterministic and offline. It makes no LLM call, so it is reproducible,
+testable, and never sends findings to a third party. This keeps the local-first OPSEC
+story intact from end to end.
 
-## Report formats
+## Export formats
 
-Generate a report from the REPL with `/report <format>`, or it is written automatically
-at the end of a session if anything was found.
+- Markdown for readability and version control.
+- Self-contained HTML (print it to get a PDF).
+- SARIF for ingestion into code-scanning and security dashboards.
+- A bug-bounty draft for submission.
 
-| Format | Output |
-|--------|--------|
-| `md` | Markdown report: executive summary, per-finding detail with evidence and remediation, methodology timeline. |
-| `html` | Self-contained HTML version of the same. |
-| `both` | Markdown + HTML. |
-| `sarif` | SARIF 2.1.0 for CI / code-scanning ingestion. |
-| `bounty` | Bug-bounty submission drafts (HackerOne / Bugcrowd sections) per finding. |
-| `all` | Every format above. |
+Optional secret redaction removes captured credentials from the exported copy.
 
-Reports are written under `engagements/` in the working directory. The findings store
-also persists to `findings.json`. Blackboard facts (ports, services, exposed
-credentials) are folded in alongside the agent-authored findings, so the report is
-complete even for findings the agent did not explicitly write up.
+Generate a report with `/report [md|html|both]`, which writes to `engagements/`.
+
+## Grounding and scoring
+
+Findings can be correlated to known CVEs with severity and exploit availability from an
+offline catalog (`cve_lookup`). An optional LLM narrative pass and precise CVSS scoring
+are layered enhancements on top of the deterministic core, so you can add polish without
+giving up reproducibility.
+
+## Why evidence-first matters
+
+Most agents invent endpoints, field names, and payloads and then declare victory. Mapache
+reads a target's real forms, endpoints, and disclosed credentials into state, looks up
+payloads from an offline corpus, and detects dead attack vectors so it changes approach
+instead of spinning. A finding in the report is backed by the exact request or command
+that proved it, recorded in the audit log with a timestamp.

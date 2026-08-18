@@ -1,125 +1,118 @@
 # Architecture
 
-This is the in-depth tour. For the always-current summary see `STATUS.md` in the repo
-root. Related deep-dives: [agents](agents.md), [middleware](middleware.md),
-[reporting](reporting.md).
+Mapache runs one execution path: a ReAct (reason and act) loop. There is no hidden
+planner pipeline and no separate executor. The agent observes, acts with one tool,
+reads the real result, and decides the next step. This page explains the moving parts.
 
-## One execution path
+## The agent loop
 
-Mapache runs a single execution path: an observe-act (ReAct) loop in
-`core/agent_controller.py` (`AgentController._agent_loop`). It previously carried two
-other, dead pipelines (an event-bus planner and a ModelManager pipeline); both were
-removed so there is exactly one place a turn executes and no risk of double-firing a
-tool against a live target.
+`core/agent_controller.py` holds `AgentController`, the orchestrator. Its `_agent_loop`
+is the heart of Mapache:
 
-## The agent loop, step by step
+1. Build the prompt (system prompt, attack state, task list, relevant playbooks, recent
+   history) with the context builder.
+2. Ask the model for the next action. Native tool-calling models return a structured
+   tool call; models without native tool-calling return JSON that the loop parses.
+3. Dispatch the chosen tool, enforce the rules-of-engagement scope first, and capture
+   the real output.
+4. Fold the result back into the attack state and the conversation, then loop.
 
-Each iteration of the loop:
+The loop is bounded by `MAX_ITERATIONS` so it can never run away, and it stops early
+when the model produces a final answer, when a loop policy halts it, or when a budget
+is exhausted.
 
-1. **Build context.** `core/context_builder.py` assembles the prompt: the system prompt,
-   the current attack-state block, recent conversation, and any middleware injections. It
-   applies phase-based tool subsetting so the model sees a small, relevant tool set rather
-   than all ~60 (a large set overflows small-model context and invites drift).
-2. **Fence untrusted input.** Every prior tool result is wrapped as untrusted data (see
-   Safety) so a hostile target cannot smuggle instructions into context.
-3. **Model call.** The model returns either a final answer or exactly one tool call.
-   One tool per step keeps the loop observable: the real result is read before the next
-   decision.
-4. **Dispatch.** `tools/tool_dispatcher.py` runs the tool, gated by the granted
-   permissions and the engagement scope. The result updates the shared attack state.
-5. **Fold in findings.** New ports, services, vulns, credentials, flags, endpoints,
-   forms, and disclosed credentials are recorded automatically and emitted as events
-   (the engagement log and knowledge graph subscribe).
-6. **Guardrails.** Stall detection, the progress ledger, and duplicate suppression run
-   before the next step.
+### One tool per step
 
-### Stall detection and the progress ledger
+Reading each real result before choosing the next step is what keeps Mapache grounded.
+It does not invent endpoints or assume a scan result. It acts, observes, and adapts.
+The model can still batch several independent tool calls in a single turn (for example,
+scanning two hosts at once); those dispatch concurrently and fold back in the order the
+model stated.
 
-Weak models spin: they repeat a call or make no progress. The loop tracks two streaks
-(`AgentController` constants):
+## Attack state and the conversation chain
 
-- `STALL_ABORT_DUP` (4) consecutive all-duplicate steps, and
-- `STALL_ABORT_NOPROG` (8) consecutive steps that discover nothing.
+`core/conversation_chain.py` holds `ConversationChain`, which tracks the attack state
+across turns: the target, open ports, services, the current phase, discovered
+vulnerabilities, captured credentials, and flags. Key behaviors:
 
-A step that discovers something resets both. On a stall the turn is aborted early with an
-`agent.stall` event, so a fruitless turn ends cheaply instead of burning the whole
-budget. The **progress ledger** (`core/progress_ledger.py`) persists dead-end actions
-across turns and injects a "do not repeat" block, so the model stops re-spraying
-endpoints it already tried.
+- A freshly typed IP that differs from the current target overrides it and clears stale
+  findings. This handles a lab machine getting a new IP mid-session.
+- Rescan keywords clear cached ports so a fresh scan is not skipped.
+- Tool outputs are compressed before they are re-injected, which prevents the context
+  from overflowing on a long engagement.
+- A persistent task list (todos) survives across turns. The model seeds it with a plan,
+  updates item status, and the loop re-injects a `=== TASK LIST ===` block every
+  iteration so the model always sees mid-turn progress.
 
-## The attack-state blackboard
+## Phases and tool subsetting
 
-`AttackState` (`core/conversation_chain.py`) is the shared source of truth. It holds the
-target, open ports, services, versions, vulnerabilities, credentials, flags, and the
-web-tradecraft signals added for grounding:
+Mapache models an engagement as phases: recon, enumeration, exploitation, post, and
+report. `ConversationChain.active_tool_names` exposes only the tools relevant to the
+current phase. This keeps the function-calling payload small enough for local models,
+which otherwise choke on a large tool schema. Certain tools (delegation, memory,
+generated tools, MCP tools) are pinned so subsetting never hides them.
 
-- **endpoints** - normalized path+param-name keys discovered in responses. Surface and
-  parameter discovery advance a routing "progress" signal; value iteration over one
-  parameter collapses to a single key and reads as no progress.
-- **forms** - each response's real form method, action, and input field names, so the
-  agent submits the actual form instead of inventing an endpoint like `/login`.
-- **disclosed_creds** - credentials leaked in HTML comments or JS (a `user:pass` token or
-  a labeled value), surfaced as a directive to try them first.
-- **dead_vectors** - path templates that returned an identical body across several
-  distinct requests (an ignored parameter). A working IDOR returns different bodies and
-  is never flagged.
+The attack system prompt encodes a default workflow: recon, then enumerate, then
+exploit, then post, then report. It blocks exploitation before a scan has returned open
+ports, so the agent does not fire an exploit at a host it has not looked at yet.
 
-`to_prompt_block()` renders this state into the prompt each step so the model acts on
-what is actually there.
+## The context builder
 
-## Grounding: read, do not guess
+`core/context_builder.py` assembles the prompt and enforces a token budget
+(`max_context_tokens`, default 16384). It injects the system prompt, the live attack
+state, the task list, any relevant playbooks, and recent history. When native
+tool-calling is available, tool schemas go in the dedicated `tools` field; otherwise the
+tools are described in the prompt and the model is asked for JSON output.
 
-The observed failure mode of a naive agent is inventing endpoints, field names, and
-payloads. Mapache counters this deterministically:
+## Context compaction
 
-- `web_fetch`/`http_request` parse the response and record the real forms, endpoints, and
-  disclosed credentials into state.
-- `search_payloads` looks up real payloads from an offline corpus by vuln class.
-- The dead-vector detector tells the agent when a parameter is doing nothing so it changes
-  approach.
-- The Burp-style `http_repeater` records every request so the agent can replay one with a
-  single value changed and diff the responses - the IDOR/broken-access-control primitive.
+When raw history outgrows its token budget, the controller summarizes the oldest turns
+into a running summary with a model call and drops those messages, instead of silently
+trimming them. The summary is prepended to the system prompt as "CONVERSATION SO FAR".
+Durable facts (targets, ports, versions, credentials, vulnerabilities, flags, paths, and
+what is pending) are kept verbatim. Compaction only fires when actually over budget and
+keeps a recent window, and it fails open to a plain trim if anything goes wrong.
 
-## Model routing
+## Robust tool-call parsing
 
-The controller talks to a model provider through a uniform `chat`/`chat_stream` surface,
-so the provider can be a single model or a router:
+Local models mangle output in predictable ways. `_parse_model_response` tolerates JSON
+fenced in code blocks, JSON embedded in prose (a balanced, string-aware brace scan), and
+a missing type tag (inferred from the keys present). Output that clearly intended the
+protocol but is unusable is flagged as malformed; the loop feeds the error back and asks
+for a clean retry, bounded by `MAX_REASKS`. Incidental braces in a normal answer are not
+reasked.
 
-- **RoutedModel** (`models/routed_model.py`) scores installed models per role
-  (planner vs executor) under a routing strategy (single, pipeline, auto, hybrid).
-- **TieredModel** (`models/tiered_model.py`) routes by an explicit per-operator tier:
-  low-tier discovery operators (recon, OSINT, scanning) run on a cheaper model while the
-  hacking-critical operators stay on the strong one. Each `Operator` carries a `tier`
-  (`high` by default so nothing critical is downgraded by accident).
+## Loop safety rails
 
-When the supervisor spawns a sub-agent it applies both hooks (`for_role`, `for_tier`), so
-routing is per specialist.
+- No-progress and duplicate-call guard: within a turn, an identical tool call (same name
+  and args) runs once; later repeats are short-circuited with the cached result and a
+  nudge to change approach. This fixes the "fetch the same URL five times" loop.
+- Stall and loop detection aborts a turn early when the model spams duplicates or makes
+  no progress, so a weak model does not burn the whole iteration budget going in
+  circles.
+- Answer general knowledge directly: definitions and facts the model already knows are
+  answered in plain text without tools, and a blocked lookup falls back to the model's
+  own knowledge rather than being reported as the final answer.
 
-## Safety
+## The event bus
 
-- **Rules of engagement** (`core/engagement_scope.py`): a `scope.json` defines in-scope
-  targets and forbidden tools/patterns. A call that would act out of scope is refused
-  before it runs, with an `agent.scope_refused` event. Loopback and local utility commands
-  are allowed by default.
-- **Prompt-injection shield** (`core/injection_shield.py`): the `SHIELD_CLAUSE` tells the
-  model that tool output is untrusted data; `wrap_untrusted` fences each result between
-  hard-to-forge sentinels; and `detect_injection` actively scans for hijack attempts
-  (instruction override, persona hijack, system-prompt leak, target pivot, and so on),
-  prepending an inline warning and emitting an auditable `agent.injection_detected` event.
-- **Engagement log** (`core/engagement_log.py`): an append-only JSONL audit trail of every
-  tool call, finding, scope refusal, delegation, and injection attempt. It seeds the
-  report and can be exported as a Markdown timeline.
-- **Session recording** (`core/asciicast.py`): an optional replayable asciicast of the
-  whole engagement, for debrief or court-ready evidence (`--cast`).
+`core/event_bus.py` is the pub/sub backbone. The loop emits events (tool calls,
+findings, delegations, scope refusals, steering, duplicate calls). Observers subscribe
+without driving the loop. The audit log and the TUI dashboard are both event consumers,
+which is why they never slow the agent down.
 
-## Persistence
+## Mid-run steering
 
-- **Knowledge graph** (`core/knowledge_graph.py`): a typed entity/relation findings store
-  on disk that sub-agents read and write via `kg_query`/`kg_add`, so a freshly-spawned
-  specialist knows what earlier stages found without the lead re-explaining. Attack-state
-  findings are auto-ingested.
-- **Findings store** (`core/findings.py`): the evidence-first deliverable. See
-  [reporting](reporting.md).
-- **Memory**: durable user facts and per-target notes persist across sessions.
-- **Cross-engagement learning**: outcomes are recorded by target fingerprint and bias the
-  operator router toward what has worked on similar targets before.
+A frontend can call `AgentController.steer(text)` to redirect a turn already in progress.
+Queued messages are drained at the top of each loop iteration and injected as operator
+steering. A freshly typed target or a rescan updates the attack state without disturbing
+the in-progress turn. This lets you correct the agent live without restarting the
+session.
+
+## Middleware
+
+`core/middleware.py` provides composable loop middleware. Shipped middleware includes
+budget enforcement (stop gracefully at a token or time cap), a human-in-the-loop
+checkpoint slot, an offensive-vaccine loop (turn each confirmed vulnerability into a
+detection and remediation note), and a reflection and tactical-staging step. Middleware
+is opt-in and inert unless configured.
