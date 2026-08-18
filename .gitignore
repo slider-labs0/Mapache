@@ -22,6 +22,9 @@ build/
 dist/
 learning.json
 
+# User-specific MCP server list (copy from mcp.json.example). Keep the example tracked.
+mcp.json
+
 # External benchmark repos / tools cloned alongside the project (not part of Mapache)
 /cybench/
 /validation-benchmarks/

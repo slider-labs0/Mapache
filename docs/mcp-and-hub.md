@@ -47,6 +47,39 @@ Note that a third-party MCP server can be broken upstream, independent of Mapach
 that happens Mapache logs the server as unavailable and continues, rather than failing to
 start.
 
+### Driving a browser like a user (Playwright MCP)
+
+The Playwright MCP server lets Mapache drive a real browser the way a person does: it can
+navigate, click, type, fill forms, select options, upload files, take screenshots, inspect
+network requests, and capture an accessibility snapshot of the page that the model acts on
+by element. This is a richer, interactive complement to Mapache's built-in headless
+`browser` tool (which renders a page for reading).
+
+Add it to your `mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest", "--headless"],
+      "env": {}
+    }
+  }
+}
+```
+
+Its tools appear as `mcp__playwright__browser_navigate`, `mcp__playwright__browser_click`,
+`mcp__playwright__browser_snapshot`, `mcp__playwright__browser_type`, and so on (around two
+dozen). Notes:
+
+- The first run downloads the package and a browser, so give it a moment.
+- Drop `--headless` to watch the browser act (useful for a demo).
+- `browser_run_code_unsafe` executes arbitrary JavaScript on the page; only enable this
+  server against targets you are authorized to test.
+- Mapache looks for `mcp.json` in the working directory you launch from (or the path you
+  pass to `--mcp-config`), so put it where you run `mapache serve`.
+
 ## The skill hub
 
 The hub lets you browse, install, and publish reusable extensions. Three manifest types

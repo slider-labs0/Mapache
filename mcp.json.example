@@ -1,14 +1,15 @@
 {
-  "_comment": "Copy to mcp.json to connect Mapache to MCP servers. Each server is launched as a subprocess and its tools become mcp__<server>__<tool>. Override the path with --mcp-config.",
+  "_comment": "Copy to mcp.json in your working dir (or pass --mcp-config) to connect Mapache to MCP servers. Each server is launched as a subprocess and its tools become mcp__<server>__<tool>. Override the path with --mcp-config.",
   "mcpServers": {
+    "playwright": {
+      "_comment": "Drive a real browser like a user: navigate, click, type, fill forms, snapshot the accessibility tree, screenshot, inspect network. Drop --headless to watch it. First run downloads the package and a browser.",
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest", "--headless"],
+      "env": {}
+    },
     "filesystem": {
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
-      "env": {}
-    },
-    "fetch": {
-      "command": "uvx",
-      "args": ["mcp-server-fetch"],
       "env": {}
     }
   }
