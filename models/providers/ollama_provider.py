@@ -36,7 +36,7 @@ DEFAULT_TIMEOUT  = 600.0  # 10 minutes - long scans need this
 # fills the whole window and the model's tool call is truncated mid-JSON. So this is
 # the prompt budget plus output headroom. Override with OLLAMA_NUM_CTX (raise it for
 # heavy tool sets, lower it if a big model runs short on memory).
-DEFAULT_NUM_CTX  = 24576
+DEFAULT_NUM_CTX  = 25000
 
 
 class OllamaProvider:

@@ -35,7 +35,7 @@ test model source; `qwen2.5:32b` is a reliable tool-calling local model.
 Ollama defaults a model's context window to a small value (often 4096 tokens), so a full
 Mapache prompt (system prompt plus tools plus attack state, roughly 12000 to 16000 tokens)
 overflows it and Ollama returns HTTP 400 "exceeds the available context size". Mapache
-requests a larger window automatically via `options.num_ctx` (default 24576), so any model
+requests a larger window automatically via `options.num_ctx` (default 25000), so any model
 can hold a real engagement prompt with room left for its answer.
 
 The window must exceed the prompt budget (around 16000 tokens) with headroom for the
