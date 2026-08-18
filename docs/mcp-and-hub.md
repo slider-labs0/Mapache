@@ -80,6 +80,33 @@ dozen). Notes:
 - Mapache looks for `mcp.json` in the working directory you launch from (or the path you
   pass to `--mcp-config`), so put it where you run `mapache serve`.
 
+### Trimming a large server (the tools allowlist)
+
+MCP tools are pinned into every prompt so they stay callable regardless of phase. A server
+with two dozen tools therefore inflates the function-calling payload, which can overflow a
+local model's context window. Add an optional `"tools"` allowlist to a server so Mapache
+exposes only the tools you name:
+
+```json
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest", "--headless"],
+      "tools": [
+        "browser_navigate", "browser_navigate_back", "browser_click", "browser_type",
+        "browser_press_key", "browser_fill_form", "browser_snapshot", "browser_find",
+        "browser_take_screenshot", "browser_wait_for"
+      ]
+    }
+  }
+}
+```
+
+Omit `tools` (or leave it empty) to expose every tool the server offers. If a full prompt
+still overflows on a small-context model, raise the Ollama window with `OLLAMA_NUM_CTX`
+(see [Providers](providers.md)).
+
 ## The skill hub
 
 The hub lets you browse, install, and publish reusable extensions. Three manifest types

@@ -55,6 +55,11 @@ class MCPServerConfig:
     command: str
     args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
+    # Optional allowlist of remote tool names to expose. Empty = expose all. A big
+    # server (e.g. a browser server with ~24 tools) is pinned into every prompt, so
+    # trimming it here keeps the function-calling payload small enough for local
+    # models with a limited context window.
+    tools: list[str] = field(default_factory=list)
 
 
 def load_mcp_config(path: str) -> list[MCPServerConfig]:
@@ -83,6 +88,7 @@ def load_mcp_config(path: str) -> list[MCPServerConfig]:
             command=command,
             args=list(spec.get("args", []) or []),
             env={str(k): str(v) for k, v in (spec.get("env") or {}).items()},
+            tools=[str(t) for t in (spec.get("tools") or [])],
         ))
     return configs
 
@@ -276,10 +282,14 @@ class MCPManager:
                 continue
 
             self.clients.append(client)
+            allow = set(cfg.tools)
+            exposed = 0
             for spec in remote_tools:
                 rname = spec.get("name")
                 if not rname:
                     continue
+                if allow and rname not in allow:
+                    continue  # honor the mcp.json `tools` allowlist (keeps payloads small)
                 full = f"mcp__{cfg.name}__{rname}"
                 self.tools.append(MCPTool(
                     client=client,
@@ -288,7 +298,9 @@ class MCPManager:
                     description=spec.get("description", ""),
                     parameters=spec.get("inputSchema") or spec.get("input_schema") or {},
                 ))
-            logger.info("MCP server %r exposed %d tools", cfg.name, len(remote_tools))
+                exposed += 1
+            logger.info("MCP server %r exposed %d of %d tools",
+                        cfg.name, exposed, len(remote_tools))
         return self.tools
 
     @property

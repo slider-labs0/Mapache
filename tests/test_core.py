@@ -1317,6 +1317,45 @@ async def test_mcp_launcher_path_resolution():
     print("  PASS  mcp_launcher_path_resolution")
 
 
+async def test_mcp_tool_allowlist():
+    # A server's `tools` allowlist trims which remote tools are exposed, so a large
+    # server (e.g. a browser server with ~24 tools) does not bloat every prompt.
+    import os
+    import sys as _sys
+    import tempfile
+    from integrations.mcp import MCPManager, MCPServerConfig, load_mcp_config
+
+    server = os.path.join(os.path.dirname(__file__), "fake_mcp_server.py")
+
+    # Allowlist names the only tool → it is exposed.
+    mgr = MCPManager([MCPServerConfig(
+        name="fake", command=_sys.executable, args=[server], tools=["echo"])])
+    try:
+        tools = await mgr.connect_all()
+        assert [t.name for t in tools] == ["mcp__fake__echo"], [t.name for t in tools]
+    finally:
+        await mgr.close_all()
+
+    # Allowlist excludes the only tool → nothing exposed, but the server still connects.
+    mgr2 = MCPManager([MCPServerConfig(
+        name="fake", command=_sys.executable, args=[server], tools=["nope"])])
+    try:
+        tools2 = await mgr2.connect_all()
+        assert tools2 == [] and len(mgr2.clients) == 1
+    finally:
+        await mgr2.close_all()
+
+    # load_mcp_config parses the `tools` allowlist from mcp.json.
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "mcp.json")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write('{"mcpServers": {"pw": {"command": "npx", "args": ["x"], '
+                    '"tools": ["browser_click", "browser_type"]}}}')
+        cfgs = load_mcp_config(p)
+        assert cfgs[0].tools == ["browser_click", "browser_type"]
+    print("  PASS  mcp_tool_allowlist")
+
+
 async def test_agent_duplicate_call_guard():
     # The same tool+args repeated within a turn must run once; later identical
     # calls are short-circuited with the cached result, breaking no-progress
@@ -6643,6 +6682,7 @@ async def run_all():
     await test_agent_delegation()
     await test_mcp_client()
     await test_mcp_launcher_path_resolution()
+    await test_mcp_tool_allowlist()
     await test_agent_duplicate_call_guard()
     await test_agent_tool_events_carry_timing()
     await test_agent_middleware_hooks()

@@ -2,10 +2,15 @@
   "_comment": "Copy to mcp.json in your working dir (or pass --mcp-config) to connect Mapache to MCP servers. Each server is launched as a subprocess and its tools become mcp__<server>__<tool>. Override the path with --mcp-config.",
   "mcpServers": {
     "playwright": {
-      "_comment": "Drive a real browser like a user: navigate, click, type, fill forms, snapshot the accessibility tree, screenshot, inspect network. Drop --headless to watch it. First run downloads the package and a browser.",
+      "_comment": "Drive a real browser like a user: navigate, click, type, fill forms, snapshot the accessibility tree, screenshot. Drop --headless to watch it. First run downloads the package and a browser. The server exposes ~24 tools; the optional 'tools' allowlist keeps only the ones you need so the prompt stays small on local models (remove it to expose all).",
       "command": "npx",
       "args": ["-y", "@playwright/mcp@latest", "--headless"],
-      "env": {}
+      "env": {},
+      "tools": [
+        "browser_navigate", "browser_navigate_back", "browser_click", "browser_type",
+        "browser_press_key", "browser_fill_form", "browser_snapshot", "browser_find",
+        "browser_take_screenshot", "browser_wait_for"
+      ]
     },
     "filesystem": {
       "command": "npx",
