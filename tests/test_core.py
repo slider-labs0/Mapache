@@ -559,7 +559,7 @@ def test_skills_playbook_specialist_matching():
     from core.skills_playbook import (relevant_skills, WEB3_ATTACK_SKILL,
                                       SUPPLY_CHAIN_SKILL, ICS_ATTACK_SKILL,
                                       IOT_ATTACK_SKILL, WIRELESS_ATTACK_SKILL,
-                                      OSINT_SKILL, DFIR_SKILL)
+                                      OSINT_SKILL, DFIR_SKILL, DARKWEB_SKILL)
     from core.conversation_chain import AttackState
     E = AttackState()
 
@@ -571,6 +571,15 @@ def test_skills_playbook_specialist_matching():
     assert OSINT_SKILL.body in relevant_skills(E, "passive subdomain enum with amass and shodan")
     assert DFIR_SKILL.body in relevant_skills(E, "build a timeline and write sigma rules")
 
+    # Tor / dark-web requests pull the dark-web playbook, which steers OFF surface
+    # web_search toward tor_fetch and the Tor-routed browser.
+    dw = relevant_skills(E, "use the tor browser to find mirror links to the Dread forum")
+    assert DARKWEB_SKILL.body in dw
+    assert "tor_fetch" in DARKWEB_SKILL.body and "DO NOT use web_search" in DARKWEB_SKILL.body
+    assert DARKWEB_SKILL.body in relevant_skills(E, "browse this .onion service")
+    st_onion = AttackState(); st_onion.target = "http://dreadxyz.onion/"
+    assert DARKWEB_SKILL.body in relevant_skills(st_onion, "open the forum")
+
     # Port triggers: Modbus 502 → ICS; MQTT 1883 → IoT.
     st_ics = AttackState(); st_ics.open_ports = ["502/tcp"]
     assert ICS_ATTACK_SKILL.body in relevant_skills(st_ics, "map the process")
@@ -580,7 +589,7 @@ def test_skills_playbook_specialist_matching():
     # A plain web request pulls none of the specialist playbooks.
     spec = {WEB3_ATTACK_SKILL.body, SUPPLY_CHAIN_SKILL.body, ICS_ATTACK_SKILL.body,
             IOT_ATTACK_SKILL.body, WIRELESS_ATTACK_SKILL.body, OSINT_SKILL.body,
-            DFIR_SKILL.body}
+            DFIR_SKILL.body, DARKWEB_SKILL.body}
     stw = AttackState(); stw.open_ports = ["80"]
     assert not (spec & set(relevant_skills(stw, "find an XSS in the search box")))
     print("  PASS  skills_playbook_specialist_matching")

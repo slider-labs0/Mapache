@@ -705,6 +705,45 @@ OSINT_SKILL = Skill(
 )
 
 
+# Tor / dark-web: .onion services, hidden services, darknet forums (Dread), mirror
+# links. Fires on the request wording OR when the current target is itself an .onion.
+_DARKWEB_HINT_RE = re.compile(
+    r"\b(tor[-\s]?browser|\.onion|onion[-\s]?(site|link|service|address|mirror|forum)|"
+    r"hidden[-\s]?service|dark[-\s]?(web|net)|darknet|deep[-\s]?web|dread)\b",
+    re.IGNORECASE)
+
+
+def _is_darkweb_target(state: Any, user_input: str = "") -> bool:
+    if _DARKWEB_HINT_RE.search(user_input or ""):
+        return True
+    return ".onion" in str(getattr(state, "target", "") or "").lower()
+
+
+DARKWEB_SKILL = Skill(
+    name="dark_web_recon",
+    matches=_is_darkweb_target,
+    body=(
+        "ACTIVE PLAYBOOK - this request involves Tor / the dark web / a .onion service. "
+        "The clearnet CANNOT see .onion and a surface search leaks intent, so:\n"
+        "DO NOT use web_search or web_fetch here - they reach only the clearnet and will "
+        "not resolve .onion. Skip them entirely for this task.\n"
+        "USE THE TOR TOOLS INSTEAD:\n"
+        "1. `tor_fetch <url>` to pull an .onion page (or a page you must reach over Tor) - "
+        "this routes through the Tor SOCKS proxy.\n"
+        "2. The Tor-routed browser to act like a user (navigate/click/type/snapshot) when a "
+        "site needs JavaScript, a login, or navigation. If a Playwright MCP browser is "
+        "configured it is proxied through Tor (mcp__playwright__browser_navigate, "
+        "_snapshot, _click, _type), so point it straight at the .onion address.\n"
+        "3. To DISCOVER an address or mirror links, query a dark-web index over Tor (for "
+        "example Ahmia or a known onion link directory) with `tor_fetch`, not a clearnet "
+        "search engine.\n"
+        "If unsure Tor is actually in use, navigate to https://check.torproject.org and "
+        "confirm 'configured to use Tor' before trusting results.\n"
+        "PROOF = the reached .onion content or the confirmed working mirror link."
+    ),
+)
+
+
 # --- DFIR / purple-team validation. Keyword-driven; defensive. --------------- #
 _DFIR_HINT_RE = re.compile(
     r"\b(dfir|forensic\w*|incident[-\s]?response|\bioc\b|indicators?[-\s]?of[-\s]?"
@@ -748,7 +787,7 @@ SKILLS: list[Skill] = [WEB_ATTACK_SKILL, NETWORK_ATTACK_SKILL, CREDENTIAL_ATTACK
                        AD_ATTACK_SKILL, CLOUD_ATTACK_SKILL, BINARY_PWN_SKILL,
                        MOBILE_ATTACK_SKILL, SOCIAL_ENGINEERING_SKILL, WEB3_ATTACK_SKILL,
                        SUPPLY_CHAIN_SKILL, ICS_ATTACK_SKILL, IOT_ATTACK_SKILL,
-                       WIRELESS_ATTACK_SKILL, OSINT_SKILL, DFIR_SKILL]
+                       WIRELESS_ATTACK_SKILL, OSINT_SKILL, DARKWEB_SKILL, DFIR_SKILL]
 
 # File-authored skills (SKILL.md, loaded via core/skill_format.py) register here, so
 # an operator can drop a Markdown playbook into a skills/ dir and have it injected the
