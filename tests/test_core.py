@@ -246,6 +246,30 @@ async def test_agent_direct_response():
     print("  PASS  agent_direct_response")
 
 
+async def test_parse_truncated_tool_call_reasks():
+    # A tool call the model started but did not finish (cut off mid-JSON) must be
+    # reasked, not printed as the final answer. This is the "browser_navigate JSON
+    # showed up as prose and the turn stalled" fix.
+    controller = AgentController(model_provider=MockModel(), mode=AgentMode.CHAT)
+    await controller.start()
+    p = controller._parse_model_response
+
+    trunc = '{"type": "tool_call", "tool": "mcp__playwright__browser_navigate", "args":'
+    assert p(trunc)["type"] == "malformed", p(trunc)
+    trunc2 = 'ok: {"tool": "http_request", "args": {"url": "http'   # tool+args, no close
+    assert p(trunc2)["type"] == "malformed", p(trunc2)
+
+    # A complete tool call in content still dispatches.
+    ok = '{"type": "tool_call", "tool": "shell", "args": {"cmd": "id"}}'
+    parsed = p(ok)
+    assert parsed["type"] == "tool_call" and parsed["tool"] == "shell", parsed
+
+    # Ordinary prose that merely mentions tools is NOT reasked.
+    prose = "You can call the http_request tool with args to send a request."
+    assert p(prose)["type"] == "response", p(prose)
+    print("  PASS  parse_truncated_tool_call_reasks")
+
+
 async def test_agent_tool_call_then_response():
     model = MockModel()
     # First agent loop call: model requests a tool
@@ -6671,6 +6695,7 @@ async def run_all():
 
     print("\nAgentController")
     await test_agent_direct_response()
+    await test_parse_truncated_tool_call_reasks()
     await test_agent_tool_call_then_response()
     await test_agent_json_mode_tool_call()
     await test_prose_tool_call_recovered()

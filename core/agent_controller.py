@@ -1085,6 +1085,15 @@ class AgentController:
             prose = self._extract_prose_tool_call(raw)
             if prose is not None:
                 return {"type": "tool_call", **prose}
+            # A tool-call the model started but did not finish (cut off mid-JSON, so
+            # it never parsed) must NOT be accepted as a final answer - that is how a
+            # truncated `{"type":"tool_call","tool":"...","args":` ends up printed as
+            # prose and the turn stalls. Reask for a complete call instead.
+            if self._looks_like_partial_tool_call(raw):
+                return {"type": "malformed", "content": raw,
+                        "reason": "your tool call was cut off and is not valid JSON; "
+                                  "resend ONE complete call on a single line as "
+                                  '{"type":"tool_call","tool":"<name>","args":{...}}'}
             return {"type": "response", "content": raw}
 
         return self._interpret_json_response(data, raw)
@@ -1092,6 +1101,18 @@ class AgentController:
     # A message that is nothing but `name(...)`. Kept tight (whole-string match)
     # so ordinary prose that merely mentions a call is never dispatched.
     _PROSE_CALL_RE = re.compile(r"^([A-Za-z_]\w*)\s*\((.*)\)\s*$", re.DOTALL)
+
+    # The unmistakable signature of the tool-call protocol (a `type: tool_call` tag,
+    # or a `tool` name immediately followed by `args`). Used only after JSON parsing
+    # has already FAILED, to tell a broken/truncated call from ordinary prose.
+    _PARTIAL_CALL_RE = re.compile(
+        r'"type"\s*:\s*"tool_calls?"|"tool"\s*:\s*"[^"]+"\s*,\s*"args"', re.IGNORECASE)
+
+    def _looks_like_partial_tool_call(self, text: str) -> bool:
+        """True when content that did NOT parse as JSON still clearly intended a tool
+        call (so it should be reasked, not accepted as the final answer)."""
+        s = (text or "")
+        return "{" in s and bool(self._PARTIAL_CALL_RE.search(s))
 
     def _extract_prose_tool_call(self, text: str) -> Optional[dict[str, Any]]:
         """
