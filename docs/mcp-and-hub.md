@@ -153,6 +153,25 @@ Verify it is actually exiting through Tor by having the agent navigate to
 `https://check.torproject.org` and snapshot the page; it should read
 "Congratulations. This browser is configured to use Tor."
 
+### Two browsers: surface web and Tor
+
+A Tor-routed browser cannot reach `localhost` or the clearnet, and a clearnet browser
+cannot reach `.onion`, so keep two config files and switch per engagement rather than
+running both at once (running both would double the pinned browser tools in every prompt):
+
+- `mcp.json` (the default) with a plain `--browser chromium` browser for surface-web and
+  localhost targets (for example a Juice Shop box at `http://localhost:3000`).
+- `mcp-tor.json` with the same browser plus `--proxy-server socks5://127.0.0.1:9150` for
+  `.onion` and dark-web work.
+
+Both use the same server name (`playwright`), so the tool names stay
+`mcp__playwright__*` either way. Select the Tor one when you need it:
+
+```bash
+mapache serve                              # surface web (mcp.json)
+mapache serve --mcp-config mcp-tor.json    # Tor (.onion)
+```
+
 ## The skill hub
 
 The hub lets you browse, install, and publish reusable extensions. Three manifest types

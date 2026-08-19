@@ -22,8 +22,10 @@ build/
 dist/
 learning.json
 
-# User-specific MCP server list (copy from mcp.json.example). Keep the example tracked.
+# User-specific MCP server lists (copy from mcp.json.example). Keep the example tracked.
+# e.g. mcp.json (surface web) + mcp-tor.json (Tor-routed).
 mcp.json
+mcp-tor.json
 
 # External benchmark repos / tools cloned alongside the project (not part of Mapache)
 /cybench/
