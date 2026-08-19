@@ -2067,17 +2067,20 @@ def test_config_chinese_native_providers():
     # so users paste a key straight from the lab's console (not via OpenRouter). A
     # key + a native model id + --allow-cloud must route to the right base_url.
     from core.config import (KIND_OPENAI, DEFAULT_DEEPSEEK_URL, DEFAULT_MOONSHOT_URL,
-                             DEFAULT_ZHIPU_URL)
+                             DEFAULT_ZHIPU_URL, DEFAULT_ALIBABA_URL)
     with tempfile.TemporaryDirectory() as tmp:
         gpath = _CfgPath(tmp) / "nope.json"
         cfg = load_config(working_dir=tmp, global_path=gpath, environ={
-            "DEEPSEEK_API_KEY": "sk-ds", "KIMI_API_KEY": "sk-kimi", "GLM_API_KEY": "sk-glm"})
+            "DEEPSEEK_API_KEY": "sk-ds", "KIMI_API_KEY": "sk-kimi", "GLM_API_KEY": "sk-glm",
+            "DASHSCOPE_API_KEY": "sk-ali"})
         # Each native id resolves to its own provider + endpoint, key applied.
         for mid, prov_name, url in [
                 ("deepseek-chat", "deepseek", DEFAULT_DEEPSEEK_URL),
                 ("deepseek-reasoner", "deepseek", DEFAULT_DEEPSEEK_URL),
                 ("kimi-k2-0711-preview", "moonshot", DEFAULT_MOONSHOT_URL),
-                ("glm-4.6", "zhipu", DEFAULT_ZHIPU_URL)]:
+                ("glm-4.6", "zhipu", DEFAULT_ZHIPU_URL),
+                ("qwen-max", "alibaba", DEFAULT_ALIBABA_URL),
+                ("qwen-plus", "alibaba", DEFAULT_ALIBABA_URL)]:
             p = cfg.provider_for_model(mid)
             assert p is not None and p.name == prov_name, (mid, p and p.name)
             assert p.kind == KIND_OPENAI and p.base_url == url
@@ -2088,6 +2091,12 @@ def test_config_chinese_native_providers():
             "MOONSHOT_API_KEY": "sk-cn",
             "MOONSHOT_BASE_URL": "https://api.moonshot.cn/v1"})
         assert cfg2.providers["moonshot"].base_url == "https://api.moonshot.cn/v1"
+        # Alibaba: mainland DashScope endpoint is overridable via ALIBABA_BASE_URL.
+        cfg_ali = load_config(working_dir=tmp, global_path=gpath, environ={
+            "ALIBABA_API_KEY": "sk-cn",
+            "ALIBABA_BASE_URL": "https://dashscope.aliyuncs.com/compatible-mode/v1"})
+        assert cfg_ali.providers["alibaba"].base_url == \
+            "https://dashscope.aliyuncs.com/compatible-mode/v1"
         # Without a key a cloud provider is not usable (won't be offered/routed).
         cfg3 = load_config(working_dir=tmp, global_path=gpath, environ={})
         assert not cfg3.providers["deepseek"].is_usable

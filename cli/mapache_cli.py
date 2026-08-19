@@ -773,6 +773,8 @@ class MapacheCLI:
             "openrouter": Provider.OPENROUTER, "nous": Provider.NOUS,
             "openai": Provider.OPENAI, "anthropic": Provider.ANTHROPIC,
             "grok": Provider.GROK, "nvidia_nim": Provider.NIM,
+            "deepseek": Provider.DEEPSEEK, "moonshot": Provider.MOONSHOT,
+            "zhipu": Provider.ZHIPU, "alibaba": Provider.ALIBABA,
         }
         for prov in self.config.usable_providers():
             if not prov.is_cloud:

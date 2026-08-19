@@ -74,6 +74,11 @@ key straight from the vendor console without routing through an aggregator.
 | DeepSeek | https://api.deepseek.com | DEEPSEEK_API_KEY | deepseek-chat, deepseek-reasoner |
 | Moonshot (Kimi) | https://api.moonshot.ai/v1 | MOONSHOT_API_KEY or KIMI_API_KEY | kimi-k2-0711-preview, moonshot-v1-128k, moonshot-v1-32k, moonshot-v1-8k |
 | Zhipu (GLM) | https://open.bigmodel.cn/api/paas/v4 | ZHIPU_API_KEY or GLM_API_KEY | glm-4.6, glm-4.5, glm-4-plus, glm-4-air, glm-4-flash |
+| Alibaba Cloud (Qwen) | https://dashscope-intl.aliyuncs.com/compatible-mode/v1 | DASHSCOPE_API_KEY or ALIBABA_API_KEY | qwen-max, qwen-plus, qwen-turbo, qwen3-max, qwen2.5-72b-instruct |
+
+Alibaba Cloud is its Model Studio (DashScope) OpenAI-compatible endpoint. The default is
+the international host; for mainland China set `ALIBABA_BASE_URL` to
+`https://dashscope.aliyuncs.com/compatible-mode/v1`.
 
 All three are OpenAI-compatible, so Mapache speaks to them natively with no extra
 dependency. They support native tool-calling, which the agent loop needs.

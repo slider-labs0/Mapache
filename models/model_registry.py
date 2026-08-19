@@ -43,6 +43,7 @@ class Provider(str, Enum):
     DEEPSEEK    = "deepseek"
     MOONSHOT    = "moonshot"
     ZHIPU       = "zhipu"
+    ALIBABA     = "alibaba"
 
 
 @dataclass

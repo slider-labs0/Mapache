@@ -38,8 +38,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 from core.config import (
+    ALIBABA_MODELS,
     ANTHROPIC_MODELS,
     DEEPSEEK_MODELS,
+    DEFAULT_ALIBABA_URL,
     DEFAULT_ANTHROPIC_URL,
     DEFAULT_DEEPSEEK_URL,
     DEFAULT_MOONSHOT_URL,
@@ -91,6 +93,7 @@ PROVIDER_MENU = [
     ("deepseek", KIND_OPENAI, DEFAULT_DEEPSEEK_URL, "DEEPSEEK_API_KEY", True),
     ("moonshot", KIND_OPENAI, DEFAULT_MOONSHOT_URL, "MOONSHOT_API_KEY", True),
     ("zhipu", KIND_OPENAI, DEFAULT_ZHIPU_URL, "ZHIPU_API_KEY", True),
+    ("alibaba", KIND_OPENAI, DEFAULT_ALIBABA_URL, "DASHSCOPE_API_KEY", True),
 ]
 
 # Suggested model ids per cloud provider for the chooser's pick list.
@@ -105,6 +108,7 @@ MODEL_SUGGESTIONS: dict[str, list[str]] = {
     "deepseek": list(DEEPSEEK_MODELS),
     "moonshot": list(MOONSHOT_MODELS),
     "zhipu": list(ZHIPU_MODELS),
+    "alibaba": list(ALIBABA_MODELS),
 }
 
 

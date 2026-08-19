@@ -63,6 +63,10 @@ DEFAULT_NVIDIA_NIM_URL = "https://integrate.api.nvidia.com/v1"
 DEFAULT_DEEPSEEK_URL = "https://api.deepseek.com"
 DEFAULT_MOONSHOT_URL = "https://api.moonshot.ai/v1"
 DEFAULT_ZHIPU_URL = "https://open.bigmodel.cn/api/paas/v4"
+# Alibaba Cloud Model Studio (DashScope) OpenAI-compatible endpoint, serving the Qwen
+# models. International host by default; mainland China is
+# https://dashscope.aliyuncs.com/compatible-mode/v1 (set ALIBABA_BASE_URL to switch).
+DEFAULT_ALIBABA_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 
 KIND_OLLAMA = "ollama"
 KIND_OPENAI = "openai_compatible"
@@ -95,6 +99,9 @@ MOONSHOT_MODELS = [
     "kimi-k2-0711-preview", "moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k",
 ]
 ZHIPU_MODELS = ["glm-4.6", "glm-4.5", "glm-4-plus", "glm-4-air", "glm-4-flash"]
+# Alibaba Cloud (DashScope) Qwen API model ids. Add newer ids via `mapache setup`.
+ALIBABA_MODELS = ["qwen-max", "qwen-plus", "qwen-turbo", "qwen3-max",
+                  "qwen2.5-72b-instruct"]
 
 
 def _default_config() -> dict[str, Any]:
@@ -144,6 +151,10 @@ def _default_config() -> dict[str, Any]:
                 "kind": KIND_OPENAI, "base_url": DEFAULT_ZHIPU_URL,
                 "api_key": "", "models": list(ZHIPU_MODELS), "enabled": True,
             },
+            "alibaba": {
+                "kind": KIND_OPENAI, "base_url": DEFAULT_ALIBABA_URL,
+                "api_key": "", "models": list(ALIBABA_MODELS), "enabled": True,
+            },
         },
         "messaging": {"telegram_token": "", "discord_token": ""},
         # Execution backend (feature H): where `shell` commands run.
@@ -189,6 +200,9 @@ _ENV_MAP: dict[str, tuple[str, ...]] = {
     "ZHIPU_API_KEY": ("providers", "zhipu", "api_key"),
     "GLM_API_KEY": ("providers", "zhipu", "api_key"),
     "ZHIPU_BASE_URL": ("providers", "zhipu", "base_url"),
+    "DASHSCOPE_API_KEY": ("providers", "alibaba", "api_key"),
+    "ALIBABA_API_KEY": ("providers", "alibaba", "api_key"),
+    "ALIBABA_BASE_URL": ("providers", "alibaba", "base_url"),
     "TELEGRAM_BOT_TOKEN": ("messaging", "telegram_token"),
     "DISCORD_BOT_TOKEN": ("messaging", "discord_token"),
 }
