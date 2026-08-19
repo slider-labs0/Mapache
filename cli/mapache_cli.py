@@ -982,7 +982,11 @@ class MapacheCLI:
                 return
             import time as _t
             self.learning.record(EngagementOutcome(
-                fingerprint=fp, solved=bool(st.flags),
+                # Evidence-based win, not flag-only: a vuln or captured creds also count,
+                # so cross-engagement learning biases toward what worked on real
+                # assessments, not just CTF flag captures.
+                fingerprint=fp,
+                solved=bool(st.flags or st.vulnerabilities or st.credentials),
                 operators=sorted(self._ran_operators),
                 vuln_classes=list(st.vulnerabilities)[:8],
                 target=st.target or "", ts=str(int(_t.time()))))

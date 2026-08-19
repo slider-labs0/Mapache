@@ -27,9 +27,14 @@ class AttemptResult:
     solved: bool           # did the success predicate hold
 
 
-def _has_flag(controller: Any) -> bool:
+def _has_findings(controller: Any) -> bool:
+    """Default success predicate: evidence, not a flag only. A captured flag, a
+    confirmed vulnerability, or captured credentials all count, so multi-attempt works
+    for full-spectrum engagements and not just capture-the-flag targets."""
     st = getattr(getattr(controller, "chain", None), "attack_state", None)
-    return bool(getattr(st, "flags", None))
+    return bool(getattr(st, "flags", None)
+                or getattr(st, "vulnerabilities", None)
+                or getattr(st, "credentials", None))
 
 
 async def _emit(controller: Any, topic: str, data: dict) -> None:
@@ -74,11 +79,12 @@ async def run_with_attempts(
 ) -> AttemptResult:
     """Run `objective` up to `max_attempts` times, stopping as soon as `success` holds.
 
-    success: predicate over the controller (default: a flag is in the attack state).
+    success: predicate over the controller (default: evidence in the attack state - a
+        flag, a vulnerability, or captured credentials - not a flag only).
     per_attempt_iters: if set, cap each attempt's ReAct loop to this many iterations
         (adaptive budget) instead of the controller's default.
     """
-    check = success or _has_flag
+    check = success or _has_findings
     max_attempts = max(1, int(max_attempts or 1))
     if per_attempt_iters:
         controller.MAX_ITERATIONS = int(per_attempt_iters)

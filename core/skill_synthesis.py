@@ -110,10 +110,12 @@ def synthesize_from_log(
     session_id: str = "",
 ) -> Optional[SynthesizedSkill]:
     """Build a SynthesizedSkill from a successful engagement, or None if the
-    engagement has no completed chain (no flag and no captured credential)."""
+    engagement produced no evidence (no flag, no captured credential, and no confirmed
+    vulnerability). Evidence-based, not flag-only, so a real assessment win is learnable."""
     flags = list(getattr(attack_state, "flags", []) or [])
     creds = list(getattr(attack_state, "credentials", []) or [])
-    if not flags and not creds:
+    vulns = list(getattr(attack_state, "vulnerabilities", []) or [])
+    if not flags and not creds and not vulns:
         return None
 
     # The chain is the tool calls up to the first flag (the moment of success);
@@ -148,8 +150,9 @@ def synthesize_from_log(
     name = _skill_name(attack_state, seed)
     primary = (getattr(attack_state, "vulnerabilities", []) or
                list((getattr(attack_state, "services", {}) or {}).values()) or ["chain"])[0]
+    reached = "a flag" if flags else "a foothold" if creds else "a confirmed weakness"
     description = (f"Replays the proven attack chain ({primary}) that reached "
-                  f"{'a flag' if flags else 'a foothold'} during session "
+                  f"{reached} during session "
                   f"{session_id or '?'} - pass a new target to re-run it.")
 
     if commands:
