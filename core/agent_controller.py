@@ -564,6 +564,9 @@ class AgentController:
         self._ungrounded_streak = 0
         # Raw (case-preserving) tool-output corpus for flag verification.
         self._tool_corpus = ""
+        # Monotonic total of tool-output bytes gathered - a findings-agnostic progress
+        # signal so the stall guard doesn't abort a working OSINT/browsing/general task.
+        self._info_chars = 0
         # Stall detection (see STALL_* constants): consecutive all-duplicate steps
         # and consecutive steps that discovered nothing new.
         dup_streak = 0
@@ -703,9 +706,15 @@ class AgentController:
                     {"tool": parsed["tool"], "args": parsed.get("args", {})}
                 ]
                 before = self._finding_snapshot()
+                info_before = self._info_chars
                 dispatched, duplicates = await self._execute_tool_calls(
                     calls, session_id, tools_used)
-                found_new = self._finding_snapshot() != before
+                # Progress = a new offensive finding OR substantive new information
+                # gathered (a fetched page, a search result, a browser snapshot). The
+                # latter keeps a legitimate OSINT / dark-web / general task from being
+                # aborted as "stalled" just because it found no vuln/cred/flag.
+                found_new = (self._finding_snapshot() != before
+                             or (self._info_chars - info_before) > 64)
 
                 # Update stall streaks. A step that discovers something resets both.
                 if found_new:
@@ -718,7 +727,7 @@ class AgentController:
                            or noprog_streak >= self.STALL_ABORT_NOPROG)
                 if stalled:
                     reason = ("repeating identical tool calls" if dup_streak >= self.STALL_ABORT_DUP
-                              else f"no new findings in {noprog_streak} steps")
+                              else f"no new progress in {noprog_streak} steps")
                     logger.warning("Turn aborted - stalled (%s)", reason)
                     await self.bus.emit(
                         "agent.stall",
@@ -1533,6 +1542,10 @@ class AgentController:
             # responses actually contained (capped so it can't grow unbounded).
             self._grounding_seen = (self._grounding_seen + " " + tool_output.lower())[-20000:]
             self._tool_corpus = (self._tool_corpus + "\n" + tool_output)[-40000:]
+            # Monotonic count of real tool-output bytes gathered - a progress signal
+            # that is NOT offensive-findings-only, so an OSINT / browsing / general task
+            # that fetches pages counts as making progress (not a CTF-flag bot).
+            self._info_chars += len(tool_output or "")
             self.context.add_tool_result(
                 tool_call_id=tool_call_id,
                 tool_name=tool_name,

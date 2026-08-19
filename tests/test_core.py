@@ -725,7 +725,48 @@ async def test_agent_stall_abort():
     assert response.iterations < AgentController.MAX_ITERATIONS  # aborted early
     assert response.iterations <= AgentController.STALL_ABORT_DUP + 2
     assert any(s.get("action") == "abort" for s in stalls)   # emitted the stall event
-    print(f"  PASS  agent_stall_abort (stopped at {response.iterations} iters)")
+    print("  PASS  agent_stall_abort")
+
+
+async def test_agent_info_progress_not_stalled():
+    # A task that gathers information (distinct fetches returning content) but finds no
+    # vuln/cred/flag must NOT be aborted as "stalled": progress is new information, not
+    # only offensive findings. This is the dark-web link hunt that got killed at 8 steps.
+    class Fetcher:
+        async def dispatch(self, name, args, session_id):
+            # Substantial, distinct content each call (grows the info corpus > 64 bytes).
+            return "search results page with many onion links: " + (args.get("url", "") * 4)
+
+    steps = AgentController.STALL_ABORT_NOPROG + 4   # well past the no-progress backstop
+
+    class BrowseModel:
+        supports_tools = False
+
+        def __init__(self):
+            self.n = 0
+
+        async def chat(self, messages, tools=None, json_mode=False, stream=False):
+            self.n += 1
+            if self.n <= steps:
+                return json.dumps({"type": "tool_call", "tool": "web_fetch",
+                                   "args": {"url": f"http://ahmia/{self.n}"}})
+            return json.dumps({"type": "response", "content": "Found the links."})
+
+    controller = AgentController(model_provider=BrowseModel(), tool_dispatcher=Fetcher(),
+                                 mode=AgentMode.AGENT, use_function_calling=False)
+    controller.register_tool(ToolSchema(
+        name="web_fetch", description="fetch a url",
+        parameters={"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}))
+    await controller.start()
+    stalls = []
+    controller.bus.subscribe("agent.stall", lambda e: stalls.append(e.data))
+
+    response = await controller.run("find dread links", session_id="osint")
+
+    assert response.error != "stalled", response.error         # not killed as a stall
+    assert "Found the links" in response.content               # ran to a real answer
+    assert not any(s.get("action") == "abort" for s in stalls)
+    print("  PASS  agent_info_progress_not_stalled")
 
 
 async def test_agent_fabrication_enforcement():
@@ -6698,6 +6739,7 @@ async def run_all():
 
     print("\nAgentController")
     await test_agent_direct_response()
+    await test_agent_info_progress_not_stalled()
     await test_parse_truncated_tool_call_reasks()
     await test_agent_tool_call_then_response()
     await test_agent_json_mode_tool_call()
