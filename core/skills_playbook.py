@@ -737,9 +737,20 @@ DARKWEB_SKILL = Skill(
         "3. To DISCOVER an address or mirror links, query a dark-web index over Tor (for "
         "example Ahmia or a known onion link directory) with `tor_fetch`, not a clearnet "
         "search engine.\n"
+        "4. VERIFY before you report - a directory's LABEL is not proof. An index like "
+        "onion.live/Ahmia lists many addresses and they are often stale, wrong, clones, or "
+        "phishing. You MUST navigate to each candidate .onion over Tor and confirm the page "
+        "actually IS the target: its real title/branding and its known UI (for Dread: the "
+        "Dread masthead and a login/register form), not a parking page, a search index, or "
+        "an unrelated service. If a candidate is offline or wrong, try the NEXT one. "
+        "Cross-check the address against at least two independent onion indexes. NEVER "
+        "report a scraped-but-unvisited address, and NEVER guess or invent an onion "
+        "address.\n"
         "If unsure Tor is actually in use, navigate to https://check.torproject.org and "
         "confirm 'configured to use Tor' before trusting results.\n"
-        "PROOF = the reached .onion content or the confirmed working mirror link."
+        "PROOF = an .onion you PERSONALLY loaded over Tor whose live content matches the "
+        "target. Report only verified-live links, and say plainly if none could be "
+        "confirmed rather than handing over an unverified address."
     ),
 )
 
