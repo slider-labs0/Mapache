@@ -261,8 +261,10 @@ THINKING_WORDS: list[str] = [
     "Conjuring payloads", "Dumpster-diving", "Prying", "Snooping",
 ]
 
-# Braille spinner frames - smooth and monospace-safe; ASCII fallback for cp1252.
-SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+# Thinking spinner: a few small circles rotating around a square (braille) cell - the
+# lit dots orbit the cell so it reads as circles spinning in a box. Monospace-safe;
+# ASCII fallback for a cp1252 console that can't render braille.
+SPINNER_FRAMES = "⣾⣽⣻⢿⡿⣟⣯⣷"
 _ASCII_SPINNER = "|/-\\"
 
 # How many spinner frames pass before the thinking WORD changes. The ticker runs at
@@ -537,9 +539,12 @@ def shell_result_line(exit_code: int, *, empty: bool = False, color: bool = True
     return paint(msg, "dgrey", color=color)
 
 
-def status_line(word: str, elapsed_s: float, tokens: int = 0, *, color: bool = True) -> str:
+def status_line(word: str, elapsed_s: float, tokens: int = 0, *, frame: int = 0,
+                color: bool = True) -> str:
     """The live bottom status, Claude-Code style:
-    '● Hacking… (10s · ↑ 46.3k tokens · ctrl-c to interrupt)' - dim, unobtrusive."""
+    '⣾ Hacking… (10s · ↑ 46.3k tokens · ctrl-c to interrupt)' - dim, unobtrusive.
+    `frame` advances the spinner (small circles rotating in a square) so the leading
+    glyph animates instead of sitting as a static dot."""
     ell = "…" if _can_encode("…") else "..."
     up = "↑" if _can_encode("↑") else "^"
     parts = [format_duration(elapsed_s)]
@@ -548,4 +553,5 @@ def status_line(word: str, elapsed_s: float, tokens: int = 0, *, color: bool = T
     parts.append("ctrl-c to interrupt")
     meta = paint("(" + " · ".join(parts) + ")", "grey", color=color)
     grad = gradient(word, color=color) + paint(ell, "grey", color=color)
-    return f"  {_dot('amber', color)} {grad} {meta}"
+    spin = paint(spinner_frame(frame, unicode=_can_encode(SPINNER_FRAMES)), "amber", color=color)
+    return f"  {spin} {grad} {meta}"

@@ -1655,7 +1655,7 @@ class MapacheCLI:
                 word = theme.thinking_word(i // theme.THINKING_WORD_EVERY)
                 elapsed = time.monotonic() - getattr(self, "_turn_start_ts", time.monotonic())
                 tokens = getattr(getattr(self, "controller", None), "session_tokens", 0)
-                self.render.thinking(theme.status_line(word, elapsed, tokens))
+                self.render.thinking(theme.status_line(word, elapsed, tokens, frame=i))
                 # Refresh the right-hand HUD in step with the status clock.
                 _bud = dict(getattr(self.config, "budget", None) or {})
                 self.tui.dashboard.tick(
