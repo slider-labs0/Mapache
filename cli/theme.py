@@ -431,6 +431,61 @@ def action_phrase(name: str, args: "dict | None" = None) -> str:
     return f"Running {n.replace('_', ' ')}" if n else "Working"
 
 
+# Mapache tool name → a short Claude-Code-style display name for the committed line.
+_TOOL_DISPLAY = {
+    "shell": "Bash", "kali_run": "Bash",
+    "file_read": "Read", "file_write": "Write", "file_edit": "Update",
+    "file_list": "List", "file_search": "Search",
+    "web_fetch": "Fetch", "web_search": "Search", "http_request": "HTTP",
+    "http_repeater": "Repeater", "browser": "Browser", "tor_fetch": "Tor fetch",
+    "nmap_scan": "Nmap", "code_run": "Code", "create_tool": "CreateTool",
+    "cve_lookup": "CVE", "msf_search": "MSF", "msf_run": "MSF", "sqlmap": "Sqlmap",
+    "fuzz": "Fuzz", "searchsploit": "Searchsploit", "binary_analyze": "Analyze",
+    "delegate": "Delegate", "delegate_parallel": "Delegate",
+}
+# The arg to show as the primary (first present wins); content/body deliberately absent
+# so a file write never dumps its content into the line.
+_PRIMARY_ARG_KEYS = ("cmd", "command", "path", "file", "filename", "url", "target",
+                     "query", "pattern", "q", "host", "name", "tool")
+
+
+def tool_label(name: str, args: "dict | None" = None) -> "tuple[str, str]":
+    """A Claude-Code-style (display_name, primary_arg) for a tool call, e.g.
+    ('Write', 'qwentest.py'), ('Bash', 'pip install pygame'), ('Read', 'x.py'). The
+    primary arg is the one thing worth showing (a path, a command, a url), clipped and
+    single-line - never a dumped file body."""
+    args = args or {}
+    display = _TOOL_DISPLAY.get(name)
+    if display is None:
+        base = name.split("__")[-1] if name.startswith("mcp__") else (name or "tool")
+        base = base.replace("_", " ").strip()
+        display = (base[:1].upper() + base[1:]) if base else "Tool"
+
+    if name == "kali_run":
+        primary = (str(args.get("tool") or "").strip() + " "
+                   + str(args.get("args") or "").strip()).strip()
+    else:
+        primary = ""
+        for k in _PRIMARY_ARG_KEYS:
+            v = args.get(k)
+            if v not in (None, "", []):
+                primary = str(v)
+                break
+        if not primary and args:
+            primary = str(next(iter(args.values())))
+    primary = _ANSI_RE.sub("", primary).replace("\n", " ").strip()
+    if len(primary) > 60:
+        primary = primary[:59] + "…"
+    return display, primary
+
+
+def result_line(text: str, *, error: bool = False, color: bool = True) -> str:
+    """A tool's result, nested under its call with the branch connector:
+    '⎿ Wrote 42 lines' / '⎿ (no output)' - the Claude-Code style."""
+    style = "amber" if error else "dgrey"
+    return paint(f"  {_elbow()} {text}", style, color=color)
+
+
 def format_duration(seconds: float) -> str:
     """Compact human duration: '820ms', '3s', '1m20s'."""
     if seconds < 1:
@@ -499,7 +554,7 @@ def tool_call_line(name: str, summary: str = "", *, accent: str = "teal",
     agent's accent so you can see which specialist ran it; args stay dim."""
     line = f"{_dot(accent, color)} {paint(name, 'bold', accent, color=color)}"
     if summary:
-        line += " " + paint(f"({summary})", "grey", color=color)
+        line += paint(f"({summary})", "grey", color=color)   # Claude-Code style: Name(arg)
     return line
 
 

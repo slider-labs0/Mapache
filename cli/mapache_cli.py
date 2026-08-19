@@ -1718,16 +1718,12 @@ class MapacheCLI:
             return
         if name in ("delegate", "delegate_parallel"):
             return  # the handoff banner (delegate.start) renders the routing instead
-        cmd = self._shell_cmd(name, args)
-        if cmd:
-            # Narrate ('● Scanning ports with nmap'), then show the command block.
-            self.render.action(self._running_action)
-            user, host, cwd = self._shell_context(args)
-            self.render.shell_command(cmd, user=user, host=host, cwd=cwd)
-        else:
-            # Fold the plain-language phrase into the tool line itself so there's
-            # one human-readable '● Searching the web (…)' line, not two bullets.
-            self.render.tool_call(self._running_action, self._summarize_args(args))
+        # Claude-Code-style committed line: the tool NAME + its primary arg, e.g.
+        # '● Bash(pip install pygame)', '● Write(qwentest.py)', '● Read(x.py)' - one
+        # line, never a dumped file body. The live spinner still narrates in plain
+        # language ('Scanning ports with nmap') via _running_action.
+        display, primary = theme.tool_label(name, args)
+        self.render.tool_call(display, primary)
 
     async def _on_task_end(self, event) -> None:
         """A tool finished. Classic: a 'ran <tool> · <N>s' line. TUI: shell tools get
@@ -1753,6 +1749,22 @@ class MapacheCLI:
             err = data.get("error")
             output = data.get("output") or ""
             self.render.shell_result(0 if not err else 1, empty=not output.strip())
+        else:
+            # Claude-Code-style result summary nested under the tool line ('⎿ …').
+            self.render.info(theme.result_line(
+                self._result_summary(data), error=bool(data.get("error"))))
+
+    @staticmethod
+    def _result_summary(data: dict) -> str:
+        """A one-line summary of a tool result for the '⎿ …' line."""
+        if data.get("error"):
+            return str(data.get("error")).replace("\n", " ")[:70] or "error"
+        out = (data.get("output") or "").strip()
+        if not out:
+            return "(no output)"
+        lines = out.splitlines()
+        first = lines[0].strip()[:60]
+        return f"{first} … (+{len(lines) - 1} lines)" if len(lines) > 1 else first
 
     @staticmethod
     def _summarize_args(args: dict) -> str:

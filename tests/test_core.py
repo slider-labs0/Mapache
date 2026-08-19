@@ -4773,6 +4773,18 @@ def test_theme_logo_and_thinking():
     # Result/detail lines nest under the tool call with the branch connector.
     elbow = theme._elbow()
     assert elbow in done and elbow in theme.shell_result_line(0, color=False)
+
+    # Claude-Code-style tool labels: NAME(primary arg), never a dumped file body.
+    assert theme.tool_label("file_write", {"path": "qwentest.py", "content": "x" * 999}) \
+        == ("Write", "qwentest.py")
+    assert theme.tool_label("shell", {"cmd": "pip install pygame"}) == ("Bash", "pip install pygame")
+    assert theme.tool_label("kali_run", {"tool": "nmap", "args": "-sV x"}) == ("Bash", "nmap -sV x")
+    assert theme.tool_label("file_read", {"path": "s.py"}) == ("Read", "s.py")
+    assert theme.tool_label("mcp__playwright__browser_navigate", {"url": "http://x"})[0] \
+        == "Browser navigate"
+    d1, p1 = theme.tool_label("file_write", {"path": "a", "content": "SECRET"})
+    assert "SECRET" not in p1                                   # content never leaks into the line
+    assert elbow in theme.result_line("Wrote 42 lines", color=False)
     print("  PASS  theme_logo_and_thinking")
 
 
