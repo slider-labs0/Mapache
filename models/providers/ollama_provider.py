@@ -9,6 +9,7 @@ Adds:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -37,6 +38,11 @@ DEFAULT_TIMEOUT  = 600.0  # 10 minutes - long scans need this
 # the prompt budget plus output headroom. Override with OLLAMA_NUM_CTX (raise it for
 # heavy tool sets, lower it if a big model runs short on memory).
 DEFAULT_NUM_CTX  = 25000
+# Transient transport failures worth retrying: Ollama reloading a model, a momentary
+# connection reset, or a slow first token on a heavy local model. A 4xx / bad request
+# is NOT retried. httpx.TransportError covers connect/read/write/pool timeouts + resets.
+_RETRIES = 2
+_RETRY_BACKOFF = 1.5  # seconds, multiplied by the attempt number
 
 
 class OllamaProvider:
@@ -98,31 +104,51 @@ class OllamaProvider:
         elif json_mode or (tools and not self.supports_tools):
             payload["format"] = "json"
 
-        try:
-            response = await self._client.post(
-                f"{self.base_url}/api/chat",
-                json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
-            # Normalize Ollama's eval counts to an OpenAI-style usage block so the
-            # controller accounts tokens the same way across providers.
-            p = int(data.get("prompt_eval_count") or 0)
-            c = int(data.get("eval_count") or 0)
-            data["usage"] = {"prompt_tokens": p, "completion_tokens": c,
-                             "total_tokens": p + c}
-            return data
-        except httpx.ConnectError:
+        last_exc: Optional[Exception] = None
+        for attempt in range(_RETRIES + 1):
+            try:
+                response = await self._client.post(
+                    f"{self.base_url}/api/chat",
+                    json=payload,
+                )
+                response.raise_for_status()
+                data = response.json()
+                # Normalize Ollama's eval counts to an OpenAI-style usage block so the
+                # controller accounts tokens the same way across providers.
+                p = int(data.get("prompt_eval_count") or 0)
+                c = int(data.get("eval_count") or 0)
+                data["usage"] = {"prompt_tokens": p, "completion_tokens": c,
+                                 "total_tokens": p + c}
+                return data
+            except httpx.HTTPStatusError as exc:
+                # 5xx (model loading / transient server error) is worth a retry; a 4xx
+                # (e.g. a bad prompt) is not - surface it immediately.
+                if exc.response.status_code >= 500 and attempt < _RETRIES:
+                    last_exc = exc
+                    await asyncio.sleep(_RETRY_BACKOFF * (attempt + 1))
+                    continue
+                raise RuntimeError(
+                    f"Ollama API error {exc.response.status_code}: {exc.response.text}")
+            except httpx.TransportError as exc:
+                last_exc = exc
+                if attempt < _RETRIES:
+                    await asyncio.sleep(_RETRY_BACKOFF * (attempt + 1))
+                    continue
+                break
+            except Exception as exc:
+                # Non-transport failure (e.g. malformed JSON) - do not retry.
+                raise RuntimeError(
+                    f"Ollama request failed: {type(exc).__name__}: {exc}")
+
+        # Retries exhausted on a transport error - surface the real cause + type.
+        if isinstance(last_exc, httpx.ConnectError):
             raise ConnectionError(
-                f"Cannot connect to Ollama at {self.base_url}. "
-                "Is Ollama running? Try: ollama serve"
-            )
-        except httpx.HTTPStatusError as exc:
-            raise RuntimeError(
-                f"Ollama API error {exc.response.status_code}: {exc.response.text}"
-            )
-        except Exception as exc:
-            raise RuntimeError(f"Ollama request failed: {exc}")
+                f"Cannot connect to Ollama at {self.base_url} after {_RETRIES + 1} "
+                "attempts. Is Ollama running (ollama serve), or did it run out of memory? "
+                f"({type(last_exc).__name__}: {last_exc})")
+        raise RuntimeError(
+            f"Ollama request failed after {_RETRIES + 1} attempts: "
+            f"{type(last_exc).__name__}: {last_exc}")
 
     # ------------------------------------------------------------------ #
     # Streaming chat
@@ -191,12 +217,13 @@ class OllamaProvider:
                                    "completion_tokens": c, "total_tokens": p + c}
                         return
 
-        except httpx.ConnectError:
+        except httpx.ConnectError as exc:
             raise ConnectionError(
-                f"Cannot connect to Ollama at {self.base_url}."
+                f"Cannot connect to Ollama at {self.base_url}. Is it running, or did it "
+                f"run out of memory? ({type(exc).__name__}: {exc})"
             )
         except Exception as exc:
-            raise RuntimeError(f"Ollama stream failed: {exc}")
+            raise RuntimeError(f"Ollama stream failed: {type(exc).__name__}: {exc}")
 
     # ------------------------------------------------------------------ #
     # Utilities
