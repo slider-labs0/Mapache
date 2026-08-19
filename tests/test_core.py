@@ -4720,6 +4720,9 @@ def test_theme_logo_and_thinking():
     assert "ran shell" in done and "20s" in done
     failed = theme.step_done_line("nmap_scan", 2.0, error=True, color=False)
     assert "nmap_scan failed" in failed and "2s" in failed
+    # Result/detail lines nest under the tool call with the branch connector.
+    elbow = theme._elbow()
+    assert elbow in done and elbow in theme.shell_result_line(0, color=False)
     print("  PASS  theme_logo_and_thinking")
 
 

@@ -441,16 +441,26 @@ def format_duration(seconds: float) -> str:
     return f"{minutes}m{secs:02d}s"
 
 
+def _elbow() -> str:
+    """The tree branch connector for a nested detail/result line that hangs off the
+    action above it (the '⎿' Claude-Code style, matching Mapache's own '└─' prompt
+    block). Falls back to '└' then ASCII on a console that can't render it."""
+    if _can_encode("⎿"):
+        return "⎿"
+    if _can_encode("└"):
+        return "└"
+    return "\\_"
+
+
 def step_done_line(label: str, seconds: float, *, error: bool = False,
                    color: bool = True) -> str:
-    """Completion line shown when a tool finishes: ' ran <label> · 3s'
-    (or 'x <label> failed · 3s'). Degrades to ASCII glyphs on a cp1252 console."""
+    """Completion line shown when a tool finishes, nested under its call with a branch
+    connector: '⎿ ran <label> · 3s' (or '⎿ <label> failed · 3s'). Degrades to ASCII
+    on a cp1252 console."""
     dur = format_duration(seconds)
     if error:
-        glyph = "x" if _can_encode("x") else "x"
-        return paint(f"  {glyph} {label} failed · {dur}", "amber", color=color)
-    glyph = "" if _can_encode("") else "*"
-    return paint(f"  {glyph} ran {label} · {dur}", "grey", color=color)
+        return paint(f"  {_elbow()} {label} failed · {dur}", "amber", color=color)
+    return paint(f"  {_elbow()} ran {label} · {dur}", "grey", color=color)
 
 
 # --------------------------------------------------------------------------- #
@@ -531,12 +541,13 @@ def handoff_line(title: str, *, accent: str = "cyan", back: bool = False,
 
 
 def shell_result_line(exit_code: int, *, empty: bool = False, color: bool = True) -> str:
-    """The dim status under a shell command: '[Command completed… Exit code: N]'."""
+    """The dim status under a shell command, nested with the branch connector:
+    '⎿ [Command completed… Exit code: N]'."""
     if empty:
         msg = f"[Command completed with no output. Exit code: {exit_code}]"
     else:
         msg = f"[Exit code: {exit_code}]"
-    return paint(msg, "dgrey", color=color)
+    return paint(f"  {_elbow()} {msg}", "dgrey", color=color)
 
 
 def status_line(word: str, elapsed_s: float, tokens: int = 0, *, frame: int = 0,
