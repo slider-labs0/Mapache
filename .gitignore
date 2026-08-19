@@ -30,3 +30,7 @@ mcp.json
 /validation-benchmarks/
 /OmniRoute/
 /PurpleLlama/
+
+# Demo/runtime artifacts (not part of Mapache)
+.playwright-mcp/
+qwentest.py

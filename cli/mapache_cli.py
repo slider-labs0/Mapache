@@ -1523,11 +1523,15 @@ class MapacheCLI:
         def _on_token(text: str) -> None:
             if not first_output["seen"]:
                 first_output["seen"] = True
-                # The ticker sleeps between frames, so cancelling here means it
-                # won't paint again before this clears its line and streaming starts.
-                if not ticker.done():
-                    ticker.cancel()
-                self.render.thinking_clear()
+                # Classic CLI: the spinner shares the output line via '\r', so it must
+                # stop the moment streaming starts. The TUI status is its own bottom
+                # region, so KEEP the ticker running there - the thinking spinner + word
+                # stay visible the whole time the agent works (streaming, tool calls,
+                # thinking), Claude-Code style, and clear only at turn end.
+                if self.tui is None:
+                    if not ticker.done():
+                        ticker.cancel()
+                    self.render.thinking_clear()
             self.render.stream(text)
 
         try:
@@ -1550,9 +1554,11 @@ class MapacheCLI:
                     user_input, session_id=self.session_id, on_token=_on_token
                 ))
             response = await self._drive_turn(turn_task)
-            # If streaming already began, the ticker line was cleared in _on_token
-            # (before "agent > "); clearing again here would wipe that streamed line.
-            await self._stop_ticker(ticker, clear=not first_output["seen"])
+            # TUI: the ticker ran the whole turn in its own status region, so clear it
+            # now. Classic: if streaming began the line was already cleared in _on_token
+            # (clearing again would wipe the streamed text).
+            await self._stop_ticker(
+                ticker, clear=(self.tui is not None) or not first_output["seen"])
             self.session_id = response.session_id
             self.render.agent_result(response.content, response.tool_calls_made,
                                      response.iterations, response.error)
