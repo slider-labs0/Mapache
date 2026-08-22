@@ -54,7 +54,8 @@ from security_tools.kali.kali_tools_interface import (
     KaliToolListTool, KaliRunTool, SearchsploitTool,
 )
 from browser.scraping_tools import (WebFetchTool, HttpRequestTool, WebSearchTool,
-                                     TorFetchTool, TorControlTool, EgressCheckTool)
+                                     TorFetchTool, TorControlTool, OnionSearchTool,
+                                     EgressCheckTool)
 from tools.filesystem_tool import (
     FileReadTool, FileWriteTool, FileEditTool,
     FileListTool, FileSearchTool,
@@ -686,6 +687,7 @@ class MapacheCLI:
             self.registry.register(WebSearchTool())
             self.registry.register(TorFetchTool())
             self.registry.register(TorControlTool())
+            self.registry.register(OnionSearchTool())
             self.registry.register(EgressCheckTool(egress=self.egress))
 
             # Phase 6 - Advanced security

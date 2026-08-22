@@ -820,6 +820,128 @@ class TorControlTool(BaseTool):
                              metadata={"socks_port": tor_port})
 
 
+# dark.fail is the canonical VERIFIED-links directory for major dark-web services
+# (markets, forums like Dread, etc.). Unlike Ahmia's keyword search - which is anti-bot
+# gated and serves an empty shell to non-Tor-Browser clients - dark.fail is plain
+# server-rendered HTML that lists each service's official onion(s) + online/offline
+# status, so it can be read reliably over Tor or clearnet.
+DARKFAIL_CLEARNET = "https://dark.fail/"
+DARKFAIL_ONION = ("http://darkfailenbsdla5mal2mxn2uz66od5vtzd5qozslagrfzachha3f3id"
+                  ".onion/")
+_ONION_RE = re.compile(r"\b[a-z2-7]{56}\.onion\b|\b[a-z2-7]{16}\.onion\b")
+
+
+def _parse_darkfail(html: str) -> list[tuple[str, str, bool]]:
+    """Parse dark.fail into (service_name, onion, online) rows. Each service is an
+    <h4><a ...>Name</a></h4> followed by <li class="... online|offline ...">
+    <code>http://<onion></code> mirror entries."""
+    rows: list[tuple[str, str, bool]] = []
+    for block in re.split(r"<h4>", html)[1:]:
+        nm = re.search(r"<a [^>]*>([^<]+)</a>", block)
+        name = (nm.group(1).strip() if nm else "?")
+        for li in re.finditer(
+                r'<li class="([^"]*)"[^>]*>\s*<code>\s*https?://([a-z2-7]{56}\.onion)',
+                block):
+            rows.append((name, li.group(2), "offline" not in li.group(1).lower()))
+    return rows
+
+
+class OnionSearchTool(BaseTool):
+    name = "onion_search"
+    description = (
+        "Look up the VERIFIED .onion address of a known dark-web service (a market, or a "
+        "forum like Dread, etc.) from the dark.fail directory - the canonical verified-"
+        "links site. Give a service name/keyword (e.g. 'dread') and this returns the "
+        "official onion(s) for matching services WITH their online/offline status, so you "
+        "don't guess addresses or scrape anti-bot search engines. With no query it lists "
+        "every service dark.fail tracks. Then use tor_fetch/browser to open a live one. "
+        "NOTE: many services (Dread included) are frequently offline/DDoSed - if the "
+        "status says offline, the address is correct but the site is down; do not loop."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string",
+                      "description": "Service name/keyword, e.g. 'dread'. Omit to list all.",
+                      "default": ""},
+            "tor_port": {"type": "integer",
+                         "description": "Tor SOCKS port (default 9050; Tor Browser uses 9150)",
+                         "default": 9050},
+        },
+        "required": [],
+    }
+    permissions = {Permission.NETWORK, Permission.TOR}
+    timeout = 90
+    tags = ["tor", "onion", "dark-web", "osint", "search"]
+
+    async def execute(self, query: str = "", tor_port: int = 9050,
+                      **kwargs: Any) -> ToolResult:
+        # Try clearnet dark.fail first (fast), then its onion over Tor as a fallback.
+        html, err = await self._fetch_with_retry(DARKFAIL_CLEARNET, proxy=None)
+        source = DARKFAIL_CLEARNET
+        if html is None:
+            from browser.tor_controller import TorController
+            controller = TorController(socks_port=tor_port, control_port=tor_port + 1)
+            if not await controller.is_running():
+                await controller.start()
+            html, err = await self._fetch_with_retry(
+                DARKFAIL_ONION, proxy=f"socks5h://127.0.0.1:{tor_port}")
+            source = DARKFAIL_ONION
+        if html is None:
+            return ToolResult.fail(f"Could not reach dark.fail (clearnet or onion): {err}")
+
+        rows = _parse_darkfail(html)
+        if not rows:
+            return ToolResult.fail(
+                "Reached dark.fail but parsed no services (layout may have changed).")
+
+        q = query.strip().lower()
+        if q:
+            matched = [r for r in rows if q in r[0].lower()]
+            if not matched:
+                names = sorted({name for name, _, _ in rows})
+                return ToolResult.ok(
+                    f"No service matching '{query}' on dark.fail. Tracked services: "
+                    + ", ".join(names))
+            rows = matched
+
+        # Dedup (name, onion), keep online first for readability.
+        seen: set = set()
+        online, offline = [], []
+        for name, onion, is_on in rows:
+            key = (name, onion)
+            if key in seen:
+                continue
+            seen.add(key)
+            (online if is_on else offline).append(f"  [{name}] http://{onion}")
+        lines = [f"onion_search('{query}') via dark.fail (verified links):" if q
+                 else "dark.fail verified links:", ""]
+        if online:
+            lines += ["ONLINE:"] + online
+        if offline:
+            lines += ["", "OFFLINE (address is correct but the site is down right now):"] + offline
+        lines.append("\nVerify over Tor before trusting; addresses can still be cloned.")
+        return ToolResult.ok("\n".join(lines),
+                             metadata={"query": query, "source": source,
+                                       "online": len(online), "offline": len(offline)})
+
+    async def _fetch_with_retry(self, url: str,
+                                proxy: Optional[str]) -> tuple[Optional[str], str]:
+        try:
+            async with HttpClient(proxy=proxy, timeout=45.0, verify_ssl=False) as client:
+                for attempt in range(3):
+                    resp = await client.get(url)
+                    if resp.success:
+                        return resp.text, ""
+                    err = resp.error or "unknown error"
+                    if attempt == 2 or not _is_transient_tor_error(err):
+                        return None, err
+                    await asyncio.sleep(2.5)
+        except Exception as exc:
+            return None, str(exc)
+        return None, "exhausted retries"
+
+
 class EgressCheckTool(BaseTool):
     name = "egress_check"
     description = (

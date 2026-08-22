@@ -45,7 +45,8 @@ from tools.filesystem_tool import (
 )
 
 # Browser tools
-from browser.scraping_tools import WebFetchTool, WebSearchTool, TorFetchTool, TorControlTool
+from browser.scraping_tools import (WebFetchTool, WebSearchTool, TorFetchTool,
+                                     TorControlTool, OnionSearchTool)
 
 # Phase 6 - Advanced security tools
 from security_tools.exploitation.metasploit_tool import (
@@ -148,6 +149,7 @@ async def main() -> None:
     registry.register(WebSearchTool())
     registry.register(TorFetchTool())
     registry.register(TorControlTool())
+    registry.register(OnionSearchTool())
 
     # Phase 6 - Advanced security
     registry.register(MetasploitSearchTool())
