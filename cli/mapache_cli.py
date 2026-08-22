@@ -77,9 +77,11 @@ except ImportError:
 logger = get_logger(__name__)
 
 HELP_TEXT = """
-TUI (mapache serve): mouse wheel / PageUp-PageDown / arrows scroll · drag to
-  select & copy · /sidebar wide|narrow|<n> resizes the panel · type "/" for
-  command suggestions · Ctrl+L clear · Ctrl+C quit
+mapache serve (inline, Claude-Code style): output prints to the terminal so your
+  mouse wheel, scrollback and drag-select/copy all work natively; the input line +
+  HUD sit at the bottom and move down as text prints. /hud shows full panels · type
+  "/" for command suggestions · Ctrl+C quit.  (mapache serve --tui = old full-screen
+  pinned-sidebar layout, for terminals that deliver scroll keys to full-screen apps.)
 
 Commands:
   /help                  This help
@@ -1419,7 +1421,8 @@ class MapacheCLI:
                 hist = os.path.join(hist_dir, "history")
             except Exception:
                 hist = None
-            self._ptk = enhanced_input.make_session(hist)
+            self._ptk = enhanced_input.make_session(
+                hist, bottom_toolbar=self._hud_toolbar)
 
         if not tui_mode and self._ptk is None:
             loop = asyncio.get_event_loop()
@@ -1518,6 +1521,29 @@ class MapacheCLI:
         keep_going = await self._process_line(text)
         if not keep_going and self.tui is not None and self.tui._app is not None:
             self.tui._app.exit()
+
+    def _hud_toolbar(self):
+        """Compact HUD shown just under the input line (moves down as output scrolls
+        above it, Claude-Code style). Returns a string prompt_toolkit styles as the
+        bottom toolbar. Full panels are available via /hud."""
+        parts = ["agent lead", f"model {self.model}"]
+        if self.controller is not None:
+            try:
+                st = self.controller.chain.attack_state
+                parts.append(f"phase {getattr(st, 'current_phase', '') or '-'}")
+                tgt = getattr(st, "target", "") or "-"
+                parts.append(f"target {tgt}")
+                ports = getattr(st, "open_ports", None) or []
+                if ports:
+                    parts.append(f"ports {len(ports)}")
+                parts.append(f"vulns {len(getattr(st, 'vulnerabilities', None) or [])}")
+                todos = self.controller.chain.todos
+                if todos:
+                    done = sum(1 for t in todos if t.status == "completed")
+                    parts.append(f"todo {done}/{len(todos)}")
+            except Exception:
+                pass
+        return "  " + "  ·  ".join(parts) + "   ·   /hud full · /help"
 
     def _render_hud(self) -> str:
         """Render the sidebar panels (Agent/Models/Target/Budget/Checklist) as a
@@ -2720,9 +2746,12 @@ async def main() -> None:
         setup_logging(level="WARNING")
         sys.exit(await run_config_cmd(argv[1:]))
     if argv and argv[0] == "serve":
-        # `serve` = launch the full-screen TUI. Rewrite argv so the normal flag
-        # parser handles any extra options (--model, …) with --tui forced on.
-        sys.argv = [sys.argv[0], *argv[1:], "--tui"]
+        # `serve` = launch the agent REPL. Default is the Claude-Code-style INLINE
+        # layout: output prints to the normal terminal (native scroll + copy) with the
+        # input line and a HUD toolbar at the bottom that move down as text prints.
+        # Add `--tui` for the old full-screen pinned-sidebar layout (needs a terminal
+        # that delivers scroll keys/mouse to full-screen apps).
+        sys.argv = [sys.argv[0], *argv[1:]]
 
     args = parse_args()
     # Console stays quiet by default (WARNING) so the live status line isn't buried
