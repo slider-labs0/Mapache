@@ -1,0 +1,9 @@
+$ strings pingtest.cgi | head
+ping -c 3 %s
+/bin/sh
+REMOTE_ADDR
+QUERY_STRING
+# hardcoded maintenance backdoor left in firmware:
+admin:5up3rS3cr3t!
+nvram_get
+GCC: (GNU) mips-linux

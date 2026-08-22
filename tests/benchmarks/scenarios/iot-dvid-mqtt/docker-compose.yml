@@ -1,0 +1,10 @@
+# DVID-style anonymous MQTT broker (CWE-306). Official mosquitto image + a conf
+# that permits anonymous connections.
+services:
+  broker:
+    image: eclipse-mosquitto:2
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    ports:
+      - "127.0.0.1:0:1883"
+    restart: "no"

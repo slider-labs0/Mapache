@@ -1,0 +1,8 @@
+# flaws.cloud mini-replica: httpd with directory indexing ON, exposing a file
+# that should be private (CWE-284 / public object store).
+services:
+  bucket:
+    build: .
+    ports:
+      - "127.0.0.1:0:80"
+    restart: "no"

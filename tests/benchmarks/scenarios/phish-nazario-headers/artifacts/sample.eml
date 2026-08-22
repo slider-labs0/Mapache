@@ -1,0 +1,15 @@
+Return-Path: <bounce@mailer.attacker.example>
+Received: from mailer.attacker.example (unknown [203.0.113.44])
+Authentication-Results: mx.corp.example;
+  spf=fail (sender IP is 203.0.113.44) smtp.mailfrom=attacker.example;
+  dkim=fail reason="no valid signature";
+  dmarc=fail action=quarantine header.from=yourbank.com
+From: "YourBank Security" <support@yourbank.com>
+Reply-To: <recover@attacker.example>
+To: <victim@corp.example>
+Subject: Urgent: verify your account within 24 hours
+MIME-Version: 1.0
+Content-Type: text/html
+
+<p>Your account is locked. <a href="http://secure-bank-update.attacker.example/login">
+Click here to verify</a> immediately or it will be closed.</p>

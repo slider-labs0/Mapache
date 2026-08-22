@@ -1,0 +1,10 @@
+# Conpot SCADA honeypot: emulates an unauthenticated PLC (Modbus/S7/SNMP/HTTP).
+# The 'finding' is that an ICS device is network-exposed with no auth (CWE-306).
+services:
+  plc:
+    image: honeynet/conpot:latest
+    # image default CMD already runs: conpot --template default (modbus/502, s7/102,
+    # http/80, snmp/161). Do NOT override it - the binary is not on PATH as bare 'conpot'.
+    ports:
+      - "127.0.0.1:0:502"
+    restart: "no"

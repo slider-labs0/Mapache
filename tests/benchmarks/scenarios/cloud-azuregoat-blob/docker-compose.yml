@@ -1,0 +1,10 @@
+# AzureGoat mini-replica: a mock Azure Blob service with anonymous access enabled on
+# a container, leaking a storage connection string (CWE-538). It speaks the real Azure
+# Blob REST list API (?restype=container&comp=list -> XML), so the standard cloud
+# enumeration approach works exactly as it would against a real public container.
+services:
+  blob:
+    build: .
+    ports:
+      - "127.0.0.1:0:80"
+    restart: "no"

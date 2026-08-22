@@ -1,0 +1,7 @@
+services:
+  target:
+    build:
+      context: .
+    command: sleep infinity
+    network_mode: none
+    restart: "no"

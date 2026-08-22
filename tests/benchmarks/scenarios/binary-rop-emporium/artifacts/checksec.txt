@@ -1,0 +1,6 @@
+checksec --file=ret2win
+RELRO:      Partial RELRO
+Stack:      No canary found
+NX:         NX enabled            <- stack is non-executable; shellcode-on-stack fails
+PIE:        No PIE (0x400000)     <- fixed addresses; ret2win is at a known address
+Symbols:    ret2win, pwnme, main present

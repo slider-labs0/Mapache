@@ -1,0 +1,54 @@
+{
+  "discipline": "mobile",
+  "title": "Damn Vulnerable Bank-style exported component (insecure IPC)",
+  "difficulty": "medium",
+  "win_condition": "finding",
+  "target": {
+    "kind": "analysis"
+  },
+  "objective": "Statically analyze the decompiled Android banking app in the artifacts directory. A component is reachable by any other app on the device and performs a sensitive action without checking the caller. Identify the exported-component / insecure-IPC weakness, cite the manifest entry and the code it exposes, name the class with a CWE, and recommend the fix.",
+  "artifacts_dir": "artifacts",
+  "tags": [
+    "mobile",
+    "android",
+    "exported-component",
+    "ipc",
+    "damn-vulnerable-bank"
+  ],
+  "rubric": {
+    "cwe": "CWE-926",
+    "vuln_keywords": [
+      "exported component",
+      "exported activity",
+      "insecure ipc",
+      "improperly exported",
+      "unprotected component",
+      "exposed component",
+      "improper export"
+    ],
+    "evidence_markers": [
+      "android:exported=\"true\"",
+      "TransferActivity",
+      "intent",
+      "getIntent",
+      "transfer",
+      "no permission",
+      "amount"
+    ],
+    "grounded_markers": [
+      "android:exported=\"true\"",
+      "TransferActivity"
+    ],
+    "remediation_keywords": [
+      "exported=\"false\"",
+      "android:permission",
+      "signature permission",
+      "verify caller",
+      "not exported",
+      "restrict",
+      "intent filter"
+    ],
+    "min_evidence": 2
+  },
+  "id": "mobile-dvbank-export"
+}

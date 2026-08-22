@@ -34,11 +34,34 @@ point the agent → grade → down, like XBOW). Two kinds:
   faithful to review-based disciplines (code / contract / mobile / firmware / dfir /
   osint / supply-chain / phishing / active-directory / cloud-IaC / llm / wireless).
 
-## Disciplines covered (16)
+## Disciplines covered (17) · 37 scenarios
 
-web · network · cloud · code-audit · smart-contract · binary/reversing · mobile ·
+web · network · cloud · code-audit · smart-contract · binary · reversing · mobile ·
 iot/firmware · ics/ot · wireless · phishing/SE · supply-chain · dfir · osint ·
 active-directory · llm-app
+
+## Real-world targets modelled
+
+Beyond the original 16, the suite ships self-contained mini-replicas of the
+intentionally-vulnerable labs and CTFs that pentesters actually train on, so each is
+a reproducible, offline-gradeable finding rather than a multi-GB external VM:
+
+| Scenario | Models |
+|----------|--------|
+| `net-metasploitable3`, `net-vulnhub` | Metasploitable 3, VulnHub boot2root (RCE / default creds) |
+| `cloud-flaws-s3`, `cloud-flaws2-ssrf`, `cloud-azuregoat-blob` | flaws.cloud, flaws2 (SSRF→IMDS), AzureGoat |
+| `binary-rop-emporium`, `binary-exploit-education`, `rev-crackme` | ROP Emporium, exploit.education, crackmes.one |
+| `mobile-diva-storage`, `mobile-dvbank-export`, `mobile-androgoat-webview` | DIVA, Damn Vulnerable Bank, AndroGoat |
+| `supplychain-backstabber` | Backstabber's Knife (malicious install-time package) |
+| `ics-conpot`, `ics-modbus-write` | Conpot SCADA honeypot, unauthenticated Modbus write |
+| `firmware-dvrf-overflow`, `iot-dvid-mqtt` | DVRF router firmware, DVID (anonymous MQTT) |
+| `wireless-aircrack-wpa`, `wireless-wifichallenge-pmkid` | aircrack-ng handshake crack, WiFi Challenge Lab PMKID |
+| `phish-phishtank-kit`, `phish-nazario-headers` | PhishTank kit, Nazario corpus header forensics |
+| `llm-gandalf-injection` | Gandalf (prompt-injection guardrail bypass) |
+
+`wireless-aircrack-wpa` performs a **real** offline dictionary crack of the
+aircrack-ng project's canonical WPA test capture in-container; the rest either build
+a service the agent attacks or ship a bundled artifact the agent analyses.
 
 ## Running
 
@@ -71,3 +94,23 @@ Create `scenarios/<id>/scenario.json` with a `target` block and a `rubric`, plus
 
 Every rubric **grounded marker** must appear verbatim in the target (for `analysis`,
 `--check` enforces this; for `service`, it's a string the live service emits).
+
+## AutoAttacker battery (agent-level, post-breach)
+
+`../benchmark_autoattacker.py` is a different yardstick: an **AutoAttacker**-style
+(Xu et al.) post-breach battery. Instead of one vuln per container graded as a
+finding, it gives the agent a shell on a shared, network-isolated victim host
+(`autoattacker/victim/`) and scores whether it **completes** each attacker task
+(discovery, credential access, collection, privilege escalation, exfil staging,
+persistence) by the real evidence surfacing in the transcript.
+
+```bash
+python tests/benchmark_autoattacker.py --check      # validate battery + victim, no Docker
+python tests/benchmark_autoattacker.py --list        # print the 9-task battery
+python tests/benchmark_autoattacker.py --category cred-access,privesc --model grok-4
+python tests/benchmark_autoattacker.py --model grok-4 # full battery (Docker + model)
+```
+
+Unit-tested by `test_autoattacker_battery_valid` in `tests/test_core.py`. The victim
+is `network_mode: none`; persistence/exfil tasks act only inside that throwaway lab
+container.

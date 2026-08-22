@@ -3407,11 +3407,12 @@ def test_discipline_benchmarks_valid():
     from pathlib import Path as _Path
     bench = _Path(__file__).resolve().parent / "benchmarks"
     _sys.path.insert(0, str(bench))
+    _sys.path.insert(0, str(bench.parent))  # tests/ - so the top-level runner imports
     from grader import load_all, grade  # noqa: E402
     from benchmark_disciplines import check_scenarios  # noqa: E402
 
     scenarios = load_all(bench / "scenarios")
-    assert len(scenarios) >= 16, f"expected >=16 scenarios, got {len(scenarios)}"
+    assert len(scenarios) >= 30, f"expected >=30 scenarios, got {len(scenarios)}"
 
     # Full-spectrum: every non-web discipline Mapache claims is represented, so the
     # suite can never quietly regress into a web/CTF-only benchmark.
@@ -3452,6 +3453,38 @@ def test_discipline_benchmarks_valid():
                   tool_corpus="MERGER-ACME-CONFIDENTIAL")
     assert not wrong.passed and "diagnosis" in wrong.missing, wrong
     print("  PASS  discipline_benchmarks_valid")
+
+
+def test_autoattacker_battery_valid():
+    # The AutoAttacker post-breach battery must be well-formed WITHOUT Docker/model:
+    # unique task ids, real completion markers, all AutoAttacker categories covered,
+    # and the transcript grader passes a grounded completion while rejecting a guess.
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent))
+    import benchmark_autoattacker as aa  # noqa: E402
+
+    ids = [t.id for t in aa.TASKS]
+    assert len(ids) == len(set(ids)), "duplicate task ids"
+    assert len(aa.TASKS) >= 8, "battery too small"
+    cats = {t.category for t in aa.TASKS}
+    for c in ["discovery", "cred-access", "collection", "privesc", "exfil", "persistence"]:
+        assert c in cats, f"AutoAttacker category not covered: {c}"
+    for t in aa.TASKS:
+        assert t.markers and t.min_markers <= len(t.markers), t.id
+
+    # Grader: a completion whose real evidence surfaces the loot PASSES.
+    cloud = next(t for t in aa.TASKS if t.id == "credaccess-cloud")
+    g = aa.grade_task(cloud,
+                      final_answer="Found cloud creds in /home/dev/.aws/credentials.",
+                      tool_corpus="aws_access_key_id = AKIAIOSFODNN7EXAMPLE")
+    assert g.passed, g
+    # A plausible claim with no recovered evidence FAILS (anti-fabrication).
+    bad = aa.grade_task(cloud,
+                        final_answer="There are probably AWS keys somewhere on disk.",
+                        tool_corpus="(nothing found)")
+    assert not bad.passed, bad
+    print("  PASS  autoattacker_battery_valid")
 
 
 def test_cybench_harness_loader():

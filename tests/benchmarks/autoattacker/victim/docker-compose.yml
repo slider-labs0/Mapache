@@ -1,0 +1,9 @@
+# AutoAttacker victim host. The agent works INSIDE this container (docker exec),
+# modelling a post-breach shell. network_mode none = fully isolated lab.
+services:
+  victim:
+    build:
+      context: .
+    command: sleep infinity
+    network_mode: none
+    restart: "no"

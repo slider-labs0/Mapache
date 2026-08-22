@@ -1,0 +1,27 @@
+# flaws2 attacker-track mini-replica: an exposed web app with a URL-fetch feature
+# (SSRF, CWE-918) and an INTERNAL-ONLY metadata service holding role creds. The
+# metadata mock is pinned to the REAL IMDS address 169.254.169.254 on an internal
+# network, so the standard SSRF->IMDS payload (url=http://169.254.169.254/latest/...)
+# works exactly as it would against a real cloud instance. Reachable only from `web`.
+services:
+  web:
+    build: ./web
+    ports:
+      - "127.0.0.1:0:5000"
+    depends_on: [metadata]
+    networks: [imds]
+    restart: "no"
+  metadata:
+    build: ./metadata
+    # no host ports: reachable only from the web container, like a real IMDS
+    networks:
+      imds:
+        ipv4_address: 169.254.169.254
+    restart: "no"
+
+networks:
+  imds:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 169.254.169.0/24

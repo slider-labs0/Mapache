@@ -1,0 +1,57 @@
+{
+  "discipline": "phishing",
+  "title": "PhishTank-style credential-harvesting kit analysis",
+  "difficulty": "easy",
+  "win_condition": "finding",
+  "target": {
+    "kind": "analysis"
+  },
+  "objective": "The artifacts directory contains files pulled from a suspected phishing site. Determine whether it is a credential-harvesting kit: identify the brand it impersonates, the lookalike domain, and where captured credentials are sent. Cite the exact code/markup as evidence, name the class with a CWE, and recommend defensive actions (takedown, blocklist, user comms).",
+  "artifacts_dir": "artifacts",
+  "tags": [
+    "phishing",
+    "social-engineering",
+    "credential-harvesting",
+    "phishtank"
+  ],
+  "rubric": {
+    "cwe": "CWE-1021",
+    "vuln_keywords": [
+      "phishing",
+      "credential harvesting",
+      "credential-harvesting",
+      "brand impersonation",
+      "spoofed",
+      "lookalike domain",
+      "typosquat",
+      "social engineering"
+    ],
+    "evidence_markers": [
+      "action=",
+      "collect.php",
+      "paypa1",
+      "password",
+      "login",
+      "mail(",
+      "http://",
+      "exfil"
+    ],
+    "grounded_markers": [
+      "collect.php",
+      "paypa1"
+    ],
+    "remediation_keywords": [
+      "takedown",
+      "block",
+      "report",
+      "blocklist",
+      "user awareness",
+      "mfa",
+      "reset password",
+      "notify",
+      "domain"
+    ],
+    "min_evidence": 2
+  },
+  "id": "phish-phishtank-kit"
+}

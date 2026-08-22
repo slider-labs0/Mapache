@@ -1,0 +1,8 @@
+# Metasploitable-style mini-replica: a legacy 'diagnostics' console that shells
+# out with unsanitized input (CWE-78). Self-contained flask app I control.
+services:
+  web:
+    build: .
+    ports:
+      - "127.0.0.1:0:5000"
+    restart: "no"

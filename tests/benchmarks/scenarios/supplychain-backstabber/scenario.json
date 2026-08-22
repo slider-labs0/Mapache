@@ -1,0 +1,59 @@
+{
+  "discipline": "supply-chain",
+  "title": "Backstabber's Knife-style malicious package (install-time exfil)",
+  "difficulty": "medium",
+  "win_condition": "finding",
+  "target": {
+    "kind": "analysis"
+  },
+  "objective": "Statically review the npm package in the artifacts directory as if it were a new dependency. It runs code at install time. Determine what that code does, identify the malicious install-hook / data-exfiltration behavior, cite the exact script and the exfil destination, name the class with a CWE, and recommend how to prevent it.",
+  "artifacts_dir": "artifacts",
+  "tags": [
+    "supply-chain",
+    "npm",
+    "malicious-package",
+    "install-hook",
+    "backstabber"
+  ],
+  "rubric": {
+    "cwe": "CWE-506",
+    "vuln_keywords": [
+      "malicious",
+      "install hook",
+      "install script",
+      "data exfiltration",
+      "backdoor",
+      "embedded malicious code",
+      "supply chain",
+      "postinstall",
+      "credential theft"
+    ],
+    "evidence_markers": [
+      "postinstall",
+      "child_process",
+      "https://exfil",
+      "process.env",
+      "\\.npmrc",
+      "steal.js",
+      "curl",
+      "os.homedir"
+    ],
+    "grounded_markers": [
+      "postinstall",
+      "steal.js"
+    ],
+    "remediation_keywords": [
+      "--ignore-scripts",
+      "pin",
+      "lockfile",
+      "review",
+      "sandbox",
+      "allowlist",
+      "block install scripts",
+      "integrity",
+      "do not install"
+    ],
+    "min_evidence": 2
+  },
+  "id": "supplychain-backstabber"
+}
