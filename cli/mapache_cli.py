@@ -77,6 +77,10 @@ except ImportError:
 logger = get_logger(__name__)
 
 HELP_TEXT = """
+TUI keys (mapache serve): PageUp/PageDown scroll · Ctrl+Home/End top/bottom ·
+  mouse wheel scrolls · F2 toggles mouse (OFF = drag-select & copy) ·
+  F3/F4 shrink/grow sidebar · type "/" for command suggestions · Ctrl+L clear
+
 Commands:
   /help                  This help
   /tools                 List all tools
