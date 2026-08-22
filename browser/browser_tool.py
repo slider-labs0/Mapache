@@ -22,6 +22,30 @@ from browser.chromium_controller import ChromiumController
 from browser.scraping_tools import format_attack_surface
 
 
+def _annotate_browser_error(msg: str, url: str) -> str:
+    """Translate opaque Chromium proxy error codes into an actionable diagnosis so a
+    Tor/.onion failure is not misread as a browser misconfiguration (the agent burned a
+    whole turn chasing a phantom config bug on a .onion that was simply offline)."""
+    m = msg or ""
+    is_onion = ".onion" in (url or "")
+    if "ERR_SOCKS_CONNECTION_FAILED" in m:
+        if is_onion:
+            return (m + "\nDiagnosis: the SOCKS proxy is reachable but Tor could NOT "
+                    "connect to this hidden service - the .onion is most likely OFFLINE "
+                    "or unreachable right now (common for sites under DDoS), NOT a proxy "
+                    "misconfiguration. Confirm Tor works by loading a known-good onion; "
+                    "if that succeeds, this address is down - try a different mirror.")
+        return (m + "\nDiagnosis: the SOCKS proxy is reachable but could not connect to "
+                "the target host through it (the host is down/unreachable via the proxy).")
+    if "ERR_PROXY_CONNECTION_FAILED" in m:
+        return (m + "\nDiagnosis: could not reach the proxy itself - check Tor is running "
+                "and the port matches (Tor daemon: 9050, Tor Browser bundle: 9150).")
+    if is_onion and "ERR_NAME_NOT_RESOLVED" in m:
+        return (m + "\nDiagnosis: the .onion was resolved locally instead of via Tor - "
+                "the browser must route DNS through the SOCKS proxy (socks5://).")
+    return m
+
+
 class BrowserTool(BaseTool):
     name = "browser"
     description = (
@@ -124,10 +148,11 @@ class BrowserTool(BaseTool):
                     url, screenshot=bool(screenshot),
                     wait_for=wait_for or None, click_selector=click or None)
         except Exception as exc:
-            return ToolResult.fail(f"Browser error: {exc}")
+            return ToolResult.fail(_annotate_browser_error(f"Browser error: {exc}", url))
 
         if not result.success:
-            return ToolResult.fail(result.error or "Unknown browser error")
+            return ToolResult.fail(
+                _annotate_browser_error(result.error or "Unknown browser error", url))
 
         lines = [f"[{result.url}] {result.title}".strip(), "", result.text or "(no text)"]
         # Recon grounding on the RENDERED DOM - after JS has built the page, so forms /

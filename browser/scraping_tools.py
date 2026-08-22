@@ -687,7 +687,10 @@ class TorFetchTool(BaseTool):
         max_length: int = 4000,
         **kwargs: Any,
     ) -> ToolResult:
-        proxy = f"socks5://127.0.0.1:{tor_port}"
+        # socks5h (not socks5): let the Tor proxy resolve the hostname remotely.
+        # .onion addresses have no DNS and cannot be resolved client-side, so plain
+        # socks5:// fails on hidden services ("illegal request line" / lookup errors).
+        proxy = f"socks5h://127.0.0.1:{tor_port}"
 
         try:
             async with HttpClient(

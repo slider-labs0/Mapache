@@ -735,12 +735,12 @@ class AgentController:
                          "noprog_streak": noprog_streak, "session_id": session_id},
                         source="controller", session_id=session_id,
                     )
-                    content = await self._guard_fabricated_flags(
-                        "Stopped without completing the objective - the agent stalled "
-                        f"({reason}). No further progress was being made.", session_id)
-                    return AgentResponse(
-                        content=content, session_id=session_id,
-                        tool_calls_made=tools_used, iterations=iteration, error="stalled")
+                    # Don't discard partial recon with a canned abort: give the model
+                    # ONE tool-free chance to summarize what it actually learned and
+                    # answer. (The screenshot case had a candidate .onion lead worth
+                    # reporting even though verification kept failing.)
+                    return await self._stall_closeout(
+                        session_id, reason, iteration, tools_used, on_token)
 
                 # Softer intervention: one course-correct nudge when progress dries up,
                 # giving the model a chance to change tack before the abort backstop.
@@ -1368,6 +1368,40 @@ class AgentController:
         if not core:                     # root / empty → fetching the target itself
             return True
         return core in self._grounding_seen
+
+    async def _stall_closeout(self, session_id: str, reason: str, iteration: int,
+                              tools_used: int, on_token: Any) -> "AgentResponse":
+        """On a stall abort, give the model ONE tool-free turn to report what it
+        actually gathered rather than returning a bare 'stalled' message. Tools are
+        withheld (no schemas passed), so the model can only produce a prose final
+        answer; if that comes back empty we fall back to the terse notice."""
+        self.context.add_user_message(
+            "You are stuck repeating the same action, so tool use is now DISABLED for "
+            "the rest of this turn. Do NOT call any tool. Write your FINAL ANSWER as "
+            "prose: concisely state what you have actually learned and gathered so far "
+            "(candidate leads, partial findings, confirmed facts), what remains "
+            "unverified and why, and your best current conclusion plus the single most "
+            "useful next step. Prose only - no JSON, no tool calls.")
+        text = ""
+        try:
+            if self.context.use_function_calling:
+                payload = self.context.build(format="ollama")
+            else:
+                payload = self.context.build_json_mode()
+            # Pass no `tools`/`json_mode`: force a plain-prose completion.
+            raw = await self._chat(payload["messages"], {}, on_token)
+            parsed = self._parse_model_response(raw)
+            text = (parsed.get("content") or parsed.get("text")
+                    or (raw if isinstance(raw, str) else "") or "").strip()
+        except Exception as exc:
+            logger.info("Stall closeout call failed: %s", exc)
+        if not text:
+            text = "Stopped without completing the objective; no further progress was possible."
+        content = await self._guard_fabricated_flags(
+            f"{text}\n\n[turn ended early - stalled: {reason}]", session_id)
+        return AgentResponse(
+            content=content, session_id=session_id,
+            tool_calls_made=tools_used, iterations=iteration, error="stalled")
 
     async def _execute_tool_calls(
         self,

@@ -153,7 +153,7 @@ class TorController:
         is_tor = False
         try:
             async with HttpClient(
-                proxy=f"socks5://127.0.0.1:{self.socks_port}",
+                proxy=f"socks5h://127.0.0.1:{self.socks_port}",
                 timeout=15.0,
             ) as client:
                 is_tor, exit_ip = await client.check_tor()
@@ -198,7 +198,7 @@ class TorController:
                 await asyncio.sleep(3)
                 # Get new IP
                 async with HttpClient(
-                    proxy=f"socks5://127.0.0.1:{self.socks_port}",
+                    proxy=f"socks5h://127.0.0.1:{self.socks_port}",
                     timeout=15.0,
                 ) as client:
                     _, new_ip = await client.check_tor()
@@ -250,7 +250,8 @@ class TorController:
     ) -> HttpClient:
         """Return an HttpClient pre-configured to route through Tor."""
         return HttpClient(
-            proxy=f"socks5://127.0.0.1:{self.socks_port}",
+            # socks5h: remote DNS so .onion hidden services resolve at the Tor proxy.
+            proxy=f"socks5h://127.0.0.1:{self.socks_port}",
             timeout=timeout,
             verify_ssl=verify_ssl,
         )
