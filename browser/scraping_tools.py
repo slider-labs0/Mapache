@@ -648,6 +648,21 @@ class WebSearchTool(BaseTool):
         return results
 
 
+_TRANSIENT_TOR_ERRORS = (
+    "ttl exp", "ttl expired", "could not connect", "general socks", "socks server failure",
+    "host unreachable", "network unreachable", "connection refused", "timed out",
+    "timeout", "temporarily", "no route",
+)
+
+
+def _is_transient_tor_error(err: str) -> bool:
+    """A Tor SOCKS/circuit error that typically clears on retry (fresh circuit or once
+    bootstrap completes) - as opposed to a permanent failure. TTL-expired and general
+    SOCKS failures are the classic transient ones right after Tor starts."""
+    e = (err or "").lower()
+    return any(m in e for m in _TRANSIENT_TOR_ERRORS)
+
+
 class TorFetchTool(BaseTool):
     name = "tor_fetch"
     description = (
@@ -702,6 +717,9 @@ class TorFetchTool(BaseTool):
         # .onion addresses have no DNS and cannot be resolved client-side, so plain
         # socks5:// fails on hidden services ("illegal request line" / lookup errors).
         proxy = f"socks5h://127.0.0.1:{tor_port}"
+        is_onion = ".onion" in url
+        last_err = ""
+        ip: Optional[str] = None
 
         try:
             async with HttpClient(
@@ -709,27 +727,44 @@ class TorFetchTool(BaseTool):
                 timeout=45.0,
                 verify_ssl=False,  # Many .onion sites have self-signed certs
             ) as client:
-                _, ip = await client.check_tor()
-                response = await client.get(url)
-
+                # Tor circuits can be transiently unready (right after start) or fail with
+                # "TTL expired" / "general SOCKS failure". Retry with a fresh circuit before
+                # giving up, so one blip is not reported as an unreachable target.
+                for attempt in range(3):
+                    if ip is None:
+                        try:
+                            is_tor, ip_probe = await client.check_tor()
+                            if is_tor:
+                                ip = ip_probe
+                        except Exception:
+                            pass
+                    response = await client.get(url)
+                    if response.success:
+                        output = format_response(response, max_content=max_length)
+                        output = (f"[Routed via Tor - External IP: {ip or 'unknown'}]\n\n"
+                                  + output)
+                        return ToolResult.ok(output, metadata={
+                            "url": url, "via_tor": True, "exit_ip": ip,
+                            "attempts": attempt + 1})
+                    last_err = response.error or "unknown error"
+                    if attempt == 2 or not _is_transient_tor_error(last_err):
+                        break
+                    await asyncio.sleep(2.5)
+                    try:
+                        await controller.new_circuit()  # fresh exit before retrying
+                    except Exception:
+                        pass
         except Exception as exc:
             if "SOCKS" in str(exc) or "Connection" in str(exc):
                 return ToolResult.fail(
-                    f"Cannot connect to Tor on port {tor_port}. "
-                    f"Is Tor running? Try: tor_port=9150 for Tor Browser."
-                )
+                    f"Cannot connect to Tor on port {tor_port}. Is Tor running? "
+                    f"Try tor_port=9150 (Tor Browser).")
             return ToolResult.fail(str(exc))
 
-        if not response.success and response.error:
-            return ToolResult.fail(f"Fetch failed: {response.error}")
-
-        output = format_response(response, max_content=max_length)
-        output = f"[Routed via Tor - External IP: {ip}]\n\n" + output
-
-        return ToolResult.ok(
-            output,
-            metadata={"url": url, "via_tor": True, "exit_ip": ip},
-        )
+        hint = ("" if not is_onion else
+                " - for a .onion this usually means the hidden service is offline/"
+                "unreachable, not a Tor problem")
+        return ToolResult.fail(f"Fetch failed after 3 attempts: {last_err}{hint}")
 
 
 class TorControlTool(BaseTool):
