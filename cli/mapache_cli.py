@@ -775,6 +775,7 @@ class MapacheCLI:
             "grok": Provider.GROK, "nvidia_nim": Provider.NIM,
             "deepseek": Provider.DEEPSEEK, "moonshot": Provider.MOONSHOT,
             "zhipu": Provider.ZHIPU, "alibaba": Provider.ALIBABA,
+            "huggingface": Provider.HUGGINGFACE,
         }
         for prov in self.config.usable_providers():
             if not prov.is_cloud:

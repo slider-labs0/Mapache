@@ -44,6 +44,7 @@ from core.config import (
     DEFAULT_ALIBABA_URL,
     DEFAULT_ANTHROPIC_URL,
     DEFAULT_DEEPSEEK_URL,
+    DEFAULT_HUGGINGFACE_URL,
     DEFAULT_MOONSHOT_URL,
     DEFAULT_NOUS_URL,
     DEFAULT_NVIDIA_NIM_URL,
@@ -52,6 +53,7 @@ from core.config import (
     DEFAULT_XAI_URL,
     DEFAULT_ZHIPU_URL,
     GROK_MODELS,
+    HUGGINGFACE_MODELS,
     KIND_ANTHROPIC,
     KIND_OLLAMA,
     KIND_OPENAI,
@@ -94,6 +96,7 @@ PROVIDER_MENU = [
     ("moonshot", KIND_OPENAI, DEFAULT_MOONSHOT_URL, "MOONSHOT_API_KEY", True),
     ("zhipu", KIND_OPENAI, DEFAULT_ZHIPU_URL, "ZHIPU_API_KEY", True),
     ("alibaba", KIND_OPENAI, DEFAULT_ALIBABA_URL, "DASHSCOPE_API_KEY", True),
+    ("huggingface", KIND_OPENAI, DEFAULT_HUGGINGFACE_URL, "HF_TOKEN", True),
 ]
 
 # Suggested model ids per cloud provider for the chooser's pick list.
@@ -109,6 +112,7 @@ MODEL_SUGGESTIONS: dict[str, list[str]] = {
     "moonshot": list(MOONSHOT_MODELS),
     "zhipu": list(ZHIPU_MODELS),
     "alibaba": list(ALIBABA_MODELS),
+    "huggingface": list(HUGGINGFACE_MODELS),
 }
 
 
