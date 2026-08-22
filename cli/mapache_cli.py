@@ -1291,6 +1291,8 @@ class MapacheCLI:
         # instead of corrupting the full-screen display. Falls back to the classic
         # CLI if it isn't a real TTY or prompt_toolkit can't init a full-screen app.
         tui_mode = (getattr(self.args, "tui", False)
+                    and not getattr(self.args, "inline", False)
+                    and not getattr(self.args, "plain", False)
                     and enhanced_input.ptk_available()
                     and sys.stdin.isatty() and sys.stdout.isatty())
         self._orig_stdout = sys.stdout
@@ -2626,6 +2628,12 @@ def parse_args() -> argparse.Namespace:
                         help="Disable the rich TUI (panels/colour) and use plain "
                              "line output. Auto-selected for pipes/dumb terminals "
                              "or when the `rich` package isn't installed.")
+    parser.add_argument("--inline", action="store_true",
+                        help="Inline mode: print to the normal terminal buffer instead "
+                             "of a full-screen app, so your terminal's own mouse-wheel "
+                             "scroll, scrollback, and drag-select/copy all work. Trades "
+                             "the pinned sidebar for an inline HUD. Use with `serve` if "
+                             "the full-screen TUI can't scroll in your terminal.")
     parser.add_argument("--tui", action="store_true",
                         help="Full-screen chat UI: a bordered input box pinned to "
                              "the bottom with a scrolling output region above "
