@@ -16,6 +16,7 @@ install instructions instead of crashing, so it is always safe to register.
 from __future__ import annotations
 
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 from plugins.sdk.base_tool import BaseTool, Permission, ToolResult
 from browser.chromium_controller import ChromiumController
@@ -84,29 +85,55 @@ class BrowserTool(BaseTool):
     timeout = 200  # generous: a DDoS access queue (Dread/EndGame) can take a while
     tags = ["browser", "web", "headless", "js", "spa"]
 
-    def __init__(self, egress: Any = None, **kwargs: Any) -> None:
+    def __init__(self, egress: Any = None, tor_port: int = 9050,
+                 **kwargs: Any) -> None:
         super().__init__(**kwargs)
         # Egress/OPSEC: when active, the browser exits through the configured proxy/Tor.
         self.egress = egress
+        self.tor_port = tor_port
         self._controller: Optional[ChromiumController] = None
+        self._tor_controller: Optional[ChromiumController] = None
 
     def _proxy(self) -> Optional[str]:
         # httpx_proxy() returns a "socks5://…" / "http://…" string Playwright accepts.
         return self.egress.httpx_proxy() if self.egress is not None else None
 
-    async def _get_controller(self) -> ChromiumController:
+    @staticmethod
+    def _is_onion(url: str) -> bool:
+        try:
+            host = urlparse(url).hostname or ""
+        except Exception:
+            host = ""
+        return host.lower().endswith(".onion")
+
+    async def _get_controller(self, url: str = "") -> ChromiumController:
+        # A .onion CANNOT be resolved without Tor, so always route it through the Tor
+        # SOCKS proxy (auto-starting Tor) regardless of the egress profile - otherwise
+        # Chromium tries local DNS and fails with a name-resolution / NXDOMAIN error.
+        if self._is_onion(url):
+            from browser.tor_controller import TorController
+            tc = TorController(socks_port=self.tor_port, control_port=self.tor_port + 1)
+            if not await tc.is_running():
+                await tc.start()
+            if self._tor_controller is None:
+                self._tor_controller = ChromiumController(
+                    proxy=f"socks5://127.0.0.1:{self.tor_port}", headless=True)
+                await self._tor_controller.start()
+            return self._tor_controller
         if self._controller is None:
             self._controller = ChromiumController(proxy=self._proxy(), headless=True)
             await self._controller.start()
         return self._controller
 
     async def aclose(self) -> None:
-        """Tear down the persistent browser (call at engagement end)."""
-        if self._controller is not None:
-            try:
-                await self._controller.stop()
-            finally:
-                self._controller = None
+        """Tear down the persistent browser(s) (call at engagement end)."""
+        for attr in ("_controller", "_tor_controller"):
+            ctrl = getattr(self, attr, None)
+            if ctrl is not None:
+                try:
+                    await ctrl.stop()
+                finally:
+                    setattr(self, attr, None)
 
     async def execute(
         self,
@@ -130,7 +157,7 @@ class BrowserTool(BaseTool):
                 "Until then, use web_fetch / http_request (no JavaScript rendering).")
 
         try:
-            controller = await self._get_controller()
+            controller = await self._get_controller(url)
         except Exception as exc:
             return ToolResult.fail(f"Could not start the browser: {exc}")
 
