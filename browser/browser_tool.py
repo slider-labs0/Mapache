@@ -81,7 +81,7 @@ class BrowserTool(BaseTool):
         "required": ["url"],
     }
     permissions = {Permission.NETWORK}
-    timeout = 60
+    timeout = 200  # generous: a DDoS access queue (Dread/EndGame) can take a while
     tags = ["browser", "web", "headless", "js", "spa"]
 
     def __init__(self, egress: Any = None, **kwargs: Any) -> None:

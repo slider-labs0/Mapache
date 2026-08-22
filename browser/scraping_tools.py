@@ -783,10 +783,11 @@ class TorFetchTool(BaseTool):
             return ToolResult.fail(
                 f"The hidden service did not return a valid HTTP response "
                 f"('{last_err}'). The .onion ADDRESS IS CORRECT but the site appears "
-                f"OFFLINE or is behind DDoS/anti-bot protection (common for Dread's "
-                f"EndGame). This is not a Tor or address problem. Report it as currently "
-                f"unreachable - do NOT search clearnet or other directories for another "
-                f"address.")
+                f"OFFLINE or is behind a DDoS access-queue (Dread/EndGame). tor_fetch "
+                f"(plain HTTP) cannot pass a queue/captcha front. Open it with the "
+                f"Tor-routed BROWSER instead - it waits through the access queue and gets "
+                f"forwarded to the site. Do NOT search clearnet or other directories for "
+                f"another address; the address is correct.")
         hint = ("" if not is_onion else
                 " - for a .onion this usually means the hidden service is offline/"
                 "unreachable, not a Tor problem")
