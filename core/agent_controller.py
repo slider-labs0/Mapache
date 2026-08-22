@@ -571,6 +571,9 @@ class AgentController:
         # and consecutive steps that discovered nothing new.
         dup_streak = 0
         noprog_streak = 0
+        # A stalled turn gets ONE forceful reprieve (hard course-correct + reset) before
+        # it is actually aborted - models often stall one step from breaking out.
+        stall_reprieved = False
 
         while iteration < self.MAX_ITERATIONS:
             iteration += 1
@@ -725,6 +728,29 @@ class AgentController:
 
                 stalled = (dup_streak >= self.STALL_ABORT_DUP
                            or noprog_streak >= self.STALL_ABORT_NOPROG)
+                if stalled and not stall_reprieved:
+                    # First stall: don't end the turn - the model is often one concrete
+                    # step from breaking out (e.g. it just realised it needs a /search
+                    # path). Force a hard course-correction, reset the streaks, and give
+                    # it one more run. Only a SECOND stall actually aborts.
+                    stall_reprieved = True
+                    reason = ("repeating identical tool calls"
+                              if dup_streak >= self.STALL_ABORT_DUP
+                              else f"no new progress in {noprog_streak} steps")
+                    await self.bus.emit(
+                        "agent.stall",
+                        {"action": "reprieve", "reason": reason, "session_id": session_id},
+                        source="controller", session_id=session_id)
+                    self.context.add_user_message(
+                        "STOP - you are repeating the same action and it will keep returning "
+                        "the same result. Take a CONCRETELY DIFFERENT action right now: change "
+                        "the URL path or query string (for a search index, append the search "
+                        "endpoint, e.g. /search/?q=<term>), switch tools, or change the "
+                        "parameters - do not re-issue the previous call. If you genuinely "
+                        "cannot make progress, give your final answer. This is your last "
+                        "chance before the turn ends.")
+                    dup_streak = noprog_streak = 0
+                    continue
                 if stalled:
                     reason = ("repeating identical tool calls" if dup_streak >= self.STALL_ABORT_DUP
                               else f"no new progress in {noprog_streak} steps")

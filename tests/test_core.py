@@ -723,8 +723,11 @@ async def test_agent_stall_abort():
 
     assert response.error == "stalled", response.error
     assert response.iterations < AgentController.MAX_ITERATIONS  # aborted early
-    assert response.iterations <= AgentController.STALL_ABORT_DUP + 2
-    assert any(s.get("action") == "abort" for s in stalls)   # emitted the stall event
+    # One forceful reprieve precedes the abort (models often break out one step later),
+    # so the bound is ~two dup rounds plus the reprieve step, still well under max_iters.
+    assert response.iterations <= 2 * AgentController.STALL_ABORT_DUP + 3
+    assert any(s.get("action") == "reprieve" for s in stalls)  # gave it a second wind
+    assert any(s.get("action") == "abort" for s in stalls)     # then aborted
     print("  PASS  agent_stall_abort")
 
 
