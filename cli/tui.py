@@ -488,9 +488,11 @@ class RaccoonTUI:
         self._output_win = None       # the transcript Window (set in _build)
         # Auto-follow: keep pinned to the newest line until the user scrolls up.
         self._follow = True
-        # Mouse mode: on = in-app mouse (wheel scroll); off = terminal owns the mouse
-        # so you can drag-select and copy text. Toggle with F2.
-        self._mouse_on = True
+        # Mouse mode: OFF by default so the TERMINAL owns the mouse - you can drag-select
+        # and copy text immediately (the top ask). F2 flips it ON for in-app wheel
+        # scrolling. (An alt-screen app can't do terminal-copy AND capture the wheel at
+        # the same time, so this is a toggle; keyboard scroll works in either mode.)
+        self._mouse_on = False
         self._build()
 
     def _scroll_by(self, lines: int) -> None:
@@ -567,12 +569,25 @@ class RaccoonTUI:
         )
         input_frame = Frame(self.input_area, title="you")
 
+        # A dim, always-visible key hint so the controls are discoverable (the mode
+        # flips as F2 toggles it).
+        def _hint_text():
+            mode = ("mouse:ON wheel-scroll" if self._mouse_on
+                    else "mouse:OFF drag-select+copy")
+            return ANSI(theme.paint(
+                f"  F2 {mode} · PgUp/PgDn or Ctrl+Home/End scroll · "
+                f"F3/F4 sidebar · type / for commands · Ctrl+C quit",
+                "dgrey", color=True))
+        hint = Window(content=FormattedTextControl(_hint_text, focusable=False),
+                      height=1, wrap_lines=False)
+
         # Left column: transcript over the input box. Right column: the live HUD,
         # its width adjustable with F3/F4.
         left = HSplit([
             output,
             Window(height=1, char="─"),
             input_frame,
+            hint,
         ])
         dash = Window(
             content=FormattedTextControl(_dash_text, focusable=False),
