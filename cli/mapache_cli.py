@@ -533,6 +533,23 @@ class MapacheCLI:
         else:
             self.egress = EgressProfile.from_dict(egress_spec)
 
+        # If exiting through Tor, make sure Tor is actually running: the egress path
+        # (unlike tor_fetch/tor_control) does NOT auto-start it, so without this every
+        # web tool would fail with a connection error ("Tor egress isn't functional").
+        if getattr(self.egress, "mode", "") == "tor":
+            try:
+                import re as _re
+                from browser.tor_controller import TorController
+                _proxy = self.egress.httpx_proxy() or ""
+                _m = _re.search(r":(\d+)", _proxy)
+                _port = int(_m.group(1)) if _m else 9050
+                _tc = TorController(socks_port=_port, control_port=_port + 1)
+                _ok, _msg = await _tc.start()
+                print(f"  [egress] Tor {'ready' if _ok else 'NOT ready'} on :{_port} - "
+                      f"{_msg.splitlines()[0]}")
+            except Exception as _exc:  # never block startup on this
+                print(f"  [egress] could not auto-start Tor: {_exc}")
+
         # Voice I/O (Phase 9): optional TTS/STT. From config.voice; --voice forces
         # it on. Null providers by default, so this is a no-op until a backend is
         # installed + selected.
