@@ -576,13 +576,25 @@ class MapacheCLI:
         from core.opplan import OPPLAN
         self.opplan = OPPLAN(path=os.path.join(self.working_dir, "opplan.json"))
 
+        sys_prompt = SYSTEM_PROMPT
+        if getattr(self.egress, "mode", "") in ("tor", "proxy"):
+            _ep = self.egress.httpx_proxy() or ""
+            _kind = "Tor" if self.egress.mode == "tor" else "a proxy"
+            sys_prompt += (
+                "\n\nOUTBOUND ANONYMITY: your web/network traffic ALREADY exits through "
+                f"{_kind} ({_ep}), which is running and managed by Mapache. Do NOT test for "
+                "or require a local `tor` binary - `where tor` / `tor --version` will not "
+                "find the Tor Browser bundle, and `tor_control` is a Mapache TOOL, not a "
+                "shell command. NEVER conclude you are blocked for lack of Tor: just use "
+                "your web tools (web_fetch/http_request/browser) - they already route "
+                "through it. Only call the tor_control tool if you truly need to check.")
         self.controller = AgentController(
             model_provider=self.routed,
             mode=mode,
             knowledge_graph=self.kg,
             opplan_provider=lambda: self.opplan.table() if self.opplan else "",
             use_function_calling=self.routed.supports_tools,
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=sys_prompt,
             working_dir=self.working_dir,
             confirm_dangerous=self.confirm,
             confirm_callback=confirm_cb,
