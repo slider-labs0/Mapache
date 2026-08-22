@@ -516,8 +516,14 @@ class MapacheCLI:
                 pass  # unknown role name / model: ignore, fall back to default
 
         def _opsec_warn(model_id: str) -> None:
-            print(f"\n  [!] OPSEC: routing to CLOUD model '{model_id}' - target/scan/"
-                  f"cred context is leaving this machine.\n", flush=True)
+            # Clear the live "thinking" spinner first, else its line gets stranded
+            # above this message (it fires mid-turn while the ticker is animating).
+            try:
+                self.render.thinking_clear()
+            except Exception:
+                pass
+            print(f"  [!] OPSEC: routing to CLOUD model '{model_id}' - target/scan/"
+                  f"cred context is leaving this machine.", flush=True)
 
         self.routed = RoutedModel(routing, pool, primary_model_id=self.model,
                                   on_cloud_call=_opsec_warn)
