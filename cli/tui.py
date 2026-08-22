@@ -485,22 +485,35 @@ class RaccoonTUI:
         self.renderer = TuiRenderer(self.model, self.dashboard)
         self._turn_task: Optional[asyncio.Task] = None
         self._app = None
-        # Transcript scroll: 0 = pinned to the bottom (auto-follow); >0 = scrolled up
-        # that many lines. Adjusted by the mouse wheel and PageUp/PageDown/Home/End.
-        self._scroll_offset = 0
+        self._output_win = None       # the transcript Window (set in _build)
+        # Auto-follow: keep pinned to the newest line until the user scrolls up.
+        self._follow = True
         # Mouse mode: on = in-app mouse (wheel scroll); off = terminal owns the mouse
-        # so you can drag-select and copy. Toggle with F2.
+        # so you can drag-select and copy text. Toggle with F2.
         self._mouse_on = True
         self._build()
 
     def _scroll_by(self, lines: int) -> None:
-        total = self.model.render().count("\n")
-        self._scroll_offset = max(0, min(total, self._scroll_offset + lines))
+        """Scroll the transcript by `lines` (negative = up/history). Drives the
+        Window's own vertical_scroll, and stops auto-follow when scrolling up."""
+        w = self._output_win
+        if w is None:
+            return
+        w.vertical_scroll = max(0, getattr(w, "vertical_scroll", 0) + lines)
+        self._follow = lines > 0 and False  # any manual scroll pauses follow
+        self._follow = False
         self._invalidate()
 
     def _scroll_to(self, *, top: bool) -> None:
-        total = self.model.render().count("\n")
-        self._scroll_offset = total if top else 0
+        w = self._output_win
+        if w is None:
+            return
+        if top:
+            w.vertical_scroll = 0
+            self._follow = False
+        else:
+            self._follow = True   # jump to bottom and resume following
+            w.vertical_scroll = 10 ** 9
         self._invalidate()
 
     # -- prompt_toolkit construction ------------------------------------ #
@@ -515,6 +528,7 @@ class RaccoonTUI:
         from prompt_toolkit.layout.dimension import Dimension
         from prompt_toolkit.layout.menus import CompletionsMenu
         from prompt_toolkit.mouse_events import MouseEventType
+        from prompt_toolkit.styles import Style
         from prompt_toolkit.widgets import Frame, TextArea
         from cli.enhanced_input import make_completer
 
@@ -524,30 +538,26 @@ class RaccoonTUI:
         def _dash_text():
             return ANSI(self.dashboard.render())
 
-        def _cursor_at_end():
-            # The visible line = (total - scroll_offset), so offset 0 pins to the
-            # bottom (auto-follow) and offset>0 scrolls up into history.
-            from prompt_toolkit.data_structures import Point
-            total = self.model.render().count("\n")
-            return Point(x=0, y=max(0, total - self._scroll_offset))
+        # Scroll-aware transcript window: the mouse wheel scrolls it (native), and
+        # scrolling up pauses auto-follow so new output doesn't yank you to the bottom.
+        _outer = self
 
-        # Output control that also turns the mouse wheel into scroll (up = history).
-        class _ScrollFTC(FormattedTextControl):
-            def mouse_handler(self_ctl, mouse_event):  # noqa: N805
+        class _ScrollWindow(Window):
+            def _mouse_handler(self, mouse_event):
                 if mouse_event.event_type == MouseEventType.SCROLL_UP:
-                    self._scroll_by(3)
-                    return None
-                if mouse_event.event_type == MouseEventType.SCROLL_DOWN:
-                    self._scroll_by(-3)
-                    return None
-                return super().mouse_handler(mouse_event)
+                    _outer._follow = False
+                elif mouse_event.event_type == MouseEventType.SCROLL_DOWN:
+                    # if the wheel reaches the bottom, resume following
+                    if getattr(self, "vertical_scroll", 0) <= 0:
+                        _outer._follow = True
+                return super()._mouse_handler(mouse_event)
 
-        output = Window(
-            content=_ScrollFTC(_output_text, get_cursor_position=_cursor_at_end,
-                               focusable=False),
+        output = _ScrollWindow(
+            content=FormattedTextControl(_output_text, focusable=False),
             wrap_lines=True,
             dont_extend_height=False,
         )
+        self._output_win = output
 
         self.input_area = TextArea(
             height=1, multiline=False, wrap_lines=False, prompt="❯ ",
@@ -592,13 +602,14 @@ class RaccoonTUI:
             self.model.clear()
 
         # Scroll the transcript by keyboard (works even in copy/mouse-off mode).
+        # vertical_scroll grows downward, so up = negative.
         @kb.add("pageup")
         def _pgup(event) -> None:
-            self._scroll_by(10)
+            self._scroll_by(-10)
 
         @kb.add("pagedown")
         def _pgdn(event) -> None:
-            self._scroll_by(-10)
+            self._scroll_by(10)
 
         @kb.add("c-home")
         def _top(event) -> None:
@@ -629,14 +640,33 @@ class RaccoonTUI:
             self.dashboard.width = min(70, self.dashboard.width + 4)
             self._invalidate()
 
+        # Purple completion dropdown + scrollbar to match the panels.
+        menu_style = Style.from_dict({
+            "completion-menu": "bg:#241b38",
+            "completion-menu.completion": "bg:#241b38 #d8ccff",
+            "completion-menu.completion.current": "bg:#7c6bb0 #ffffff bold",
+            "completion-menu.meta.completion": "bg:#241b38 #9a8fbf",
+            "completion-menu.meta.completion.current": "bg:#8f7cc7 #ffffff",
+            "scrollbar.background": "bg:#241b38",
+            "scrollbar.button": "bg:#7c6bb0",
+        })
+
         self._app = Application(
             layout=Layout(root, focused_element=self.input_area),
             key_bindings=kb,
             full_screen=True,
+            style=menu_style,
             mouse_support=Condition(lambda: self._mouse_on),
         )
 
     def _invalidate(self) -> None:
+        # Auto-follow: while the user hasn't scrolled up, keep pinned to the newest
+        # line (a huge vertical_scroll is clamped to the bottom by the renderer).
+        if self._follow and self._output_win is not None:
+            try:
+                self._output_win.vertical_scroll = 10 ** 9
+            except Exception:
+                pass
         if self._app is not None:
             try:
                 self._app.invalidate()
