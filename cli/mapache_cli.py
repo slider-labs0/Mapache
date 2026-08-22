@@ -105,6 +105,7 @@ Commands:
   /voice [on|off]        Voice I/O status / toggle (Phase 9); /say <text> speaks
   /opsec                 Show hybrid OPSEC routing (which ops are pinned local)
   /scope                 Show Rules-of-Engagement scope (in-scope targets)
+  /hud                   Show the HUD panels (agent/models/target/budget/checklist)
   /todos                 Show the agent's live checklist (steps + progress)
   /log                   Show engagement-log summary
   /log export            Write a Markdown engagement-log timeline
@@ -1518,6 +1519,26 @@ class MapacheCLI:
         if not keep_going and self.tui is not None and self.tui._app is not None:
             self.tui._app.exit()
 
+    def _render_hud(self) -> str:
+        """Render the sidebar panels (Agent/Models/Target/Budget/Checklist) as a
+        printable block - used inline (no pinned sidebar) via /hud and at startup."""
+        from cli.tui import DashboardModel
+        d = DashboardModel(width=40)
+        strat = getattr(self.args, "strategy", None) or "single"
+        roles = dict(getattr(self.config, "model_roles", None) or {})
+        if not roles:
+            roles = {"planner": self.model, "executor": self.model,
+                     "verifier": self.model}
+        d.set_routing(strat, roles)
+        if self.controller is not None:
+            try:
+                d.set_state(self.controller.chain.attack_state)
+                d.set_checklist([{"task": t.task, "status": t.status}
+                                 for t in self.controller.chain.todos])
+            except Exception:
+                pass
+        return d.render(color=theme.supports_color())
+
     async def _agent_turn(self, user_input: str) -> None:
         if self.controller is None:
             return
@@ -2366,6 +2387,9 @@ class MapacheCLI:
                 for i, t in enumerate(todos, 1):
                     print(f"    {i}. {t.marker()} {t.task}")
                 print()
+
+        elif command == "/hud":
+            print("\n" + self._render_hud() + "\n")
 
         elif command == "/sidebar":
             if self.tui is None:
