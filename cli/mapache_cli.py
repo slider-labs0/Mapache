@@ -1523,27 +1523,36 @@ class MapacheCLI:
             self.tui._app.exit()
 
     def _hud_toolbar(self):
-        """Compact HUD shown just under the input line (moves down as output scrolls
-        above it, Claude-Code style). Returns a string prompt_toolkit styles as the
-        bottom toolbar. Full panels are available via /hud."""
-        parts = ["agent lead", f"model {self.model}"]
+        """Two-line bottom bar under the input (moves down as output scrolls above it,
+        Claude-Code style): line 1 = agent + phase pipeline (current highlighted);
+        line 2 = model/target/vulns/todo + key hints. Full panels via /hud."""
+        from prompt_toolkit.formatted_text import ANSI
+        c = theme.supports_color()
+        cur, tgt, vulns, todo = "", "-", 0, ""
         if self.controller is not None:
             try:
                 st = self.controller.chain.attack_state
-                parts.append(f"phase {getattr(st, 'current_phase', '') or '-'}")
+                cur = getattr(st, "current_phase", "") or ""
                 tgt = getattr(st, "target", "") or "-"
-                parts.append(f"target {tgt}")
-                ports = getattr(st, "open_ports", None) or []
-                if ports:
-                    parts.append(f"ports {len(ports)}")
-                parts.append(f"vulns {len(getattr(st, 'vulnerabilities', None) or [])}")
+                vulns = len(getattr(st, "vulnerabilities", None) or [])
                 todos = self.controller.chain.todos
                 if todos:
                     done = sum(1 for t in todos if t.status == "completed")
-                    parts.append(f"todo {done}/{len(todos)}")
+                    todo = f"{done}/{len(todos)}"
             except Exception:
                 pass
-        return "  " + "  ·  ".join(parts) + "   ·   /hud full · /help"
+        labels = [("recon", "Recon"), ("enumeration", "Enum"),
+                  ("exploitation", "Exploit"), ("post", "Post"), ("reporting", "Report")]
+        sep = theme.paint(" | ", "dgrey", color=c)
+        pipe = sep.join(theme.paint(lbl, "amber" if key == cur else "grey", color=c)
+                        for key, lbl in labels)
+        line1 = theme.paint("Mapache", "green", color=c) + sep + pipe
+        status = f"model {self.model} · target {tgt} · vulns {vulns}"
+        if todo:
+            status += f" · todo {todo}"
+        line2 = theme.paint("  " + status, "lav", color=c) + theme.paint(
+            "    /hud panels · / commands · Ctrl+C quit", "dgrey", color=c)
+        return ANSI(line1 + "\n" + line2)
 
     def _render_hud(self) -> str:
         """Render the sidebar panels (Agent/Models/Target/Budget/Checklist) as a

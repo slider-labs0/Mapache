@@ -147,12 +147,18 @@ def make_session(history_path: Optional[str] = None, bottom_toolbar=None):
     try:
         from prompt_toolkit import PromptSession
         from prompt_toolkit.history import FileHistory, InMemoryHistory
+        from prompt_toolkit.styles import Style
         history = FileHistory(history_path) if history_path else InMemoryHistory()
+        # Don't reverse-video the toolbar - render it as a normal-background status bar
+        # so our own ANSI colours show (the agent/phase pipeline + hints line).
+        toolbar_style = Style.from_dict({"bottom-toolbar": "noreverse",
+                                         "bottom-toolbar.text": "noreverse"})
         return PromptSession(
             completer=make_completer(),
             complete_while_typing=True,   # the live, per-keystroke dropdown
             history=history,
             bottom_toolbar=bottom_toolbar,
+            style=toolbar_style,
         )
     except Exception:
         return None
