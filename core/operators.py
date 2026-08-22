@@ -132,7 +132,7 @@ _add(Operator(
     prefer_local=False,  # works over public open-source intel - cloud OK
     model_role="planner",  # research/correlation - reasoning-heavy
     description="Passive open-source intel - domains, emails, employees, breaches, leaks.",
-    tools={"web_fetch", "web_search", "tor_fetch", "shell", "memory_save"},
+    tools={"web_fetch", "web_search", "tor_fetch", "tor_control", "shell", "memory_save"},
     triggers=set(),
     expertise="passive footprinting only: domain/subdomain, email and employee "
               "enumeration, breach/credential-leak and public code-leak discovery, infra "

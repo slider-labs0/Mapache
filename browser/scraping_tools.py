@@ -687,6 +687,17 @@ class TorFetchTool(BaseTool):
         max_length: int = 4000,
         **kwargs: Any,
     ) -> ToolResult:
+        # Ensure Tor is up - start it ourselves if needed instead of deferring to the
+        # user. TorController locates a system tor or a Tor Browser bundle and launches it.
+        from browser.tor_controller import TorController
+        controller = TorController(socks_port=tor_port, control_port=tor_port + 1)
+        if not await controller.is_running():
+            ok, msg = await controller.start()
+            if not ok:
+                return ToolResult.fail(
+                    f"Tor is not running and could not be auto-started on port {tor_port}: "
+                    f"{msg}")
+
         # socks5h (not socks5): let the Tor proxy resolve the hostname remotely.
         # .onion addresses have no DNS and cannot be resolved client-side, so plain
         # socks5:// fails on hidden services ("illegal request line" / lookup errors).
@@ -698,15 +709,7 @@ class TorFetchTool(BaseTool):
                 timeout=45.0,
                 verify_ssl=False,  # Many .onion sites have self-signed certs
             ) as client:
-                # First verify Tor is working
-                is_tor, ip = await client.check_tor()
-                if not is_tor:
-                    return ToolResult.fail(
-                        f"Tor does not appear to be running on port {tor_port}.\n"
-                        f"Start Tor: 'tor' (Linux) or open Tor Browser (Windows/Mac).\n"
-                        f"If using Tor Browser, try tor_port=9150 instead."
-                    )
-
+                _, ip = await client.check_tor()
                 response = await client.get(url)
 
         except Exception as exc:
@@ -727,6 +730,59 @@ class TorFetchTool(BaseTool):
             output,
             metadata={"url": url, "via_tor": True, "exit_ip": ip},
         )
+
+
+class TorControlTool(BaseTool):
+    name = "tor_control"
+    description = (
+        "Manage the local Tor process yourself. action='start' launches Tor if it is "
+        "not already running - it auto-locates a system `tor` OR a Tor Browser bundle "
+        "(Windows/macOS/Linux), so you do NOT need to ask the operator to start it. "
+        "action='status' reports whether Tor is up and the current exit IP; "
+        "action='new_circuit' requests a fresh exit IP. Call start before tor_fetch or "
+        "the Tor-routed browser when Tor is not yet running."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["start", "status", "new_circuit"],
+                "description": "start (launch Tor) | status | new_circuit",
+                "default": "start",
+            },
+            "tor_port": {
+                "type": "integer",
+                "description": "SOCKS port to use/start (default 9050; Tor Browser uses 9150)",
+                "default": 9050,
+            },
+        },
+        "required": [],
+    }
+    permissions = {Permission.NETWORK, Permission.TOR, Permission.SHELL}
+    timeout = 90
+    tags = ["tor", "onion", "dark-web", "opsec"]
+
+    async def execute(self, action: str = "start", tor_port: int = 9050,
+                      **kwargs: Any) -> ToolResult:
+        from browser.tor_controller import TorController
+        controller = TorController(socks_port=tor_port, control_port=tor_port + 1)
+
+        if action == "status":
+            status = await controller.get_status()
+            return ToolResult.ok(status.to_string())
+
+        if action == "new_circuit":
+            ok, msg = await controller.new_circuit()
+            return ToolResult.ok(msg) if ok else ToolResult.fail(msg)
+
+        # default: start
+        ok, msg = await controller.start()
+        if not ok:
+            return ToolResult.fail(msg)
+        status = await controller.get_status()
+        return ToolResult.ok(msg + "\n" + status.to_string(),
+                             metadata={"socks_port": tor_port})
 
 
 class EgressCheckTool(BaseTool):
