@@ -663,6 +663,21 @@ def _is_transient_tor_error(err: str) -> bool:
     return any(m in e for m in _TRANSIENT_TOR_ERRORS)
 
 
+# Errors that mean a .onion did not complete a valid HTTP exchange: the service is
+# offline or behind DDoS/anti-bot protection (e.g. Dread's EndGame), NOT a Tor/address
+# problem. "illegal request line" / protocol errors are what a DDoS-gated onion returns.
+_DEAD_ONION_ERRORS = (
+    "illegal request line", "illegal response", "remoteprotocol", "protocol error",
+    "connection reset", "server disconnected", "incomplete", "peer closed", "eof occurred",
+    "ttl exp", "host unreachable", "connection refused", "no route",
+)
+
+
+def _looks_like_dead_onion(err: str) -> bool:
+    e = (err or "").lower()
+    return any(m in e for m in _DEAD_ONION_ERRORS)
+
+
 class TorFetchTool(BaseTool):
     name = "tor_fetch"
     description = (
@@ -761,10 +776,21 @@ class TorFetchTool(BaseTool):
                     f"Try tor_port=9150 (Tor Browser).")
             return ToolResult.fail(str(exc))
 
+        # A .onion that never completes a valid HTTP exchange is offline or behind
+        # DDoS/anti-bot protection - the verified address is fine; retrying/other
+        # directories will NOT help, so say so plainly instead of flailing.
+        if is_onion and _looks_like_dead_onion(last_err):
+            return ToolResult.fail(
+                f"The hidden service did not return a valid HTTP response "
+                f"('{last_err}'). The .onion ADDRESS IS CORRECT but the site appears "
+                f"OFFLINE or is behind DDoS/anti-bot protection (common for Dread's "
+                f"EndGame). This is not a Tor or address problem. Report it as currently "
+                f"unreachable - do NOT search clearnet or other directories for another "
+                f"address.")
         hint = ("" if not is_onion else
                 " - for a .onion this usually means the hidden service is offline/"
                 "unreachable, not a Tor problem")
-        return ToolResult.fail(f"Fetch failed after 3 attempts: {last_err}{hint}")
+        return ToolResult.fail(f"Fetch failed: {last_err}{hint}")
 
 
 class TorControlTool(BaseTool):
