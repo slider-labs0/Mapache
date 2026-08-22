@@ -125,6 +125,9 @@ class DashboardModel:
         # the strategy plus the per-role model map (planner/executor/verifier).
         self.strategy = ""
         self.role_models: "dict[str, str]" = {}
+        # Live checklist of the agent's plan: list of (task, status) where status is
+        # pending | in_progress | completed. Fed by the agent.todos event.
+        self.checklist: "list[tuple[str, str]]" = []
 
     def _changed(self) -> None:
         if self._on_change is not None:
@@ -162,6 +165,21 @@ class DashboardModel:
         if sid is not None and self.shells_running.pop(sid, None) is not None:
             self.shells_done += 1
             self._changed()
+
+    def set_checklist(self, items: "list") -> None:
+        """Update the live checklist from agent.todos. `items` is a list of
+        {"task","status"} dicts (or (task,status) tuples)."""
+        out: "list[tuple[str, str]]" = []
+        for it in items or []:
+            if isinstance(it, dict):
+                task = str(it.get("task") or it.get("step") or "").strip()
+                status = str(it.get("status") or "pending")
+            else:
+                task, status = str(it[0]).strip(), str(it[1])
+            if task:
+                out.append((task, status))
+        self.checklist = out
+        self._changed()
 
     def set_routing(self, strategy: str, role_models: "dict[str, str]") -> None:
         self.strategy = strategy or ""
@@ -209,6 +227,23 @@ class DashboardModel:
         if len(self.agents) > 1:
             agent_lines.append(kv("team", f"{len(self.agents)} operators"))
         blocks.append(theme.panel("Agent", agent_lines, color=color, width=W))
+
+        # Live checklist: each planned step + its status (progress at a glance).
+        if self.checklist:
+            _mark = {"completed": ("[x]", "green"),
+                     "in_progress": ("[~]", "amber"),
+                     "pending": ("[ ]", "grey")}
+            cl_lines: list[str] = []
+            for task, status in self.checklist[:9]:
+                sym, style = _mark.get(status, ("[ ]", "grey"))
+                tstyle = "white" if status == "in_progress" else (
+                    "grey" if status == "completed" else "lav")
+                cl_lines.append(f"{c(sym, style)} {c(_clip(task, W - 6), tstyle)}")
+            if len(self.checklist) > 9:
+                cl_lines.append(c(f"  +{len(self.checklist) - 9} more", "grey"))
+            done = sum(1 for _, s in self.checklist if s == "completed")
+            title = f"Checklist ({done}/{len(self.checklist)})"
+            blocks.append(theme.panel(title, cl_lines, color=color, width=W))
 
         # Routing: strategy + per-role models (moved here from the front banner).
         if self.strategy or self.role_models:

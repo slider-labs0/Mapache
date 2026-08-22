@@ -57,6 +57,8 @@ CORE_TOOLS = {
     "search_payloads", "secret_scan",
     # Operation plan (OPPLAN) - objectives + status transitions for the orchestrator.
     "opplan_add", "opplan_update", "opplan_show",
+    # Live checklist - maintain the step-by-step task list the user watches (any phase).
+    "update_plan",
     # Vulnerability-research pipeline seeder (scanner→detector→verifier→patcher→exploiter).
     "vuln_research",
 }

@@ -101,6 +101,7 @@ Commands:
   /voice [on|off]        Voice I/O status / toggle (Phase 9); /say <text> speaks
   /opsec                 Show hybrid OPSEC routing (which ops are pinned local)
   /scope                 Show Rules-of-Engagement scope (in-scope targets)
+  /todos                 Show the agent's live checklist (steps + progress)
   /log                   Show engagement-log summary
   /log export            Write a Markdown engagement-log timeline
   /report [md|html|both|sarif|bounty|all]  Structured report (findings/severity; SARIF + bounty drafts)
@@ -141,6 +142,14 @@ MATCH THE SCOPE OF THE REQUEST (read this first):
 - When unsure whether a request is narrow or broad, do the narrow thing and ASK before expanding.
 - "Objective" (in the discipline rules below) means the operator's ACTUAL request, not a whole
   kill chain you inferred. Finishing a named single action IS meeting the objective.
+
+═══════════════════════════════════════════
+SHOW YOUR PLAN AS A CHECKLIST:
+═══════════════════════════════════════════
+- For any goal that needs 3+ steps, call `update_plan` FIRST with the full ordered checklist
+  (each step: task + status), so the operator can watch each step and its progress. Then call
+  `update_plan` again as you go: mark the finished step completed and the next one in_progress.
+  Keep EXACTLY ONE step in_progress. (A NAMED SINGLE ACTION needs no checklist - just do it.)
 
 ═══════════════════════════════════════════
 IDENTIFY THE ENGAGEMENT - ROUTE BY DISCIPLINE (this is NOT a web/CTF-only bot):
@@ -648,6 +657,9 @@ class MapacheCLI:
             print(f"\n  ↻ attempt {d.get('attempt')}/{d.get('of')} - fresh approach\n",
                   flush=True)
         self.controller.bus.subscribe("attempt.start", _on_attempt)
+        # Live checklist: mirror the agent's plan into the TUI panel, and (plain mode)
+        # print it whenever it changes so the user sees each step + progress.
+        self.controller.bus.subscribe("agent.todos", self._on_todos)
 
         if not self.args.no_tools:
             self.registry = ToolRegistry(granted_permissions={
@@ -693,10 +705,15 @@ class MapacheCLI:
             # severity, evidence, impact, remediation) into a shared report - success
             # is a finding with proof, not a flag.
             from core.findings import FindingsStore
-            from tools.reporting_tools import ReportFindingTool
+            from tools.reporting_tools import ReportFindingTool, PlanTool
             self.findings_store = FindingsStore(
                 path=os.path.join(self.working_dir, "findings.json"))
             self.registry.register(ReportFindingTool(store=self.findings_store))
+            # Live checklist tool - lets function-calling models maintain the task list
+            # the user watches (JSON-mode models use the "plan" response type instead).
+            self.registry.register(PlanTool(
+                chain_getter=lambda: getattr(self.controller, "chain", None),
+                bus_getter=lambda: getattr(self.controller, "bus", None)))
             # Offensive knowledge + specialist web/cloud weapons (payloads corpus, JWT,
             # GraphQL, IMDS, secret-scan, tech-fingerprint).
             from security_tools.web_weapons import SearchPayloadsTool, JwtTool, GraphqlTool
@@ -1796,6 +1813,25 @@ class MapacheCLI:
             self.render.info(theme.result_line(
                 self._result_summary(data), error=bool(data.get("error"))))
 
+    async def _on_todos(self, event) -> None:
+        """The agent's checklist changed: update the TUI panel, or (plain mode) print
+        it so the user can watch each step and its progress."""
+        items = (event.data or {}).get("todos") or []
+        if self.tui is not None:
+            self.tui.dashboard.set_checklist(items)
+            return
+        # Plain mode: only print when it actually changed (avoid re-printing).
+        sig = tuple((str(i.get("task")), str(i.get("status"))) for i in items)
+        if sig == getattr(self, "_last_todos_sig", None) or not sig:
+            return
+        self._last_todos_sig = sig
+        done = sum(1 for i in items if i.get("status") == "completed")
+        mark = {"completed": "[x]", "in_progress": "[~]", "pending": "[ ]"}
+        lines = [f"\n  Checklist ({done}/{len(items)})"]
+        for i in items:
+            lines.append(f"    {mark.get(i.get('status'), '[ ]')} {i.get('task')}")
+        print("\n".join(lines), flush=True)
+
     @staticmethod
     def _result_summary(data: dict) -> str:
         """A one-line summary of a tool result for the '⎿ …' line."""
@@ -2311,6 +2347,19 @@ class MapacheCLI:
                       "working dir to\n  restrict targets/actions. Example:")
                 print('    {"name": "engagement", "targets": ["10.10.10.0/24"],')
                 print('     "forbidden_tools": ["msf_run"]}\n')
+
+        elif command == "/todos":
+            todos = list(getattr(self.controller.chain, "todos", []) or []) \
+                if self.controller else []
+            if not todos:
+                print("\n  Checklist is empty - the agent builds one as it plans a "
+                      "multi-step task.\n")
+            else:
+                done = sum(1 for t in todos if t.status == "completed")
+                print(f"\n  Checklist ({done}/{len(todos)})")
+                for i, t in enumerate(todos, 1):
+                    print(f"    {i}. {t.marker()} {t.task}")
+                print()
 
         elif command == "/models":
             if self.routed:

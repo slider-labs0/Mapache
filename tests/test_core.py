@@ -3458,6 +3458,46 @@ def test_discipline_benchmarks_valid():
     print("  PASS  discipline_benchmarks_valid")
 
 
+async def test_checklist_tool_and_panel():
+    # The checklist feature: the update_plan tool writes the chain's todo list, and the
+    # TUI dashboard renders it as a panel with per-step status + progress - so the user
+    # sees each step and its progress. Works for function-calling models (which use the
+    # tool) as well as the JSON-mode "plan" type.
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
+    from core.conversation_chain import ConversationChain
+    from tools.reporting_tools import PlanTool
+    from cli.tui import DashboardModel
+
+    chain = ConversationChain()
+    emitted = {}
+    class _Bus:
+        async def emit(self, topic, data, **kw):
+            emitted["topic"], emitted["data"] = topic, data
+    tool = PlanTool(chain_getter=lambda: chain, bus_getter=lambda: _Bus())
+    res = await tool.execute(todos=[
+        {"task": "recon", "status": "completed"},
+        {"task": "enumerate", "status": "in_progress"},
+        {"task": "report", "status": "pending"}])
+    assert res.success
+    assert [(t.task, t.status) for t in chain.todos] == [
+        ("recon", "completed"), ("enumerate", "in_progress"), ("report", "pending")]
+    # the tool emits agent.todos so the UI can update live
+    assert emitted.get("topic") == "agent.todos"
+    assert len(emitted["data"]["todos"]) == 3
+
+    # the dashboard renders a Checklist panel with markers + progress
+    d = DashboardModel()
+    d.set_checklist(emitted["data"]["todos"])
+    out = d.render(color=False)
+    assert "Checklist (1/3)" in out
+    assert "[x] recon" in out and "[~] enumerate" in out and "[ ] report" in out
+    # empty checklist -> no panel
+    assert "Checklist" not in DashboardModel().render(color=False)
+    print("  PASS  checklist_tool_and_panel")
+
+
 def test_autoattacker_battery_valid():
     # The AutoAttacker post-breach battery must be well-formed WITHOUT Docker/model:
     # unique task ids, real completion markers, all AutoAttacker categories covered,

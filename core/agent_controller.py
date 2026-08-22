@@ -694,6 +694,7 @@ class AgentController:
             # so the task list survives across turns and is re-injected below.
             if parsed.get("todos"):
                 self.chain.set_todos(parsed["todos"])
+                await self._emit_todos(session_id)  # surface the checklist to the UI
 
             # Progress-only update: revise statuses, no tool call, no final
             # answer. Re-loop so the model acts with the updated list in view
@@ -702,6 +703,9 @@ class AgentController:
             if parsed.get("type") == "todo_update":
                 for ref in parsed.get("completed") or []:
                     self.chain.update_todo(ref, "completed")
+                for ref in parsed.get("in_progress") or []:
+                    self.chain.update_todo(ref, "in_progress")
+                await self._emit_todos(session_id)  # push progress to the checklist UI
                 continue
 
             if parsed.get("type") in ("tool_call", "tool_calls"):
@@ -1394,6 +1398,16 @@ class AgentController:
         if not core:                     # root / empty → fetching the target itself
             return True
         return core in self._grounding_seen
+
+    async def _emit_todos(self, session_id: str) -> None:
+        """Publish the current checklist so the UI can show each step + progress."""
+        try:
+            items = [{"task": t.task, "status": t.status} for t in self.chain.todos]
+        except Exception:
+            return
+        await self.bus.emit(
+            "agent.todos", {"todos": items, "session_id": session_id},
+            source="controller", session_id=session_id)
 
     async def _stall_closeout(self, session_id: str, reason: str, iteration: int,
                               tools_used: int, on_token: Any) -> "AgentResponse":
