@@ -487,7 +487,9 @@ class RaccoonTUI:
         self._app = None
         self._output_win = None       # the transcript Window (set in _build)
         # Auto-follow: keep pinned to the newest line until the user scrolls up.
+        # When paused, render at absolute line _scroll_pos (via get_vertical_scroll).
         self._follow = True
+        self._scroll_pos = 0
         # Mouse mode: OFF by default so the TERMINAL owns the mouse - you can drag-select
         # and copy text immediately (the top ask). F2 flips it ON for in-app wheel
         # scrolling. (An alt-screen app can't do terminal-copy AND capture the wheel at
@@ -496,26 +498,20 @@ class RaccoonTUI:
         self._build()
 
     def _scroll_by(self, lines: int) -> None:
-        """Scroll the transcript by `lines` (negative = up/history). Drives the
-        Window's own vertical_scroll, and stops auto-follow when scrolling up."""
+        """Scroll by `lines` (negative = up). Reads the window's actual current scroll
+        and adjusts from there, pausing auto-follow. get_vertical_scroll applies it."""
         w = self._output_win
-        if w is None:
-            return
-        w.vertical_scroll = max(0, getattr(w, "vertical_scroll", 0) + lines)
-        self._follow = lines > 0 and False  # any manual scroll pauses follow
+        base = int(getattr(w, "vertical_scroll", 0)) if w is not None else self._scroll_pos
+        self._scroll_pos = max(0, base + lines)
         self._follow = False
         self._invalidate()
 
     def _scroll_to(self, *, top: bool) -> None:
-        w = self._output_win
-        if w is None:
-            return
         if top:
-            w.vertical_scroll = 0
+            self._scroll_pos = 0
             self._follow = False
         else:
             self._follow = True   # jump to bottom and resume following
-            w.vertical_scroll = 10 ** 9
         self._invalidate()
 
     # -- prompt_toolkit construction ------------------------------------ #
@@ -540,22 +536,31 @@ class RaccoonTUI:
         def _dash_text():
             return ANSI(self.dashboard.render())
 
-        # Scroll-aware transcript window: the mouse wheel scrolls it (native), and
-        # scrolling up pauses auto-follow so new output doesn't yank you to the bottom.
+        # Scroll-aware transcript window. Scrolling is driven entirely through
+        # get_vertical_scroll: while _follow is set we return a huge number (the window
+        # clamps it to the bottom = auto-follow); once the user scrolls we return the
+        # absolute _scroll_pos. show_cursor=False removes the phantom (0,0) cursor that
+        # would otherwise force the view back. The mouse wheel routes into _scroll_by.
         _outer = self
 
         class _ScrollWindow(Window):
             def _mouse_handler(self, mouse_event):
-                if mouse_event.event_type == MouseEventType.SCROLL_UP:
-                    _outer._follow = False
-                elif mouse_event.event_type == MouseEventType.SCROLL_DOWN:
-                    # if the wheel reaches the bottom, resume following
-                    if getattr(self, "vertical_scroll", 0) <= 0:
-                        _outer._follow = True
+                et = mouse_event.event_type
+                if et == MouseEventType.SCROLL_UP:
+                    _outer._scroll_by(-3)
+                    return None
+                if et == MouseEventType.SCROLL_DOWN:
+                    _outer._scroll_by(3)
+                    return None
                 return super()._mouse_handler(mouse_event)
 
+        def _vscroll(_win):
+            return 10 ** 9 if self._follow else self._scroll_pos
+
         output = _ScrollWindow(
-            content=FormattedTextControl(_output_text, focusable=False),
+            content=FormattedTextControl(_output_text, focusable=False,
+                                         show_cursor=False),
+            get_vertical_scroll=_vscroll,
             wrap_lines=True,
             dont_extend_height=False,
         )
@@ -689,13 +694,7 @@ class RaccoonTUI:
         )
 
     def _invalidate(self) -> None:
-        # Auto-follow: while the user hasn't scrolled up, keep pinned to the newest
-        # line (a huge vertical_scroll is clamped to the bottom by the renderer).
-        if self._follow and self._output_win is not None:
-            try:
-                self._output_win.vertical_scroll = 10 ** 9
-            except Exception:
-                pass
+        # Auto-follow is handled by the window's get_vertical_scroll hook (_vscroll).
         if self._app is not None:
             try:
                 self._app.invalidate()
