@@ -77,9 +77,9 @@ except ImportError:
 logger = get_logger(__name__)
 
 HELP_TEXT = """
-TUI keys (mapache serve): PageUp/PageDown scroll · Ctrl+Home/End top/bottom ·
-  mouse wheel scrolls · F2 toggles mouse (OFF = drag-select & copy) ·
-  F3/F4 shrink/grow sidebar · type "/" for command suggestions · Ctrl+L clear
+TUI (mapache serve): mouse wheel / PageUp-PageDown / arrows scroll · drag to
+  select & copy · /sidebar wide|narrow|<n> resizes the panel · type "/" for
+  command suggestions · Ctrl+L clear · Ctrl+C quit
 
 Commands:
   /help                  This help
@@ -2364,6 +2364,28 @@ class MapacheCLI:
                 for i, t in enumerate(todos, 1):
                     print(f"    {i}. {t.marker()} {t.task}")
                 print()
+
+        elif command == "/sidebar":
+            if self.tui is None:
+                print("\n  Sidebar is only shown in the full-screen TUI "
+                      "(mapache serve).\n")
+            else:
+                arg = parts[1].lower() if len(parts) > 1 else ""
+                cur = self.tui.dashboard.width
+                new = None
+                if arg in ("wide", "wider", "+", "big"):
+                    new = min(70, cur + 6)
+                elif arg in ("narrow", "narrower", "-", "small"):
+                    new = max(20, cur - 6)
+                elif arg.isdigit():
+                    new = max(20, min(70, int(arg)))
+                if new is None:
+                    print("\n  Usage: /sidebar wide|narrow|<width 20-70>  "
+                          f"(current: {cur})\n")
+                else:
+                    self.tui.dashboard.width = new
+                    self.tui.dashboard._changed()
+                    print(f"\n  Sidebar width: {new}\n")
 
         elif command == "/models":
             if self.routed:

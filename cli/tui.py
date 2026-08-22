@@ -572,11 +572,9 @@ class RaccoonTUI:
         # A dim, always-visible key hint so the controls are discoverable (the mode
         # flips as F2 toggles it).
         def _hint_text():
-            mode = ("mouse:ON wheel-scroll" if self._mouse_on
-                    else "mouse:OFF drag-select+copy")
             return ANSI(theme.paint(
-                f"  F2 {mode} · PgUp/PgDn or Ctrl+Home/End scroll · "
-                f"F3/F4 sidebar · type / for commands · Ctrl+C quit",
+                "  scroll: mouse wheel / PgUp-PgDn / arrows · drag to select+copy · "
+                "/sidebar to resize · type / for commands · Ctrl+C quit",
                 "dgrey", color=True))
         hint = Window(content=FormattedTextControl(_hint_text, focusable=False),
                       height=1, wrap_lines=False)
@@ -617,7 +615,10 @@ class RaccoonTUI:
             self.model.clear()
 
         # Scroll the transcript by keyboard (works even in copy/mouse-off mode).
-        # vertical_scroll grows downward, so up = negative.
+        # vertical_scroll grows downward, so up = negative. Up/Down are bound too:
+        # a full-screen terminal that isn't capturing the mouse (our default, so copy
+        # works) translates the MOUSE WHEEL into arrow keys - so this makes the wheel
+        # scroll the transcript while drag-select/copy still works.
         @kb.add("pageup")
         def _pgup(event) -> None:
             self._scroll_by(-10)
@@ -625,6 +626,19 @@ class RaccoonTUI:
         @kb.add("pagedown")
         def _pgdn(event) -> None:
             self._scroll_by(10)
+
+        # Up/Down scroll only when the slash-completion menu is NOT open, so they still
+        # navigate the dropdown when it is.
+        _not_completing = Condition(
+            lambda: self.input_area.buffer.complete_state is None)
+
+        @kb.add("up", filter=_not_completing)
+        def _up(event) -> None:
+            self._scroll_by(-2)
+
+        @kb.add("down", filter=_not_completing)
+        def _down(event) -> None:
+            self._scroll_by(2)
 
         @kb.add("c-home")
         def _top(event) -> None:
