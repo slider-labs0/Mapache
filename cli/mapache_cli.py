@@ -530,6 +530,9 @@ class MapacheCLI:
         egress_spec = dict(getattr(self.config, "egress", None) or {"mode": "direct"})
         if getattr(self.args, "egress", None):
             self.egress = EgressProfile.parse(self.args.egress)
+        elif getattr(self.args, "tor", False):
+            # -tor / --tor: opt in to Tor for this run without touching config.
+            self.egress = EgressProfile.parse("tor")
         else:
             self.egress = EgressProfile.from_dict(egress_spec)
 
@@ -2563,6 +2566,9 @@ def parse_args() -> argparse.Namespace:
                              "through it; shell/nmap wrap with torsocks/proxychains "
                              "(TCP-connect only). Strongest hide: attack from a pivot "
                              "via --exec-backend. Default: config.egress or direct.")
+    parser.add_argument("-tor", "--tor", dest="tor", action="store_true",
+                        help="Route this run through Tor (shortcut for --egress tor; "
+                             "auto-starts Tor). Opt-in per run - default stays direct.")
     parser.add_argument("--voice", action="store_true",
                         help="Speak agent responses (Phase 9). Needs a TTS backend "
                              "in config.voice (e.g. tts=pyttsx3); no-op otherwise.")
