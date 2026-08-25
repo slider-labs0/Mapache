@@ -493,10 +493,13 @@ class RaccoonTUI:
         from prompt_toolkit.application import Application
         from prompt_toolkit.formatted_text import ANSI
         from prompt_toolkit.key_binding import KeyBindings
-        from prompt_toolkit.layout import HSplit, Layout, VSplit, Window
+        from prompt_toolkit.layout import (HSplit, Layout, VSplit, Window,
+                                            FloatContainer, Float)
         from prompt_toolkit.layout.controls import FormattedTextControl
         from prompt_toolkit.layout.dimension import Dimension
+        from prompt_toolkit.layout.menus import CompletionsMenu
         from prompt_toolkit.widgets import Frame, TextArea
+        from cli.enhanced_input import make_completer
 
         def _output_text():
             return ANSI(self.model.render())
@@ -520,6 +523,8 @@ class RaccoonTUI:
         self.input_area = TextArea(
             height=1, multiline=False, wrap_lines=False, prompt="❯ ",
             accept_handler=self._accept,
+            completer=make_completer(),      # live "/command" dropdown
+            complete_while_typing=True,       # suggest as you type, per keystroke
         )
         input_frame = Frame(self.input_area, title="you")
 
@@ -540,6 +545,12 @@ class RaccoonTUI:
             left,
             Window(width=Dimension.exact(1), char="│"),  # vertical divider
             dash,
+        ])
+        # Float the as-you-type slash-command dropdown above everything, anchored at
+        # the input cursor.
+        root = FloatContainer(content=root, floats=[
+            Float(xcursor=True, ycursor=True,
+                  content=CompletionsMenu(max_height=8, scroll_offset=1)),
         ])
 
         kb = KeyBindings()
