@@ -132,12 +132,16 @@ _add(Operator(
     prefer_local=False,  # works over public open-source intel - cloud OK
     model_role="planner",  # research/correlation - reasoning-heavy
     description="Passive open-source intel - domains, emails, employees, breaches, leaks.",
-    tools={"web_fetch", "web_search", "tor_fetch", "tor_control", "onion_search",
-           "shell", "memory_save"},
+    tools={"web_fetch", "web_search", "osint_search", "phone_lookup", "social_lookup",
+           "tor_fetch", "tor_control", "onion_search", "shell", "memory_save"},
     triggers=set(),
     expertise="passive footprinting only: domain/subdomain, email and employee "
               "enumeration, breach/credential-leak and public code-leak discovery, infra "
-              "fingerprinting. Feeds Recon and Exploit; touch no target system directly.",
+              "fingerprinting. Prefer `osint_search` over a bare web_search - it fans one "
+              "subject out into social/leak/doc/code dorks in a single call. Use "
+              "`phone_lookup` to validate/attribute a phone number, and `social_lookup` "
+              "to pivot a handle to the person's other profiles (e.g. the LinkedIn behind "
+              "an Instagram account). Feeds Recon and Exploit; touch no target system directly.",
 ))
 _add(Operator(
     name="web_operator", title="Web Operator", phase="enumeration",

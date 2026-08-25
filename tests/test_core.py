@@ -5718,6 +5718,96 @@ async def test_web_fetch_surfaces_attack_surface():
     print("  PASS  web_fetch_surfaces_attack_surface")
 
 
+def test_osint_search_logic_and_registration():
+    """osint_search classifies the subject, builds multi-category dorks, and is wired
+    into the OSINT operator + tool registry."""
+    from security_tools.osint_tools import OsintSearchTool
+    from core.operators import get_operator
+    o = OsintSearchTool()
+    assert o._guess_kind("a@b.com") == "email"
+    assert o._guess_kind("+14155550100") == "phone"
+    assert o._guess_kind("acme.com") == "domain"
+    assert o._guess_kind("johnny_x") == "username"
+    assert o._guess_kind("John Doe") == "person"
+    cats = {c for c, _ in o._dorks("John Doe", "person")}
+    assert {"social", "leaks", "docs", "code"} <= cats
+    osint = get_operator("osint_operator")
+    assert {"osint_search", "phone_lookup", "social_lookup"} <= set(osint.tools)
+    print("  PASS  osint_search_logic_and_registration")
+
+
+async def test_osint_search_buckets_results():
+    """osint_search fans dorks out over DuckDuckGo and buckets hits by platform;
+    engine/noise hosts are dropped."""
+    import httpx
+    import security_tools.osint_tools as ot
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        body = (
+            '<a class="result__a" href="https://www.linkedin.com/in/jdoe">John Doe</a>'
+            '<a class="result__snippet">Engineer at Acme</a>'
+            '<a class="result__a" href="https://duckduckgo.com/y.js?ad=1">ad</a>'
+            '<a class="result__snippet">sponsored</a>'
+            '<a class="result__a" href="https://pastebin.com/abc">leak</a>'
+            '<a class="result__snippet">dump</a>')
+        return httpx.Response(200, text=body)
+
+    orig = ot.HttpClient
+    ot.HttpClient = lambda *a, **k: orig(*a, **{**k, "transport": httpx.MockTransport(handler)})
+    try:
+        res = await ot.OsintSearchTool().execute(subject="John Doe", kind="person")
+        assert res.success
+        assert "linkedin.com/in/jdoe" in res.output
+        assert "[SOCIAL]" in res.output and "[LEAKS]" in res.output
+        assert "duckduckgo.com" not in res.output  # engine/ad noise dropped
+    finally:
+        ot.HttpClient = orig
+    print("  PASS  osint_search_buckets_results")
+
+
+async def test_phone_lookup_fallback_and_dorks():
+    """phone_lookup parses without the phonenumbers lib and emits variants + dorks."""
+    from security_tools.osint_tools import PhoneLookupTool
+    res = await PhoneLookupTool().execute(number="+1 415 555 0100")
+    assert res.success
+    assert "+14155550100" in res.output  # E.164
+    assert "US/Canada" in res.output or "United States" in res.output
+    assert "(415) 555-0100" in res.output  # a formatted variant dork
+    assert "Reverse-lookup" in res.output
+    assert res.metadata.get("valid") is True
+    print("  PASS  phone_lookup_fallback_and_dorks")
+
+
+async def test_social_lookup_instagram_to_linkedin():
+    """social_lookup reads the IG profile's og: name then finds a LinkedIn match."""
+    import httpx
+    import security_tools.osint_tools as ot
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if "instagram.com" in url and "html.duckduckgo" not in url:
+            return httpx.Response(200, text=(
+                '<meta property="og:title" content="Jane Roe (@jane.roe)">'
+                '<meta property="og:description" content="Security researcher">'))
+        # DuckDuckGo search result -> a LinkedIn profile
+        return httpx.Response(200, text=(
+            '<a class="result__a" href="https://www.linkedin.com/in/janeroe">Jane Roe</a>'
+            '<a class="result__snippet">Security Researcher</a>'))
+
+    orig = ot.HttpClient
+    ot.HttpClient = lambda *a, **k: orig(*a, **{**k, "transport": httpx.MockTransport(handler)})
+    try:
+        res = await ot.SocialLookupTool().execute(
+            username="jane.roe", platform="instagram", find="linkedin")
+        assert res.success
+        assert "Jane Roe" in res.output
+        assert "linkedin.com/in/janeroe" in res.output
+        assert "[LINKEDIN candidates]" in res.output
+    finally:
+        ot.HttpClient = orig
+    print("  PASS  social_lookup_instagram_to_linkedin")
+
+
 def test_enhanced_input_completion():
     from cli import enhanced_input as ei
 
@@ -6980,6 +7070,12 @@ async def run_all():
     await test_web_fetch_surfaces_attack_surface()
     await test_browser_tool()
     await test_heavy_tools()
+
+    print("\nPassive OSINT weapons (deep search / phone / social cross-ref)")
+    test_osint_search_logic_and_registration()
+    await test_osint_search_buckets_results()
+    await test_phone_lookup_fallback_and_dorks()
+    await test_social_lookup_instagram_to_linkedin()
 
     print("\nAutomated reporting (feature L)")
     test_report_builder()

@@ -54,3 +54,8 @@ httpx>=0.24
 # Speech-to-text. faster-whisper is lighter; openai-whisper pulls in torch (large).
 # faster-whisper>=1.0
 # openai-whisper>=20231117
+
+# ── Optional: OSINT phone-number intel ────────────────────────────────────────
+# Enriches phone_lookup with carrier, line-type, and region data. Without it the
+# tool falls back to a built-in country-code table (format + dorks still work).
+# phonenumbers>=8.13

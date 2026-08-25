@@ -738,6 +738,14 @@ class MapacheCLI:
             self.registry.register(TorControlTool())
             self.registry.register(OnionSearchTool())
             self.registry.register(EgressCheckTool(egress=self.egress))
+            # Passive OSINT weapons: deeper multi-source search, phone-number intel,
+            # and social-account cross-referencing (e.g. the LinkedIn behind an
+            # Instagram handle). Route through egress like the other web tools.
+            from security_tools.osint_tools import (OsintSearchTool, PhoneLookupTool,
+                                                    SocialLookupTool)
+            self.registry.register(OsintSearchTool(egress=self.egress))
+            self.registry.register(PhoneLookupTool(egress=self.egress))
+            self.registry.register(SocialLookupTool(egress=self.egress))
 
             # Phase 6 - Advanced security
             self.registry.register(MetasploitSearchTool())
