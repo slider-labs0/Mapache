@@ -77,12 +77,6 @@ except ImportError:
 logger = get_logger(__name__)
 
 HELP_TEXT = """
-mapache serve (inline, Claude-Code style): output prints to the terminal so your
-  mouse wheel, scrollback and drag-select/copy all work natively; the input line +
-  HUD sit at the bottom and move down as text prints. /hud shows full panels · type
-  "/" for command suggestions · Ctrl+C quit.  (mapache serve --tui = old full-screen
-  pinned-sidebar layout, for terminals that deliver scroll keys to full-screen apps.)
-
 Commands:
   /help                  This help
   /tools                 List all tools
@@ -107,7 +101,6 @@ Commands:
   /voice [on|off]        Voice I/O status / toggle (Phase 9); /say <text> speaks
   /opsec                 Show hybrid OPSEC routing (which ops are pinned local)
   /scope                 Show Rules-of-Engagement scope (in-scope targets)
-  /hud                   Show the HUD panels (agent/models/target/budget/checklist)
   /todos                 Show the agent's live checklist (steps + progress)
   /log                   Show engagement-log summary
   /log export            Write a Markdown engagement-log timeline
@@ -516,14 +509,8 @@ class MapacheCLI:
                 pass  # unknown role name / model: ignore, fall back to default
 
         def _opsec_warn(model_id: str) -> None:
-            # Clear the live "thinking" spinner first, else its line gets stranded
-            # above this message (it fires mid-turn while the ticker is animating).
-            try:
-                self.render.thinking_clear()
-            except Exception:
-                pass
-            print(f"  [!] OPSEC: routing to CLOUD model '{model_id}' - target/scan/"
-                  f"cred context is leaving this machine.", flush=True)
+            print(f"\n  [!] OPSEC: routing to CLOUD model '{model_id}' - target/scan/"
+                  f"cred context is leaving this machine.\n", flush=True)
 
         self.routed = RoutedModel(routing, pool, primary_model_id=self.model,
                                   on_cloud_call=_opsec_warn)
@@ -1300,8 +1287,6 @@ class MapacheCLI:
         # instead of corrupting the full-screen display. Falls back to the classic
         # CLI if it isn't a real TTY or prompt_toolkit can't init a full-screen app.
         tui_mode = (getattr(self.args, "tui", False)
-                    and not getattr(self.args, "inline", False)
-                    and not getattr(self.args, "plain", False)
                     and enhanced_input.ptk_available()
                     and sys.stdin.isatty() and sys.stdout.isatty())
         self._orig_stdout = sys.stdout
@@ -1427,8 +1412,7 @@ class MapacheCLI:
                 hist = os.path.join(hist_dir, "history")
             except Exception:
                 hist = None
-            self._ptk = enhanced_input.make_session(
-                hist, bottom_toolbar=self._hud_toolbar)
+            self._ptk = enhanced_input.make_session(hist)
 
         if not tui_mode and self._ptk is None:
             loop = asyncio.get_event_loop()
@@ -1527,58 +1511,6 @@ class MapacheCLI:
         keep_going = await self._process_line(text)
         if not keep_going and self.tui is not None and self.tui._app is not None:
             self.tui._app.exit()
-
-    def _hud_toolbar(self):
-        """Two-line bottom bar under the input (moves down as output scrolls above it,
-        Claude-Code style): line 1 = agent + phase pipeline (current highlighted);
-        line 2 = model/target/vulns/todo + key hints. Full panels via /hud."""
-        from prompt_toolkit.formatted_text import ANSI
-        c = theme.supports_color()
-        cur, tgt, vulns, todo = "", "-", 0, ""
-        if self.controller is not None:
-            try:
-                st = self.controller.chain.attack_state
-                cur = getattr(st, "current_phase", "") or ""
-                tgt = getattr(st, "target", "") or "-"
-                vulns = len(getattr(st, "vulnerabilities", None) or [])
-                todos = self.controller.chain.todos
-                if todos:
-                    done = sum(1 for t in todos if t.status == "completed")
-                    todo = f"{done}/{len(todos)}"
-            except Exception:
-                pass
-        labels = [("recon", "Recon"), ("enumeration", "Enum"),
-                  ("exploitation", "Exploit"), ("post", "Post"), ("reporting", "Report")]
-        sep = theme.paint(" | ", "dgrey", color=c)
-        pipe = sep.join(theme.paint(lbl, "amber" if key == cur else "grey", color=c)
-                        for key, lbl in labels)
-        line1 = theme.paint("Mapache", "green", color=c) + sep + pipe
-        status = f"model {self.model} · target {tgt} · vulns {vulns}"
-        if todo:
-            status += f" · todo {todo}"
-        line2 = theme.paint("  " + status, "lav", color=c) + theme.paint(
-            "    /hud panels · / commands · Ctrl+C quit", "dgrey", color=c)
-        return ANSI(line1 + "\n" + line2)
-
-    def _render_hud(self) -> str:
-        """Render the sidebar panels (Agent/Models/Target/Budget/Checklist) as a
-        printable block - used inline (no pinned sidebar) via /hud and at startup."""
-        from cli.tui import DashboardModel
-        d = DashboardModel(width=40)
-        strat = getattr(self.args, "strategy", None) or "single"
-        roles = dict(getattr(self.config, "model_roles", None) or {})
-        if not roles:
-            roles = {"planner": self.model, "executor": self.model,
-                     "verifier": self.model}
-        d.set_routing(strat, roles)
-        if self.controller is not None:
-            try:
-                d.set_state(self.controller.chain.attack_state)
-                d.set_checklist([{"task": t.task, "status": t.status}
-                                 for t in self.controller.chain.todos])
-            except Exception:
-                pass
-        return d.render(color=theme.supports_color())
 
     async def _agent_turn(self, user_input: str) -> None:
         if self.controller is None:
@@ -2429,31 +2361,6 @@ class MapacheCLI:
                     print(f"    {i}. {t.marker()} {t.task}")
                 print()
 
-        elif command == "/hud":
-            print("\n" + self._render_hud() + "\n")
-
-        elif command == "/sidebar":
-            if self.tui is None:
-                print("\n  Sidebar is only shown in the full-screen TUI "
-                      "(mapache serve).\n")
-            else:
-                arg = parts[1].lower() if len(parts) > 1 else ""
-                cur = self.tui.dashboard.width
-                new = None
-                if arg in ("wide", "wider", "+", "big"):
-                    new = min(70, cur + 6)
-                elif arg in ("narrow", "narrower", "-", "small"):
-                    new = max(20, cur - 6)
-                elif arg.isdigit():
-                    new = max(20, min(70, int(arg)))
-                if new is None:
-                    print("\n  Usage: /sidebar wide|narrow|<width 20-70>  "
-                          f"(current: {cur})\n")
-                else:
-                    self.tui.dashboard.width = new
-                    self.tui.dashboard._changed()
-                    print(f"\n  Sidebar width: {new}\n")
-
         elif command == "/models":
             if self.routed:
                 print(f"\n{self.routed.routing.registry.summary()}\n")
@@ -2693,12 +2600,6 @@ def parse_args() -> argparse.Namespace:
                         help="Disable the rich TUI (panels/colour) and use plain "
                              "line output. Auto-selected for pipes/dumb terminals "
                              "or when the `rich` package isn't installed.")
-    parser.add_argument("--inline", action="store_true",
-                        help="Inline mode: print to the normal terminal buffer instead "
-                             "of a full-screen app, so your terminal's own mouse-wheel "
-                             "scroll, scrollback, and drag-select/copy all work. Trades "
-                             "the pinned sidebar for an inline HUD. Use with `serve` if "
-                             "the full-screen TUI can't scroll in your terminal.")
     parser.add_argument("--tui", action="store_true",
                         help="Full-screen chat UI: a bordered input box pinned to "
                              "the bottom with a scrolling output region above "
@@ -2761,12 +2662,9 @@ async def main() -> None:
         setup_logging(level="WARNING")
         sys.exit(await run_config_cmd(argv[1:]))
     if argv and argv[0] == "serve":
-        # `serve` = launch the agent REPL. Default is the Claude-Code-style INLINE
-        # layout: output prints to the normal terminal (native scroll + copy) with the
-        # input line and a HUD toolbar at the bottom that move down as text prints.
-        # Add `--tui` for the old full-screen pinned-sidebar layout (needs a terminal
-        # that delivers scroll keys/mouse to full-screen apps).
-        sys.argv = [sys.argv[0], *argv[1:]]
+        # `serve` = launch the full-screen TUI. Rewrite argv so the normal flag
+        # parser handles any extra options (--model, …) with --tui forced on.
+        sys.argv = [sys.argv[0], *argv[1:], "--tui"]
 
     args = parse_args()
     # Console stays quiet by default (WARNING) so the live status line isn't buried

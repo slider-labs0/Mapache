@@ -485,50 +485,18 @@ class RaccoonTUI:
         self.renderer = TuiRenderer(self.model, self.dashboard)
         self._turn_task: Optional[asyncio.Task] = None
         self._app = None
-        self._output_win = None       # the transcript Window (set in _build)
-        # Auto-follow: keep pinned to the newest line until the user scrolls up.
-        # When paused, render at absolute line _scroll_pos (via get_vertical_scroll).
-        self._follow = True
-        self._scroll_pos = 0
-        # Mouse mode: OFF by default so the TERMINAL owns the mouse - you can drag-select
-        # and copy text immediately (the top ask). F2 flips it ON for in-app wheel
-        # scrolling. (An alt-screen app can't do terminal-copy AND capture the wheel at
-        # the same time, so this is a toggle; keyboard scroll works in either mode.)
-        self._mouse_on = False
         self._build()
-
-    def _scroll_by(self, lines: int) -> None:
-        """Scroll by `lines` (negative = up). Reads the window's actual current scroll
-        and adjusts from there, pausing auto-follow. get_vertical_scroll applies it."""
-        w = self._output_win
-        base = int(getattr(w, "vertical_scroll", 0)) if w is not None else self._scroll_pos
-        self._scroll_pos = max(0, base + lines)
-        self._follow = False
-        self._invalidate()
-
-    def _scroll_to(self, *, top: bool) -> None:
-        if top:
-            self._scroll_pos = 0
-            self._follow = False
-        else:
-            self._follow = True   # jump to bottom and resume following
-        self._invalidate()
 
     # -- prompt_toolkit construction ------------------------------------ #
 
     def _build(self) -> None:
         from prompt_toolkit.application import Application
-        from prompt_toolkit.filters import Condition
         from prompt_toolkit.formatted_text import ANSI
         from prompt_toolkit.key_binding import KeyBindings
-        from prompt_toolkit.layout import HSplit, Layout, VSplit, Window, FloatContainer, Float
+        from prompt_toolkit.layout import HSplit, Layout, VSplit, Window
         from prompt_toolkit.layout.controls import FormattedTextControl
         from prompt_toolkit.layout.dimension import Dimension
-        from prompt_toolkit.layout.menus import CompletionsMenu
-        from prompt_toolkit.mouse_events import MouseEventType
-        from prompt_toolkit.styles import Style
         from prompt_toolkit.widgets import Frame, TextArea
-        from cli.enhanced_input import make_completer
 
         def _output_text():
             return ANSI(self.model.render())
@@ -536,76 +504,42 @@ class RaccoonTUI:
         def _dash_text():
             return ANSI(self.dashboard.render())
 
-        # Scroll-aware transcript window. Scrolling is driven entirely through
-        # get_vertical_scroll: while _follow is set we return a huge number (the window
-        # clamps it to the bottom = auto-follow); once the user scrolls we return the
-        # absolute _scroll_pos. show_cursor=False removes the phantom (0,0) cursor that
-        # would otherwise force the view back. The mouse wheel routes into _scroll_by.
-        _outer = self
+        def _cursor_at_end():
+            # Reporting a cursor on the last line keeps the Window scrolled to the
+            # bottom as content grows.
+            from prompt_toolkit.data_structures import Point
+            return Point(x=0, y=self.model.render().count("\n"))
 
-        class _ScrollWindow(Window):
-            def _mouse_handler(self, mouse_event):
-                et = mouse_event.event_type
-                if et == MouseEventType.SCROLL_UP:
-                    _outer._scroll_by(-3)
-                    return None
-                if et == MouseEventType.SCROLL_DOWN:
-                    _outer._scroll_by(3)
-                    return None
-                return super()._mouse_handler(mouse_event)
-
-        def _vscroll(_win):
-            return 10 ** 9 if self._follow else self._scroll_pos
-
-        output = _ScrollWindow(
-            content=FormattedTextControl(_output_text, focusable=False,
-                                         show_cursor=False),
-            get_vertical_scroll=_vscroll,
+        output = Window(
+            content=FormattedTextControl(_output_text, get_cursor_position=_cursor_at_end,
+                                         focusable=False),
             wrap_lines=True,
             dont_extend_height=False,
         )
-        self._output_win = output
 
         self.input_area = TextArea(
             height=1, multiline=False, wrap_lines=False, prompt="❯ ",
             accept_handler=self._accept,
-            completer=make_completer(),      # live "/command" dropdown
-            complete_while_typing=True,
         )
         input_frame = Frame(self.input_area, title="you")
 
-        # A dim, always-visible key hint so the controls are discoverable (the mode
-        # flips as F2 toggles it).
-        def _hint_text():
-            return ANSI(theme.paint(
-                "  scroll: mouse wheel / PgUp-PgDn / arrows · drag to select+copy · "
-                "/sidebar to resize · type / for commands · Ctrl+C quit",
-                "dgrey", color=True))
-        hint = Window(content=FormattedTextControl(_hint_text, focusable=False),
-                      height=1, wrap_lines=False)
-
-        # Left column: transcript over the input box. Right column: the live HUD,
-        # its width adjustable with F3/F4.
+        # Left column: the ANSI mascot banner + scrolling transcript over the input
+        # box (the classic layout). Right column: the live agent HUD, a fixed-width
+        # stack of panels. A thin rule divides them.
         left = HSplit([
             output,
-            Window(height=1, char="─"),
+            Window(height=1, char="─"),  # thin separator above the box
             input_frame,
-            hint,
         ])
         dash = Window(
             content=FormattedTextControl(_dash_text, focusable=False),
-            width=lambda: Dimension.exact(self.dashboard.width),
+            width=Dimension.exact(self.dashboard.width),
             wrap_lines=False, dont_extend_width=True,
         )
         root = VSplit([
             left,
-            Window(width=Dimension.exact(1), char="│"),
+            Window(width=Dimension.exact(1), char="│"),  # vertical divider
             dash,
-        ])
-        # Float the slash-completion menu above everything.
-        root = FloatContainer(content=root, floats=[
-            Float(xcursor=True, ycursor=True,
-                  content=CompletionsMenu(max_height=8, scroll_offset=1)),
         ])
 
         kb = KeyBindings()
@@ -619,82 +553,14 @@ class RaccoonTUI:
         def _clear(event) -> None:
             self.model.clear()
 
-        # Scroll the transcript by keyboard (works even in copy/mouse-off mode).
-        # vertical_scroll grows downward, so up = negative. Up/Down are bound too:
-        # a full-screen terminal that isn't capturing the mouse (our default, so copy
-        # works) translates the MOUSE WHEEL into arrow keys - so this makes the wheel
-        # scroll the transcript while drag-select/copy still works.
-        @kb.add("pageup")
-        def _pgup(event) -> None:
-            self._scroll_by(-10)
-
-        @kb.add("pagedown")
-        def _pgdn(event) -> None:
-            self._scroll_by(10)
-
-        # Up/Down scroll only when the slash-completion menu is NOT open, so they still
-        # navigate the dropdown when it is.
-        _not_completing = Condition(
-            lambda: self.input_area.buffer.complete_state is None)
-
-        @kb.add("up", filter=_not_completing)
-        def _up(event) -> None:
-            self._scroll_by(-2)
-
-        @kb.add("down", filter=_not_completing)
-        def _down(event) -> None:
-            self._scroll_by(2)
-
-        @kb.add("c-home")
-        def _top(event) -> None:
-            self._scroll_to(top=True)
-
-        @kb.add("c-end")
-        def _bottom(event) -> None:
-            self._scroll_to(top=False)
-
-        # F2: toggle mouse capture. OFF = the terminal owns the mouse, so you can
-        # drag-select and copy text (and use the terminal's own scrollback); ON =
-        # in-app mouse-wheel scrolling. Keyboard scroll works in both.
-        @kb.add("f2")
-        def _toggle_mouse(event) -> None:
-            self._mouse_on = not self._mouse_on
-            self.model.commit(
-                "· mouse " + ("ON (wheel scroll)" if self._mouse_on
-                              else "OFF (drag to select / copy)"))
-
-        # F3 / F4: shrink / grow the right-hand sidebar.
-        @kb.add("f3")
-        def _narrower(event) -> None:
-            self.dashboard.width = max(20, self.dashboard.width - 4)
-            self._invalidate()
-
-        @kb.add("f4")
-        def _wider(event) -> None:
-            self.dashboard.width = min(70, self.dashboard.width + 4)
-            self._invalidate()
-
-        # Purple completion dropdown + scrollbar to match the panels.
-        menu_style = Style.from_dict({
-            "completion-menu": "bg:#241b38",
-            "completion-menu.completion": "bg:#241b38 #d8ccff",
-            "completion-menu.completion.current": "bg:#7c6bb0 #ffffff bold",
-            "completion-menu.meta.completion": "bg:#241b38 #9a8fbf",
-            "completion-menu.meta.completion.current": "bg:#8f7cc7 #ffffff",
-            "scrollbar.background": "bg:#241b38",
-            "scrollbar.button": "bg:#7c6bb0",
-        })
-
         self._app = Application(
             layout=Layout(root, focused_element=self.input_area),
             key_bindings=kb,
             full_screen=True,
-            style=menu_style,
-            mouse_support=Condition(lambda: self._mouse_on),
+            mouse_support=True,
         )
 
     def _invalidate(self) -> None:
-        # Auto-follow is handled by the window's get_vertical_scroll hook (_vscroll).
         if self._app is not None:
             try:
                 self._app.invalidate()
