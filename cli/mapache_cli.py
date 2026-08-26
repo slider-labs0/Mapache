@@ -301,6 +301,7 @@ class MapacheCLI:
         self.swarm = False  # /swarm: autonomous multi-agent supervisor routing (feature P2)
         self.tui = None           # full-screen TUI (RaccoonTUI) when --tui is active
         self._accent_stack = []   # per-agent transcript accent while sub-agents nest
+        self._trace_last_action = {}  # per sub-agent: last narrated action, to dedupe it
         self.kg = None            # shared knowledge graph (findings store), built in setup()
         self.opplan = None        # operation plan (objectives + status), built in setup()
         self.memory = MemoryManager()
@@ -1773,7 +1774,15 @@ class MapacheCLI:
         prefix = self._agent_trace_prefix(data)
         if prefix is not None:
             if name not in ("delegate", "delegate_parallel"):
-                print(f"\n{prefix}{theme.action_phrase(name, args)}", flush=True)
+                # Narrate what the sub-agent is doing ("Sending an HTTP request") but
+                # only ONCE per consecutive run of the same action - a burst of
+                # identical tool calls prints the phrase once and nests each result
+                # under it, instead of repeating the phrase on every call.
+                op = (data.get("_agent") or {}).get("operator") or "sub-agent"
+                phrase = theme.action_phrase(name, args)
+                if self._trace_last_action.get(op) != phrase:
+                    print(f"\n{prefix}{phrase}", flush=True)
+                    self._trace_last_action[op] = phrase
                 # Surface a sub-agent's tool/command on the HUD too (its steps otherwise
                 # bypass the renderer, which is why swarm runs showed tools 0).
                 if self.tui is not None:
@@ -1803,7 +1812,15 @@ class MapacheCLI:
         if prefix is not None:
             secs = (data.get("duration_ms") or 0.0) / 1000.0
             mark = "x" if data.get("error") else "ok"
-            print(f"{prefix}{mark} {name} · {secs:.1f}s", flush=True)
+            # Nest the result UNDER the action phrase: an indented branch connector
+            # (aligned with the '⤷ [op]' header) so a run of identical calls reads as
+            # one action with its outcomes listed beneath it. On an error, re-arm the
+            # narration so the next call's phrase reprints (the failure broke the run).
+            indent = prefix[: len(prefix) - len(prefix.lstrip())]
+            print(f"{indent}  ⎿ {mark} {name} · {secs:.1f}s", flush=True)
+            if data.get("error"):
+                op = (data.get("_agent") or {}).get("operator") or "sub-agent"
+                self._trace_last_action.pop(op, None)
             return
         self._running_tool = None
         self._running_action = None
@@ -1928,6 +1945,9 @@ class MapacheCLI:
         name = event.data.get("operator")
         if name:
             getattr(self, "_ran_operators", set()).add(name)  # for cross-engagement learning
+            # A fresh delegation is a new block - forget the last narrated action so
+            # the operator's first tool re-prints its phrase.
+            self._trace_last_action.pop(name, None)
         if self.tui is None:
             return
         accent = self._agent_accent(name)
