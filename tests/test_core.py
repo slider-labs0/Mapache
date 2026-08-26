@@ -5040,9 +5040,10 @@ def test_action_narration():
 
 
 async def test_subagent_trace_dedupes_action():
-    """A delegated sub-agent narrates its action ONCE per consecutive run and nests
-    each tool result under it - a burst of identical calls no longer repeats the
-    phrase on every call. A different action, or an error, starts a fresh header."""
+    """A delegated sub-agent narrates its action as ONE segment header per process.
+    A burst of identical calls prints the header once and commits NO per-call success
+    line (the live loader shows those); only a failure settles a permanent line, and a
+    new process starts a fresh segment. The live loader tracks the in-flight tool."""
     import io
     from cli.mapache_cli import MapacheCLI
 
@@ -5064,6 +5065,8 @@ async def test_subagent_trace_dedupes_action():
     async def _call(name, args, err=False):
         await cli._on_task_start(_Ev(
             {"tool_name": name, "args": args, "_agent": agent}))
+        # While the tool is "in flight" the loader names it.
+        assert cli._running_tool == name
         await cli._on_task_end(_Ev(
             {"tool_name": name, "duration_ms": 200, "error": err, "_agent": agent}))
 
@@ -5072,21 +5075,23 @@ async def test_subagent_trace_dedupes_action():
         for _ in range(3):
             await _call("http_request", {"url": "http://x/login"})
         await _call("jwt_tool", {})
-        await _call("http_request", {"url": "http://x/api"}, err=True)  # re-arms
+        await _call("http_request", {"url": "http://x/api"}, err=True)  # settles + re-arms
         await _call("http_request", {"url": "http://x/api"})
     finally:
         sys.stdout = _orig
     out = buf.getvalue()
 
-    # The phrase for the 3-call burst is printed once, not three times.
-    assert out.count("Sending an HTTP request") == 3   # burst(1) + post-jwt(1) + post-error(1)
+    # Header printed once per process: burst(1) + post-jwt(1) + post-error(1) = 3.
+    assert out.count("Sending an HTTP request") == 3
     assert out.count("Running jwt tool") == 1
-    # Every call still shows its own nested result line.
-    assert out.count("ok http_request") == 4 and out.count("x http_request") == 1
-    assert out.count("ok jwt_tool") == 1
-    # Results are nested (branch connector), headers carry the operator label.
+    # NO per-call success lines - that repetition is exactly what we removed.
+    assert "ok http_request" not in out and "ok jwt_tool" not in out
+    # A failure DOES settle a permanent line (not repetitive, must be visible).
+    assert out.count("x http_request") == 1
     assert "⤷ [web_operator] Sending an HTTP request" in out
-    assert "⎿ ok http_request" in out
+    # Ending the delegation clears the live loader so no stale tool lingers.
+    await cli._on_delegate_end(_Ev({"operator": "web_operator"}))
+    assert cli._running_tool is None and cli._running_action is None
     print("  PASS  subagent_trace_dedupes_action")
 
 

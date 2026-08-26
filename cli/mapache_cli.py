@@ -1726,9 +1726,14 @@ class MapacheCLI:
         i = 0
         while True:
             if getattr(self, "tui", None) is not None:
-                word = theme.thinking_word(i // theme.THINKING_WORD_EVERY)
                 elapsed = time.monotonic() - getattr(self, "_turn_start_ts", time.monotonic())
                 tokens = getattr(getattr(self, "controller", None), "session_tokens", 0)
+                # The live loader: while a tool is in flight (lead OR sub-agent) the
+                # bottom line names the current tool and animates - so you can see it
+                # working and, as one finishes and the next starts, the loader flips to
+                # it. Between tools it falls back to the rotating "thinking" word.
+                tool = getattr(self, "_running_tool", None)
+                word = tool if tool else theme.thinking_word(i // theme.THINKING_WORD_EVERY)
                 self.render.thinking(theme.status_line(word, elapsed, tokens, frame=i))
                 # Refresh the right-hand HUD in step with the status clock.
                 _bud = dict(getattr(self.config, "budget", None) or {})
@@ -1774,15 +1779,20 @@ class MapacheCLI:
         prefix = self._agent_trace_prefix(data)
         if prefix is not None:
             if name not in ("delegate", "delegate_parallel"):
-                # Narrate what the sub-agent is doing ("Sending an HTTP request") but
-                # only ONCE per consecutive run of the same action - a burst of
-                # identical tool calls prints the phrase once and nests each result
-                # under it, instead of repeating the phrase on every call.
+                # Narrate what the sub-agent is doing ("Sending an HTTP request") as a
+                # SEGMENT header, printed once per process. A burst of identical tool
+                # calls stays under that one header; repetitive per-call result lines
+                # are NOT committed - the live loader below shows the current tool and
+                # flips to the next as each finishes. A new process = a new segment.
                 op = (data.get("_agent") or {}).get("operator") or "sub-agent"
                 phrase = theme.action_phrase(name, args)
                 if self._trace_last_action.get(op) != phrase:
                     print(f"\n{prefix}{phrase}", flush=True)
                     self._trace_last_action[op] = phrase
+                # Drive the live loader (the bottom spinner) with this tool, so it
+                # animates while the call runs and updates when the next one starts.
+                self._running_tool = name
+                self._running_action = phrase
                 # Surface a sub-agent's tool/command on the HUD too (its steps otherwise
                 # bypass the renderer, which is why swarm runs showed tools 0).
                 if self.tui is not None:
@@ -1810,15 +1820,15 @@ class MapacheCLI:
         # spinner state (that belongs to the lead's own in-flight tool, if any).
         prefix = self._agent_trace_prefix(data)
         if prefix is not None:
-            secs = (data.get("duration_ms") or 0.0) / 1000.0
-            mark = "x" if data.get("error") else "ok"
-            # Nest the result UNDER the action phrase: an indented branch connector
-            # (aligned with the '⤷ [op]' header) so a run of identical calls reads as
-            # one action with its outcomes listed beneath it. On an error, re-arm the
-            # narration so the next call's phrase reprints (the failure broke the run).
-            indent = prefix[: len(prefix) - len(prefix.lstrip())]
-            print(f"{indent}  ⎿ {mark} {name} · {secs:.1f}s", flush=True)
+            # A successful call commits NOTHING here - the live loader already showed
+            # it, and committing an "ok <tool>" line per call is exactly the repetitive
+            # noise we want gone. Only a FAILURE settles a permanent line (it is not
+            # repetitive, and you need to see it), and it re-arms the narration so the
+            # next call reprints its segment header (the failure ended the run).
             if data.get("error"):
+                secs = (data.get("duration_ms") or 0.0) / 1000.0
+                indent = prefix[: len(prefix) - len(prefix.lstrip())]
+                print(f"{indent}  ⎿ x {name} · {secs:.1f}s", flush=True)
                 op = (data.get("_agent") or {}).get("operator") or "sub-agent"
                 self._trace_last_action.pop(op, None)
             return
@@ -1959,6 +1969,13 @@ class MapacheCLI:
 
     async def _on_delegate_end(self, event) -> None:
         """Control returns to the caller - banner, then restore the prior accent."""
+        # The sub-agent's last tool is done; drop its loader so the lead's spinner
+        # doesn't keep showing a stale sub-agent tool until the lead's next call.
+        self._running_tool = None
+        self._running_action = None
+        op = event.data.get("operator")
+        if op:
+            self._trace_last_action.pop(op, None)
         if self.tui is None:
             return
         accent = getattr(self.render, "accent", "green")
