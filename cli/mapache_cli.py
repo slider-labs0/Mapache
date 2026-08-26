@@ -747,6 +747,21 @@ class MapacheCLI:
             self.registry.register(OsintSearchTool(egress=self.egress))
             self.registry.register(PhoneLookupTool(egress=self.egress))
             self.registry.register(SocialLookupTool(egress=self.egress))
+            # Free, keyless Shodan InternetDB host lookup (ports/hostnames/CVEs/tags for
+            # an IP). Always available - no API key or query credits, unlike the paid
+            # shodan_host/shodan_search integration - so passive host recon works out of
+            # the box. Passive: pulls from Shodan's index, no packets to the target.
+            from tools.external_tools import HttpApiTool
+            self.registry.register(HttpApiTool({
+                "name": "shodan_internetdb", "kind": "http", "method": "GET",
+                "url": "https://internetdb.shodan.io/{ip}",
+                "description": "Free keyless Shodan InternetDB lookup for an IP: open "
+                               "ports, hostnames, known CVEs, and tags. No API key or "
+                               "credits needed (passive - no packets to the target).",
+                "params": {"ip": {"type": "string", "description": "target IPv4",
+                                  "required": True}},
+                "permission": "network",
+            }, egress=self.egress))
 
             # Phase 6 - Advanced security
             self.registry.register(MetasploitSearchTool())

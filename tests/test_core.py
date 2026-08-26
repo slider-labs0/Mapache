@@ -6303,6 +6303,50 @@ async def test_external_tools():
     print("  PASS  external_tools")
 
 
+async def test_http_api_missing_key_and_auth_note():
+    """An API tool whose key env var is unset fails fast with a clear 'set the key'
+    message instead of firing a doomed keyless request; a live 401/403 gets an
+    auth/credit note so the agent doesn't read it as an unbeatable wall. The keyless
+    Shodan InternetDB tool needs no env at all."""
+    import os
+    import httpx
+    import browser.http_client as hc
+    from tools.external_tools import HttpApiTool
+    from core.integration_catalog import get_recipe
+
+    os.environ.pop("SHODAN_API_KEY", None)
+    spec = next(s for s in get_recipe("shodan").specs if s["name"] == "shodan_search")
+    # The catalog stamps the signup URL onto every spec so the tool can cite it.
+    assert spec.get("signup_url") == "https://account.shodan.io/"
+    t = HttpApiTool(spec)
+    assert t._required_env == ["SHODAN_API_KEY"]
+
+    # Missing key: pre-flight fail, no request sent, names the var + signup.
+    res = await t.execute(query="webcam has_screenshot:true")
+    assert not res.success
+    assert "SHODAN_API_KEY" in res.error and "account.shodan.io" in res.error
+    assert res.metadata.get("missing_env") == ["SHODAN_API_KEY"]
+
+    # Key present but the server returns 403: the error carries an auth/credit note.
+    os.environ["SHODAN_API_KEY"] = "abc"
+    orig = hc.HttpClient
+    hc.HttpClient = lambda *a, **k: orig(*a, **{
+        **k, "transport": httpx.MockTransport(lambda r: httpx.Response(403, text="cf"))})
+    try:
+        res = await t.execute(query="webcam")
+    finally:
+        hc.HttpClient = orig
+        os.environ.pop("SHODAN_API_KEY", None)
+    assert not res.success and "auth/credit" in res.error
+
+    # Keyless InternetDB: no required env, so it never pre-flight-blocks.
+    idb = HttpApiTool({"name": "shodan_internetdb", "kind": "http", "method": "GET",
+                       "url": "https://internetdb.shodan.io/{ip}",
+                       "params": {"ip": {"type": "string", "required": True}}})
+    assert idb._required_env == []
+    print("  PASS  http_api_missing_key_and_auth_note")
+
+
 async def test_command_tool_clone_autoheal():
     """A stale/partial clone dir (only .git) is detected + re-cloned, not reused."""
     import os
@@ -7200,6 +7244,7 @@ async def run_all():
     test_config_execution_section()
     await test_code_run_tool()
     await test_external_tools()
+    await test_http_api_missing_key_and_auth_note()
     await test_command_tool_clone_autoheal()
     test_tool_registry_name_collision_guard()
     await test_generated_tool_collision_guard()

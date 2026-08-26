@@ -50,7 +50,8 @@ CATALOG: tuple[IntegrationRecipe, ...] = (
              "url": "https://api.shodan.io/shodan/host/search?key=${SHODAN_API_KEY}"
                     "&query={query}",
              "description": "Shodan search (e.g. 'apache country:US port:8080'). "
-                            "Uses query credits.",
+                            "Requires a paid Shodan plan (uses query credits). With no "
+                            "key, use shodan_internetdb for a per-IP lookup instead.",
              "params": {"query": {"type": "string", "description": "Shodan query",
                                   "required": True}},
              "permission": "network"},
@@ -111,6 +112,14 @@ CATALOG: tuple[IntegrationRecipe, ...] = (
 )
 
 _BY_KEY = {r.key: r for r in CATALOG}
+
+# Stamp each spec with its recipe's signup URL so the built tool can point the
+# operator at where to get a key when the credential is missing (HttpApiTool reads
+# spec["signup_url"]). Done once here so it survives persistence and covers every
+# recipe without hand-editing each spec.
+for _r in CATALOG:
+    for _s in _r.specs:
+        _s.setdefault("signup_url", _r.signup_url)
 
 
 def get_recipe(key: str) -> Optional[IntegrationRecipe]:
