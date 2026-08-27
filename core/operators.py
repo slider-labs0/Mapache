@@ -184,7 +184,7 @@ _add(Operator(
     # http_request/http_repeater: raw calls to the metadata service (169.254.169.254 /
     # 169.254.170.2) for credential theft, and to cloud REST APIs.
     tools={"shell", "kali_run", "web_fetch", "http_request", "http_repeater",
-           "cloud_metadata", "file_read", "create_tool"},
+           "cloud_metadata", "cloud_enum", "file_read", "create_tool"},
     expertise="IAM privilege escalation, public S3/blob/bucket exposure, Kubernetes RBAC "
               "escapes and exposed kubelets/dashboards, and cloud metadata-service (IMDS) "
               "abuse for credential theft. Use provider CLIs via shell; respect scope.",
@@ -286,7 +286,7 @@ _add(Operator(
     # http_request/http_repeater: test the app's API backend (authz/IDOR on mobile
     # endpoints); file_list/file_search: browse the decompiled apk/ipa tree.
     tools={"shell", "kali_run", "file_read", "file_list", "file_search",
-           "http_request", "http_repeater", "create_tool"},
+           "http_request", "http_repeater", "mobile_scan", "create_tool"},
     expertise="static analysis (apktool/jadx/class-dump), dynamic instrumentation "
               "(frida/objection), SSL-pinning and root/jailbreak bypass, exported-component "
               "abuse, WebView JS-bridge exploitation, MobSF runs.",
@@ -306,7 +306,7 @@ _add(Operator(
     # web_fetch/http_request: the device's web UI / REST API; file_list/file_search:
     # walk the binwalk-extracted firmware root for creds/keys/configs.
     tools={"shell", "kali_run", "searchsploit", "file_read", "file_list", "file_search",
-           "web_fetch", "http_request", "create_tool"},
+           "web_fetch", "http_request", "firmware_scan", "create_tool"},
     triggers={"1900", "5683", "8883", "upnp", "mqtt", "coap"},
     expertise="firmware acquisition + binwalk extraction, hardcoded credentials, "
               "U-Boot / /dev/mem access, and BLE/Zigbee/Z-Wave/sub-GHz/LoRaWAN radio work "

@@ -723,6 +723,10 @@ class MapacheCLI:
             from security_tools.cloud_metadata import CloudMetadataTool
             from security_tools.llm_attacks import LlmInjectTool
             from security_tools.ad_tools import AdAttackTool
+            # Per-domain capability tools: cloud account enumeration (post-credential),
+            # mobile-app + firmware static analysis.
+            from security_tools.cloud_enum import CloudEnumTool
+            from security_tools.device_tools import MobileScanTool, FirmwareScanTool
             from security_tools.reversing_tools import BinaryAnalyzeTool
             # Advanced web-attack classes beyond the common SQLi/IDOR/XSS: SSRF,
             # CORS misconfig, SSTI (engine-fingerprinted -> RCE), NoSQL injection.
@@ -738,6 +742,8 @@ class MapacheCLI:
                        SecretScanTool(), TechDetectTool(session=web_session),
                        CloudMetadataTool(), LlmInjectTool(session=web_session),
                        AdAttackTool(), BinaryAnalyzeTool(),
+                       CloudEnumTool(backend=self.exec_backend), MobileScanTool(),
+                       FirmwareScanTool(),
                        SsrfProbeTool(**_es), CorsAuditTool(**_es), SstiProbeTool(**_es),
                        NoSqliProbeTool(**_es), SmuggleProbeTool(**_es),
                        ProtoPollutionTool(**_es), XxeTool(**_es), DeserializeGadgetTool(),

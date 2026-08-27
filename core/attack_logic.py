@@ -129,12 +129,22 @@ def next_moves(state: Any) -> list[str]:
         moves.append("A JWT/bearer token is present: jwt_tool - alg=none, HS-secret crack, "
                      "RS256->HS256 confusion, and kid/jwk/jku header injection.")
 
-    # 7. Cloud indicators -> IMDS credential theft.
+    # 7. Cloud indicators -> IMDS credential theft, then account enumeration.
     if any(k in hay for k in ("aws", "s3.amazonaws", "ec2", "169.254.169.254", "metadata",
                               "azure", "gcp", "iam")):
-        moves.append("Cloud indicators: if an SSRF or file-read exists, hit the metadata "
-                     "endpoint for IAM credentials (ssrf_probe / cloud_metadata), then "
-                     "enumerate the account (operator=cloud_hunter).")
+        moves.append("Cloud indicators: if an SSRF or file-read exists, steal IAM creds "
+                     "from the metadata endpoint (ssrf_probe / cloud_metadata). With creds "
+                     "in hand, enumerate + triage the account for public storage and "
+                     "privesc IAM (tool: cloud_enum, operator=cloud_hunter).")
+
+    # 8b. Mobile app / firmware artifacts -> static analysis first.
+    if any(k in hay for k in (".apk", ".ipa", "androidmanifest", "android", "ios app")):
+        moves.append("Mobile app in scope: static-analyze it first for hardcoded secrets "
+                     "and risky manifest flags (tool: mobile_scan, operator=mobile_operator), "
+                     "then test its API backend for authz/IDOR with http_repeater.")
+    if any(k in hay for k in ("firmware", "binwalk", "squashfs", "u-boot", "embedded")):
+        moves.append("Firmware in scope: extract (binwalk -eM) then hunt hardcoded "
+                     "accounts/keys/creds (tool: firmware_scan, operator=iot_operator).")
 
     # 8. Nothing actionable yet -> discipline-appropriate first step (respect scope).
     if not moves:

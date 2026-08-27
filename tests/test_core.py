@@ -3313,6 +3313,59 @@ async def test_offensive_arsenal():
     print("  PASS  offensive_arsenal")
 
 
+async def test_domain_capability_tools():
+    """Per-domain capability wave: cloud account enumeration + privesc triage, mobile-app
+    static analysis, and firmware secret-hunt - wired into their operators."""
+    import os
+    import tempfile
+    import zipfile
+    from core.operators import get_operator
+    from security_tools.cloud_enum import (build_cloud_command, parse_cloud_output,
+                                           CloudEnumTool)
+    from security_tools.device_tools import MobileScanTool, FirmwareScanTool
+
+    # Cloud: pure command build + privesc/admin parse.
+    assert build_cloud_command("whoami", "aws") == "aws sts get-caller-identity"
+    f = parse_cloud_output("iam", '{"Action":"*"} iam:PassRole iam:CreatePolicyVersion')
+    assert len(f["findings"]) == 2  # admin wildcard + privesc perms
+    assert parse_cloud_output("storage",
+                              '{"Name":"secret-bucket"}')["findings"]
+    # No CLI installed in CI -> graceful hand-back of the command.
+    r = await CloudEnumTool().execute(action="whoami", provider="aws")
+    assert r.success  # either ran or returned the command
+
+    with tempfile.TemporaryDirectory() as d:
+        # Mobile: a fake APK with a risky manifest + hardcoded secrets.
+        apk = os.path.join(d, "app.apk")
+        with zipfile.ZipFile(apk, "w") as z:
+            z.writestr("AndroidManifest.xml",
+                       b'android:debuggable="true" usesCleartextTraffic=true '
+                       b'android.permission.READ_SMS android.permission.CAMERA')
+            z.writestr("res/strings.xml",
+                       b'api_key="AKIAABCDEFGHIJKLMNOP" url="http://api.internal/v1"')
+        m = await MobileScanTool().execute(path=apk)
+        assert m.metadata.get("flags", 0) >= 2 and m.metadata.get("secrets", 0) >= 1
+        assert "debuggable" in m.output.lower()
+
+        # Firmware: an extracted tree with accounts, a shadow hash, and a private key.
+        fw = os.path.join(d, "fw")
+        os.makedirs(os.path.join(fw, "etc"))
+        with open(os.path.join(fw, "etc", "passwd"), "w") as fh:
+            fh.write("root:x:0:0:root:/root:/bin/sh\n")
+        with open(os.path.join(fw, "etc", "shadow"), "w") as fh:
+            fh.write("root:$1$ab$cd:19000:0:99999:7:::\n")
+        with open(os.path.join(fw, "id_rsa"), "w") as fh:
+            fh.write("-----BEGIN RSA PRIVATE KEY-----\nMII\n")
+        fr = await FirmwareScanTool().execute(path=fw)
+        assert fr.metadata.get("accounts", 0) >= 1 and fr.metadata.get("keys", 0) >= 1
+        assert "CRACKABLE" in fr.output
+
+    assert "cloud_enum" in get_operator("cloud_hunter").tools
+    assert "mobile_scan" in get_operator("mobile_operator").tools
+    assert "firmware_scan" in get_operator("iot_operator").tools
+    print("  PASS  domain_capability_tools")
+
+
 async def test_advanced_web_weapons():
     """Beyond-common web classes: SSRF, CORS misconfig, SSTI (engine fingerprint), and
     NoSQL injection - each confirms only on a real signal in a mocked response, and is
@@ -7597,6 +7650,7 @@ async def run_all():
     await test_tiered_model_routing()
     await test_offensive_arsenal()
     await test_advanced_web_weapons()
+    await test_domain_capability_tools()
     await test_evidence_first_findings()
     await test_http_repeater_burp_lite()
     await test_route_enumeration()
