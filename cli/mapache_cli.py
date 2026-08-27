@@ -743,10 +743,15 @@ class MapacheCLI:
             # and social-account cross-referencing (e.g. the LinkedIn behind an
             # Instagram handle). Route through egress like the other web tools.
             from security_tools.osint_tools import (OsintSearchTool, PhoneLookupTool,
-                                                    SocialLookupTool)
+                                                    SocialLookupTool, NetlasSearchTool)
             self.registry.register(OsintSearchTool(egress=self.egress))
             self.registry.register(PhoneLookupTool(egress=self.egress))
             self.registry.register(SocialLookupTool(egress=self.egress))
+            # Completely-free exposed-device / camera search (Netlas.io): keyless and
+            # NOT paywalled (unlike Shodan/ZoomEye). Works anonymously on a small daily
+            # quota; a free NETLAS_API_KEY raises it. The go-to internet-wide device
+            # search that needs no payment.
+            self.registry.register(NetlasSearchTool(egress=self.egress))
             # Free, keyless Certificate Transparency search (crt.sh): find an org's
             # subdomains/hostnames from issued TLS certs. No key - a strong, always-on
             # passive-recon primitive for host discovery.

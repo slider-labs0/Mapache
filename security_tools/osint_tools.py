@@ -15,6 +15,8 @@ the search dorks the operator can pivot on by hand.
 from __future__ import annotations
 
 import html as _html
+import json
+import os
 import re
 import urllib.parse
 from typing import Any
@@ -586,3 +588,133 @@ class SocialLookupTool(BaseTool):
         return ToolResult.ok("\n".join(lines).rstrip(),
                              metadata={"username": username, "platform": platform,
                                        "target": find, "matches": total})
+
+
+# --- Netlas: completely-free exposed-device / camera search ------------------ #
+
+class NetlasSearchTool(BaseTool):
+    """Internet-wide exposed-device search via Netlas.io - a COMPLETELY FREE,
+    keyless alternative to Shodan/ZoomEye whose search is NOT paywalled. Works
+    anonymously (a small daily quota); a free no-credit-card Netlas account key
+    (NETLAS_API_KEY) raises the limit. Finds exposed cameras, services, and hosts by
+    Netlas query syntax (e.g. 'port:554', 'http.title:webcam',
+    'certificate.issuer_dn:Hikvision'). Passive: reads Netlas's index, no packets to
+    the target."""
+
+    name = "netlas_search"
+    description = (
+        "Search the internet for exposed devices/services with Netlas.io - a free, "
+        "keyless Shodan/ZoomEye alternative whose search is NOT paywalled. Use Netlas "
+        "query syntax: 'port:554' (RTSP cameras), 'http.title:webcam', "
+        "'certificate.issuer_dn:Hikvision', 'protocol:rtsp', 'port:80 http.title:camera'. "
+        "Returns matching IP:port with protocol, title/issuer, ISP, and location. Works "
+        "anonymously with a small daily quota; set a free NETLAS_API_KEY (no credit card, "
+        "https://netlas.io) to raise it. Passive - no packets to the target."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string",
+                      "description": "Netlas query, e.g. 'port:554' or 'http.title:webcam'."},
+            "size": {"type": "integer",
+                     "description": "Max results to return (default 10, max 20).",
+                     "default": 10},
+        },
+        "required": ["query"],
+    }
+    permissions = {Permission.NETWORK}
+    timeout = 30
+    tags = ["osint", "recon", "search", "devices", "passive"]
+
+    _RESP_URL = "https://app.netlas.io/api/responses/"
+    _COUNT_URL = "https://app.netlas.io/api/responses_count/"
+
+    def __init__(self, egress: Any = None, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.egress = egress
+
+    def _proxy(self) -> Any:
+        return self.egress.httpx_proxy() if self.egress is not None else None
+
+    @staticmethod
+    def _dig(d: dict, *path: str) -> Any:
+        cur: Any = d
+        for k in path:
+            if not isinstance(cur, dict):
+                return None
+            cur = cur.get(k)
+        return cur
+
+    def _row(self, data: dict) -> str:
+        ip = data.get("ip") or self._dig(data, "host") or "?"
+        port = data.get("port")
+        if port is None:  # sometimes only in the raw src, e.g. raw_tcp://ip:554
+            src = str(self._dig(data, "certificate", "src") or "")
+            m = re.search(r":(\d{1,5})(?:\D|$)", src.rsplit("/", 1)[-1])
+            port = m.group(1) if m else "?"
+        proto = data.get("protocol") or self._dig(data, "port_meta") or ""
+        title = (self._dig(data, "http", "title") or
+                 self._dig(data, "certificate", "issuer_dn") or "")
+        isp = data.get("isp") or ""
+        country = self._dig(data, "geo", "country") or data.get("country") or ""
+        city = self._dig(data, "geo", "city") or ""
+        loc = ", ".join(p for p in (city, country) if p)
+        bits = [f"{ip}:{port}"]
+        if proto:
+            bits.append(str(proto))
+        line = "  ".join(bits)
+        extra = " · ".join(p for p in (str(title)[:60], isp, loc) if p)
+        return f"{line}" + (f"  ({extra})" if extra else "")
+
+    async def execute(self, query: str, size: int = 10, **kwargs: Any) -> ToolResult:
+        query = (query or "").strip()
+        if not query:
+            return ToolResult.fail("netlas_search: 'query' is required")
+        size = min(max(1, size), 20)
+        headers = {"User-Agent": _UA, "accept": "application/json"}
+        key = os.environ.get("NETLAS_API_KEY")
+        if key:
+            headers["X-API-Key"] = key
+        params = {"q": query}
+        try:
+            async with HttpClient(timeout=25.0, proxy=self._proxy(),
+                                  headers={"User-Agent": _UA}) as client:
+                resp = await client.get(self._RESP_URL, params=params,
+                                        extra_headers=headers)
+        except Exception as exc:
+            return ToolResult.fail(f"netlas_search: request failed - {exc}")
+
+        try:
+            payload = json.loads(resp.text or "{}")
+        except Exception:
+            payload = {}
+
+        # Netlas signals the anonymous/free daily cap with a typed error body.
+        if isinstance(payload, dict) and payload.get("type") == "daily_request_limit_exceeded":
+            detail = payload.get("detail") or ""
+            hint = ("" if key else
+                    " Set a free NETLAS_API_KEY (no credit card, https://netlas.io) to "
+                    "raise the limit to 50/day.")
+            return ToolResult.fail(
+                f"netlas_search: Netlas free daily request limit reached. {detail}{hint}",
+                metadata={"limited": True})
+        if not resp.success:
+            return ToolResult.fail(
+                f"netlas_search: HTTP {resp.status_code}\n{(resp.text or '')[:400]}",
+                metadata={"status": resp.status_code})
+
+        items = payload.get("items") if isinstance(payload, dict) else None
+        if not items:
+            return ToolResult.ok(
+                f"netlas_search: no results for {query!r}.",
+                metadata={"query": query, "result_count": 0})
+
+        rows = []
+        for it in items[:size]:
+            data = it.get("data") if isinstance(it, dict) else None
+            if isinstance(data, dict):
+                rows.append("  - " + self._row(data))
+        header = f"Netlas exposed-device search - {query!r} ({len(rows)} shown)"
+        note = "" if key else "\n(anonymous free tier; set NETLAS_API_KEY for 50/day)"
+        return ToolResult.ok(header + "\n" + "\n".join(rows) + note,
+                             metadata={"query": query, "result_count": len(rows)})

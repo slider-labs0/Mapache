@@ -5892,6 +5892,53 @@ async def test_phone_lookup_fallback_and_dorks():
     print("  PASS  phone_lookup_fallback_and_dorks")
 
 
+async def test_netlas_search_free_device_search():
+    """netlas_search parses Netlas results into IP:port rows (keyless), and surfaces the
+    free daily-limit message clearly instead of a raw error."""
+    import httpx
+    import security_tools.osint_tools as ot
+
+    ok_body = {"items": [
+        {"data": {"ip": "50.254.149.193", "port": 554, "protocol": "rtsp",
+                  "certificate": {"issuer_dn": "O=Genetec Security Center"},
+                  "isp": "Comcast", "geo": {"country": "US", "city": "Denver"}}},
+        {"data": {"ip": "8.8.4.4", "http": {"title": "Webcam Login"},
+                  "certificate": {"src": "raw_tcp://8.8.4.4:80"}, "isp": "X"}},
+    ]}
+
+    def ok_handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=ok_body)
+
+    orig = ot.HttpClient
+    ot.HttpClient = lambda *a, **k: orig(*a, **{**k, "transport": httpx.MockTransport(ok_handler)})
+    try:
+        res = await ot.NetlasSearchTool().execute(query="port:554", size=5)
+        assert res.success
+        assert "50.254.149.193:554" in res.output and "rtsp" in res.output
+        assert "Genetec Security Center" in res.output
+        assert "8.8.4.4:80" in res.output          # port parsed from certificate.src
+        assert res.metadata.get("result_count") == 2
+    finally:
+        ot.HttpClient = orig
+
+    # The free daily-limit body is turned into a clear, actionable failure.
+    def limit_handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "type": "daily_request_limit_exceeded",
+            "title": "Daily request limit exceeded",
+            "detail": "wait until the limit resets (05 hr.)"})
+
+    ot.HttpClient = lambda *a, **k: orig(*a, **{**k, "transport": httpx.MockTransport(limit_handler)})
+    try:
+        res = await ot.NetlasSearchTool().execute(query="port:554")
+        assert not res.success and res.metadata.get("limited") is True
+        assert "daily request limit" in res.error.lower()
+        assert "NETLAS_API_KEY" in res.error   # points at the free key to raise the limit
+    finally:
+        ot.HttpClient = orig
+    print("  PASS  netlas_search_free_device_search")
+
+
 async def test_social_lookup_instagram_to_linkedin():
     """social_lookup reads the IG profile's og: name then finds a LinkedIn match."""
     import httpx
@@ -7242,6 +7289,7 @@ async def run_all():
     test_osint_search_logic_and_registration()
     await test_osint_search_buckets_results()
     await test_phone_lookup_fallback_and_dorks()
+    await test_netlas_search_free_device_search()
     await test_social_lookup_instagram_to_linkedin()
 
     print("\nAutomated reporting (feature L)")
