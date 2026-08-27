@@ -3426,10 +3426,73 @@ async def test_advanced_web_weapons():
         r2 = await tool.execute(url=f"http://127.0.0.1:{port2}/")
         assert r2.metadata.get("vulnerable") == []
 
+    # -- the second advanced wave: XXE, prototype pollution, deserialization, cache
+    # poisoning, OAuth/open-redirect, race condition --
+    def xxe_h(req):
+        b = req.content.decode("utf-8", "ignore")
+        return (httpx.Response(200, text="root:x:0:0:root")
+                if "file:///etc/passwd" in b else httpx.Response(200, text="no"))
+    orig = _patch(xxe_h)
+    try:
+        r = await wa.XxeTool().execute(url="http://t/xml")
+        assert r.metadata.get("xxe") is True
+    finally:
+        wa.HttpClient = orig
+
+    def pp_h(req):
+        b = req.content.decode("utf-8", "ignore")
+        return (httpx.Response(200, text="ok pp_polluted_9147") if "pp_polluted_9147" in b
+                else httpx.Response(200, text="base"))
+    orig = _patch(pp_h)
+    try:
+        r = await wa.ProtoPollutionTool().execute(url="http://t/api", body={"a": 1})
+        assert r.metadata.get("polluted") is True
+    finally:
+        wa.HttpClient = orig
+
+    # Deserialization is an offline generator - a real pickle payload for python.
+    r = await wa.DeserializeGadgetTool().execute(lang="python", cmd="id")
+    assert r.success and len(r.output) > 40
+    assert (await wa.DeserializeGadgetTool().execute(lang="java")).success
+
+    def cp_h(req):
+        xfh = req.headers.get("x-forwarded-host", "")
+        return httpx.Response(200, headers={"Cache-Control": "public", "Age": "5"},
+                              text=f"<script src=//{xfh}/a.js>")
+    orig = _patch(cp_h)
+    try:
+        r = await wa.CachePoisonTool().execute(url="http://t/")
+        assert "X-Forwarded-Host" in r.metadata.get("candidates", [])
+    finally:
+        wa.HttpClient = orig
+
+    def oa_h(req):
+        return (httpx.Response(302, headers={"Location": "https://evil.example/cb?code=X"})
+                if "evil.example" in str(req.url) else httpx.Response(200, text="ok"))
+    orig = _patch(oa_h)
+    try:
+        r = await wa.OauthProbeTool().execute(
+            url="http://t/auth?redirect_uri=https://t/cb", param="redirect_uri")
+        assert r.metadata.get("vulnerable")
+    finally:
+        wa.HttpClient = orig
+
+    _cnt = {"n": 0}
+    def race_h(req):
+        _cnt["n"] += 1
+        return httpx.Response(200 if _cnt["n"] <= 3 else 409, text="x" * _cnt["n"])
+    orig = _patch(race_h)
+    try:
+        r = await wa.RaceProbeTool().execute(url="http://t/redeem", body={"c": "X"}, count=10)
+        assert r.metadata.get("race") is True and r.metadata.get("successes") == 3
+    finally:
+        wa.HttpClient = orig
+
     # Wired into the web operator.
     web = get_operator("web_operator")
-    assert {"ssrf_probe", "cors_audit", "ssti_probe", "nosqli_probe",
-            "smuggle_probe"} <= set(web.tools)
+    assert {"ssrf_probe", "cors_audit", "ssti_probe", "nosqli_probe", "smuggle_probe",
+            "proto_pollution", "xxe_tool", "deserialize_gadget", "cache_poison",
+            "oauth_probe", "race_probe"} <= set(web.tools)
     print("  PASS  advanced_web_weapons")
 
 
