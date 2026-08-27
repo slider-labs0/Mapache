@@ -20,10 +20,11 @@ BaseTool instances the CLI registers. Bad specs warn-don't-block (skipped with a
 message), so one typo can't stop startup.
 
 Spec shape:
-  { "name": "shodan_host", "kind": "http", "method": "GET",
-    "url": "https://api.shodan.io/shodan/host/{ip}?key=${SHODAN_API_KEY}",
+  { "name": "vt_ip", "kind": "http", "method": "GET",
+    "url": "https://www.virustotal.com/api/v3/ip_addresses/{ip}",
+    "headers": {"x-apikey": "${VT_API_KEY}"},
     "params": {"ip": {"type": "string", "description": "target IP"}},
-    "description": "Shodan host lookup", "permission": "network" }
+    "description": "VirusTotal IP reputation", "permission": "network" }
 
   { "name": "my_recon", "kind": "command",
     "repo": "https://github.com/me/mytool",          # optional: cloned once

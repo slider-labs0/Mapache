@@ -7,7 +7,7 @@
     "acme.example.com"
   ],
   "forbidden_tools": [
-    "msf_run"
+    
   ],
   "forbidden_patterns": [
     "rm -rf",

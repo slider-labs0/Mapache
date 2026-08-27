@@ -96,7 +96,7 @@ Commands:
   /hosts                 Show per-host attack states (multi-host delegation)
   /backend               Show the execution backend (local / ssh / docker)
   /egress                 Show egress/anonymity (proxy/Tor to hide your IP)
-  /integrations           List bring-your-own tools (Shodan/API + GitHub/CLI)
+  /integrations           List bring-your-own tools (VirusTotal/API + GitHub/CLI)
   /hub [search|install]  Browse/install community skills (feature I)
   /voice [on|off]        Voice I/O status / toggle (Phase 9); /say <text> speaks
   /opsec                 Show hybrid OPSEC routing (which ops are pinned local)
@@ -747,25 +747,11 @@ class MapacheCLI:
             self.registry.register(OsintSearchTool(egress=self.egress))
             self.registry.register(PhoneLookupTool(egress=self.egress))
             self.registry.register(SocialLookupTool(egress=self.egress))
-            # Free, keyless Shodan InternetDB host lookup (ports/hostnames/CVEs/tags for
-            # an IP). Always available - no API key or query credits, unlike the paid
-            # shodan_host/shodan_search integration - so passive host recon works out of
-            # the box. Passive: pulls from Shodan's index, no packets to the target.
-            from tools.external_tools import HttpApiTool
-            self.registry.register(HttpApiTool({
-                "name": "shodan_internetdb", "kind": "http", "method": "GET",
-                "url": "https://internetdb.shodan.io/{ip}",
-                "description": "Free keyless Shodan InternetDB lookup for an IP: open "
-                               "ports, hostnames, known CVEs, and tags. No API key or "
-                               "credits needed (passive - no packets to the target).",
-                "params": {"ip": {"type": "string", "description": "target IPv4",
-                                  "required": True}},
-                "permission": "network",
-            }, egress=self.egress))
             # Free, keyless Certificate Transparency search (crt.sh): find an org's
-            # subdomains/hostnames from issued TLS certs. No key - a strong Shodan-free
-            # passive-recon primitive. Query a domain (example.com) or a wildcard
-            # (%.example.com) for subdomains.
+            # subdomains/hostnames from issued TLS certs. No key - a strong passive-recon
+            # primitive (a free alternative to a Shodan subscription for host discovery).
+            # Query a domain (example.com) or a wildcard (%.example.com) for subdomains.
+            from tools.external_tools import HttpApiTool
             self.registry.register(HttpApiTool({
                 "name": "crtsh_search", "kind": "http", "method": "GET",
                 "url": "https://crt.sh/?q={query}&output=json",
@@ -798,7 +784,7 @@ class MapacheCLI:
             self.registry.register(SqlmapTool(backend=self.exec_backend, egress=self.egress))
             self.registry.register(FuzzTool(backend=self.exec_backend, egress=self.egress))
 
-            # Integrations (bring-your-own tools): http (e.g. Shodan) + command (a
+            # Integrations (bring-your-own tools): http (e.g. VirusTotal) + command (a
             # CLI / GitHub repo) specs from config.integrations. They run through the
             # execution backend + egress like the built-ins. Warn-don't-block.
             ext_tools, ext_warn = build_external_tools(
@@ -2052,7 +2038,7 @@ class MapacheCLI:
         return {t.name for t in (self._integrations or [])}
 
     async def _maybe_setup_integration(self, user_input: str) -> None:
-        """If the request names a known service (Shodan/VirusTotal/…) that isn't set
+        """If the request names a known service (VirusTotal/GreyNoise/…) that isn't set
         up, offer a one-question setup: paste the key, we register the tool(s) live
         and persist the spec (key stays a ${ENV} ref). Wizard-style, mid-conversation."""
         if self.controller is None:
@@ -2370,7 +2356,7 @@ class MapacheCLI:
             tools = self._integrations
             if not tools:
                 print("\n  No integrations configured. Add tools under "
-                      "config.integrations (http API like Shodan, or a command / "
+                      "config.integrations (http API like VirusTotal, or a command / "
                       "GitHub-repo CLI). See tools/external_tools.py for the shape.\n")
             else:
                 print(f"\n  Integrations ({len(tools)}) - bring-your-own tools:")

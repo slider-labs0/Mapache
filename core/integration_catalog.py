@@ -1,8 +1,8 @@
 """
 integration_catalog.py - known third-party services for just-in-time setup.
 
-When the operator says "search this in Shodan" or "run this hash through
-VirusTotal" and that integration isn't configured yet, the CLI recognises the
+When the operator says "run this hash through VirusTotal" or "check this IP on
+GreyNoise" and that integration isn't configured yet, the CLI recognises the
 service, offers a one-question setup (paste the API key), writes the tool spec to
 config (key kept as a ${ENV} ref), and makes it available on the spot.
 
@@ -20,9 +20,9 @@ from typing import Any, Optional
 
 @dataclass(frozen=True)
 class IntegrationRecipe:
-    key: str                       # canonical id, e.g. "shodan"
-    display: str                   # "Shodan"
-    env_var: str                   # "SHODAN_API_KEY"
+    key: str                       # canonical id, e.g. "virustotal"
+    display: str                   # "VirusTotal"
+    env_var: str                   # "VT_API_KEY"
     signup_url: str                # where to obtain a key
     blurb: str                     # one-line description
     triggers: tuple[str, ...]      # substrings in user input that name it
@@ -33,30 +33,6 @@ class IntegrationRecipe:
 
 
 CATALOG: tuple[IntegrationRecipe, ...] = (
-    IntegrationRecipe(
-        key="shodan", display="Shodan", env_var="SHODAN_API_KEY",
-        signup_url="https://account.shodan.io/",
-        blurb="Passive host recon - open ports, services, banners, and known CVEs.",
-        triggers=("shodan",),
-        specs=(
-            {"name": "shodan_host", "kind": "http", "method": "GET",
-             "url": "https://api.shodan.io/shodan/host/{ip}?key=${SHODAN_API_KEY}",
-             "description": "Shodan: open ports, services, banners, and known CVEs "
-                            "for an IP (passive - no packets to the target).",
-             "params": {"ip": {"type": "string", "description": "target IPv4",
-                                "required": True}},
-             "permission": "network"},
-            {"name": "shodan_search", "kind": "http", "method": "GET",
-             "url": "https://api.shodan.io/shodan/host/search?key=${SHODAN_API_KEY}"
-                    "&query={query}",
-             "description": "Shodan search (e.g. 'apache country:US port:8080'). "
-                            "Requires a paid Shodan plan (uses query credits). With no "
-                            "key, use shodan_internetdb for a per-IP lookup instead.",
-             "params": {"query": {"type": "string", "description": "Shodan query",
-                                  "required": True}},
-             "permission": "network"},
-        ),
-    ),
     IntegrationRecipe(
         key="virustotal", display="VirusTotal", env_var="VT_API_KEY",
         signup_url="https://www.virustotal.com/gui/my-apikey",

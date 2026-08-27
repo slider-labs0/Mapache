@@ -6282,8 +6282,8 @@ async def test_external_tools():
         assert _resolve_env("k=${ET_TEST_KEY}") == "k=secret123"
 
         specs = [
-            {"name": "shodan_host", "kind": "http", "method": "GET",
-             "url": "https://api.shodan.io/shodan/host/{ip}?key=${ET_TEST_KEY}",
+            {"name": "example_host", "kind": "http", "method": "GET",
+             "url": "https://api.example.com/host/{ip}?key=${ET_TEST_KEY}",
              "params": {"ip": {"type": "string", "description": "ip", "required": True}}},
             {"name": "my_tool", "kind": "command", "command": "echo {args}",
              "params": {"args": {"type": "string", "description": "a"}}},
@@ -6292,10 +6292,10 @@ async def test_external_tools():
             {"name": "weird", "kind": "ftp"},                   # unknown kind → skip
         ]
         tools, warns = build_external_tools(specs)
-        assert {t.name for t in tools} == {"shodan_host", "my_tool"}
+        assert {t.name for t in tools} == {"example_host", "my_tool"}
         assert len(warns) == 3  # three bad specs skipped, not fatal
 
-        ht = next(t for t in tools if t.name == "shodan_host")
+        ht = next(t for t in tools if t.name == "example_host")
         assert isinstance(ht, HttpApiTool)
         assert "ip" in ht.parameters["properties"]
         # A convenience `required: true` on a param is promoted to the object-level
@@ -6303,7 +6303,7 @@ async def test_external_tools():
         # invalid JSON Schema and strict validators (xAI) 400 on it.
         assert ht.parameters["required"] == ["ip"]
         assert "required" not in ht.parameters["properties"]["ip"]
-        assert ht.to_context_schema().name == "shodan_host"  # per-instance name
+        assert ht.to_context_schema().name == "example_host"  # per-instance name
 
         # A command tool runs through the backend, egress-wrapped.
         class FakeBackend:
@@ -6326,29 +6326,29 @@ async def test_external_tools():
 async def test_http_api_missing_key_and_auth_note():
     """An API tool whose key env var is unset fails fast with a clear 'set the key'
     message instead of firing a doomed keyless request; a live 401/403 gets an
-    auth/credit note so the agent doesn't read it as an unbeatable wall. The keyless
-    Shodan InternetDB tool needs no env at all."""
+    auth/credit note so the agent doesn't read it as an unbeatable wall. A keyless
+    endpoint needs no env at all."""
     import os
     import httpx
     import browser.http_client as hc
     from tools.external_tools import HttpApiTool
-    from core.integration_catalog import get_recipe
 
-    os.environ.pop("SHODAN_API_KEY", None)
-    spec = next(s for s in get_recipe("shodan").specs if s["name"] == "shodan_search")
-    # The catalog stamps the signup URL onto every spec so the tool can cite it.
-    assert spec.get("signup_url") == "https://account.shodan.io/"
+    os.environ.pop("XAPI_TEST_KEY", None)
+    spec = {"name": "demo_search", "kind": "http", "method": "GET",
+            "url": "https://api.example.com/search?key=${XAPI_TEST_KEY}&query={query}",
+            "signup_url": "https://example.com/signup",
+            "params": {"query": {"type": "string", "required": True}}}
     t = HttpApiTool(spec)
-    assert t._required_env == ["SHODAN_API_KEY"]
+    assert t._required_env == ["XAPI_TEST_KEY"]
 
     # Missing key: pre-flight fail, no request sent, names the var + signup.
     res = await t.execute(query="webcam has_screenshot:true")
     assert not res.success
-    assert "SHODAN_API_KEY" in res.error and "account.shodan.io" in res.error
-    assert res.metadata.get("missing_env") == ["SHODAN_API_KEY"]
+    assert "XAPI_TEST_KEY" in res.error and "example.com/signup" in res.error
+    assert res.metadata.get("missing_env") == ["XAPI_TEST_KEY"]
 
     # Key present but the server returns 403: the error carries an auth/credit note.
-    os.environ["SHODAN_API_KEY"] = "abc"
+    os.environ["XAPI_TEST_KEY"] = "abc"
     orig = hc.HttpClient
     hc.HttpClient = lambda *a, **k: orig(*a, **{
         **k, "transport": httpx.MockTransport(lambda r: httpx.Response(403, text="cf"))})
@@ -6356,14 +6356,14 @@ async def test_http_api_missing_key_and_auth_note():
         res = await t.execute(query="webcam")
     finally:
         hc.HttpClient = orig
-        os.environ.pop("SHODAN_API_KEY", None)
+        os.environ.pop("XAPI_TEST_KEY", None)
     assert not res.success and "auth/credit" in res.error
 
-    # Keyless InternetDB: no required env, so it never pre-flight-blocks.
-    idb = HttpApiTool({"name": "shodan_internetdb", "kind": "http", "method": "GET",
-                       "url": "https://internetdb.shodan.io/{ip}",
-                       "params": {"ip": {"type": "string", "required": True}}})
-    assert idb._required_env == []
+    # A keyless endpoint (e.g. crt.sh): no required env, so it never pre-flight-blocks.
+    keyless = HttpApiTool({"name": "crtsh_search", "kind": "http", "method": "GET",
+                           "url": "https://crt.sh/?q={query}&output=json",
+                           "params": {"query": {"type": "string", "required": True}}})
+    assert keyless._required_env == []
     print("  PASS  http_api_missing_key_and_auth_note")
 
 
@@ -6625,16 +6625,16 @@ def test_integration_catalog():
     from tools.external_tools import build_external_tools
 
     # Names a service, nothing configured → returns its recipe.
-    r = detect_missing_integration("search 8.8.8.8 in shodan", set(), environ={})
-    assert r is not None and r.key == "shodan"
+    r = detect_missing_integration("check 8.8.8.8 on greynoise", set(), environ={})
+    assert r is not None and r.key == "greynoise"
     # Spec present AND key set → fully ready, no prompt.
     assert detect_missing_integration(
-        "shodan this ip", {"shodan_host", "shodan_search"},
-        environ={"SHODAN_API_KEY": "x"}) is None
+        "greynoise this ip", {"greynoise_ip"},
+        environ={"GREYNOISE_API_KEY": "x"}) is None
     # Spec present but key missing → still prompts (to add just the key).
     r2 = detect_missing_integration(
-        "shodan this ip", {"shodan_host", "shodan_search"}, environ={})
-    assert r2 is not None and r2.key == "shodan"
+        "greynoise this ip", {"greynoise_ip"}, environ={})
+    assert r2 is not None and r2.key == "greynoise"
     # Other services + unrelated input.
     assert detect_missing_integration(
         "run this hash through virustotal", set(), environ={}).key == "virustotal"
