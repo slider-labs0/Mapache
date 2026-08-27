@@ -385,6 +385,20 @@ class AttackState:
             lines.append("DEAD vectors (identical response for every value tried - STOP "
                          f"fuzzing these, switch approach): {', '.join(self.dead_vectors[:8])}")
 
+        # Finding-driven, cross-discipline next moves (feature: attack logic). Turns the
+        # raw findings above into prioritized "do THIS next, with THIS tool" guidance so
+        # the agent chains findings into deeper exploitation across every domain.
+        try:
+            from .attack_logic import next_moves
+            moves = next_moves(self)
+        except Exception:
+            moves = []
+        if moves:
+            lines.append("PRIORITIZED NEXT MOVES (highest value first - pick one, act, "
+                         "then re-read this block):")
+            for i, mv in enumerate(moves, 1):
+                lines.append(f"  {i}. {mv}")
+
         lines.append(f"Next step: {self.suggest_next_step()}")
         lines.append("=== END ATTACK STATE ===")
 

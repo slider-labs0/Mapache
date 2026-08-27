@@ -3756,6 +3756,37 @@ def test_next_step_is_discipline_aware():
     print("  PASS  next_step_is_discipline_aware")
 
 
+def test_attack_logic_next_moves():
+    """The finding-driven move engine turns raw findings into prioritized, cross-domain
+    next actions, and they surface in the attack-state block."""
+    from core.conversation_chain import AttackState
+    from core.attack_logic import next_moves
+
+    # Instant-win: ingreslock is called out first.
+    s = AttackState(); s.target = "10.0.0.5"; s.open_ports = ["1524/tcp", "445/tcp"]
+    mv = next_moves(s)
+    assert mv and "OPEN ROOT SHELL" in mv[0]
+
+    # Credentials in hand -> spray guidance appears near the top.
+    s = AttackState(); s.target = "t"; s.open_ports = ["22/tcp"]; s.credentials = ["u:p"]
+    assert any("SPRAY" in m for m in next_moves(s))
+
+    # Active Directory ports -> a dedicated AD chain.
+    s = AttackState(); s.target = "dc"; s.open_ports = ["88/tcp", "389/tcp"]
+    assert any("Active Directory" in m and "Kerberoast" in m for m in next_moves(s))
+
+    # Web + token + cloud -> the right specialist tools are named.
+    s = AttackState(); s.target = "app"; s.open_ports = ["443/tcp"]
+    s.notes = ["captured a JWT eyJhbGci", "reaches aws 169.254.169.254 metadata"]
+    joined = " ".join(next_moves(s))
+    assert "web_operator" in joined and "jwt_tool" in joined and "metadata" in joined
+
+    # The moves are injected into the prompt block.
+    block = s.to_prompt_block()
+    assert "PRIORITIZED NEXT MOVES" in block
+    print("  PASS  attack_logic_next_moves")
+
+
 def test_discipline_benchmarks_valid():
     # The real-world, multi-discipline Docker benchmark suite must be well-formed
     # and self-consistent WITHOUT needing Docker or a model: every scenario is
@@ -7572,6 +7603,7 @@ async def run_all():
     test_operator_roster()
     test_lead_prompt_routes_by_discipline()
     test_next_step_is_discipline_aware()
+    test_attack_logic_next_moves()
     test_discipline_benchmarks_valid()
     test_cybench_harness_loader()
     test_cyberseceval_wrapper_logic()
