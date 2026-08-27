@@ -1032,10 +1032,18 @@ class AgentController:
                     self._add_usage(piece)
                     continue
                 if piece.get("type") == "tool_call":
-                    tool_call = piece
-                    break
+                    # Keep the FIRST tool call but do NOT break: with
+                    # stream_options.include_usage the token-usage chunk is the LAST
+                    # chunk (after the tool call), so breaking here would drop token
+                    # accounting for every tool-calling turn. Drain the rest of the
+                    # stream (ignoring trailing content/tool calls) to capture usage.
+                    if tool_call is None:
+                        tool_call = piece
+                    continue
                 continue  # unknown control dict - ignore
             token = str(piece)
+            if tool_call is not None:
+                continue  # trailing content after the tool call - ignore, just drain
             text_parts.append(token)
             try:
                 on_token(token)
@@ -1973,6 +1981,10 @@ class AgentController:
         try:
             result = await child.run(child_task, session_id=f"{session_id}:{suffix}")
         finally:
+            # Roll the child's token usage up into the parent so the engagement total
+            # (shown in the TUI Budget) reflects ALL agents, not just the lead - a swarm
+            # spends most of its tokens inside these operator children.
+            self.session_tokens += int(getattr(child, "session_tokens", 0) or 0)
             # Dispose the child's private backend (e.g. stop the container it
             # started) - factories opt in by exposing `aclose` on the backend.
             await self._teardown_backend(child_backend)

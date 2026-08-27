@@ -2625,6 +2625,23 @@ async def test_provider_usage_and_token_accounting():
     c._add_usage({"total_tokens": 734})
     c._add_usage(None)  # tolerated
     assert c.session_tokens == 1234
+
+    # Streaming: the usage chunk (from stream_options.include_usage) is the LAST chunk,
+    # AFTER the tool call. The turn must still count it - breaking on the tool call would
+    # drop token accounting for every tool-calling turn (this was the qwen '↑ 0 tokens'
+    # bug; OpenRouter happened to emit usage earlier so it looked fine).
+    class _StreamM:
+        async def chat_stream(self, messages, tools=None):
+            yield "reasoning "
+            yield {"type": "tool_call", "tool": "web_fetch", "args": {"url": "http://x"}}
+            yield {"type": "usage", "total_tokens": 321}
+        async def chat(self, **k):
+            return {"message": {"content": ""}}
+    sc = AgentController(model_provider=_StreamM(), mode=AgentMode.AGENT)
+    resp = await sc._chat([{"role": "user", "content": "hi"}],
+                          {"tools": [{"x": 1}]}, on_token=lambda t: None)
+    assert resp["message"].get("tool_calls"), "tool call still captured"
+    assert sc.session_tokens == 321, "streamed usage counted despite the tool call"
     print("  PASS  provider_usage_and_token_accounting")
 
 
