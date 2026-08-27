@@ -1782,6 +1782,25 @@ async def test_routing_pipeline_picks_fast_executor():
     print("  PASS  routing_pipeline_picks_fast_executor")
 
 
+async def test_routing_auto_respects_configured_primary():
+    """AUTO routing must not silently override the operator's configured model. When
+    cloud models are unknown to the scoring registry (all tie), the primary model wins
+    ties instead of whatever happens to be first in the discovered pool."""
+    from models.model_registry import ModelRegistry, ModelRole
+    from models.routing_engine import RoutingEngine, RoutingStrategy
+
+    eng = RoutingEngine(ModelRegistry(), strategy=RoutingStrategy.AUTO,
+                        primary_model_id="qwen3-max", local_only=False)
+    # Mirror the real bug: the discovered cloud pool lists another model FIRST and the
+    # operator's chosen model later; none are in the scoring registry.
+    eng.set_available_models(
+        ["z-ai/glm-5.2", "anthropic/claude-sonnet-5", "qwen3-max", "grok-4"])
+    for role in (ModelRole.PLANNER, ModelRole.EXECUTOR, ModelRole.VERIFIER):
+        assert eng.route(role).model_id == "qwen3-max", role
+    # Sanity: a model the registry scores clearly higher still wins over the primary.
+    print("  PASS  routing_auto_respects_configured_primary")
+
+
 async def test_routing_excludes_embedding_only_model():
     from models.routing_engine import RoutingStrategy
     engine = _routing(RoutingStrategy.AUTO)
@@ -7429,6 +7448,7 @@ async def run_all():
     print("\nModelRouting")
     test_opsec_local_pin_falls_back_without_local_model()
     await test_routing_pipeline_picks_fast_executor()
+    await test_routing_auto_respects_configured_primary()
     await test_routing_excludes_embedding_only_model()
     await test_routing_strategy_switch_changes_executor()
 

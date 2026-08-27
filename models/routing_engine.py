@@ -296,13 +296,20 @@ class RoutingEngine:
                 final_score = 0.5
                 speed = 0.5
 
-            candidates.append((model_id, final_score, speed))
+            # The operator's configured default model wins ties. Cloud models are
+            # usually unknown to the scoring registry, so they all get the same default
+            # score - without this the sort just returns whichever model happens to be
+            # first in the discovered pool (e.g. 'z-ai/glm-5.2'), silently overriding the
+            # model the operator picked in setup.
+            is_primary = 1 if model_id == self.primary_model_id else 0
+            candidates.append((model_id, final_score, is_primary, speed))
 
         if not candidates:
             fallback = self.primary_model_id or (self._chat_capable[0] if self._chat_capable else "qwen2.5:14b")
             return fallback
 
-        candidates.sort(key=lambda x: (x[1], x[2]), reverse=True)
+        # Rank by role score, then prefer the operator's primary model, then the faster.
+        candidates.sort(key=lambda x: (x[1], x[2], x[3]), reverse=True)
         return candidates[0][0]
 
     def _best_chat_model(self) -> str:
@@ -311,13 +318,15 @@ class RoutingEngine:
             return self.primary_model_id or "qwen2.5:14b"
 
         best = None
-        best_score = 0.0
+        best_score = -1.0
         for model_id in self._chat_capable:
             profile = self.registry.get(model_id)
             if profile:
                 score = (profile.quality_score + profile.executor_score) / 2
             else:
                 score = 0.5
+            if model_id == self.primary_model_id:
+                score += 1e-6  # break ties toward the operator's configured model
             if score > best_score:
                 best_score = score
                 best = model_id
