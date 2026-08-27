@@ -748,8 +748,8 @@ class MapacheCLI:
             self.registry.register(PhoneLookupTool(egress=self.egress))
             self.registry.register(SocialLookupTool(egress=self.egress))
             # Free, keyless Certificate Transparency search (crt.sh): find an org's
-            # subdomains/hostnames from issued TLS certs. No key - a strong passive-recon
-            # primitive (a free alternative to a Shodan subscription for host discovery).
+            # subdomains/hostnames from issued TLS certs. No key - a strong, always-on
+            # passive-recon primitive for host discovery.
             # Query a domain (example.com) or a wildcard (%.example.com) for subdomains.
             from tools.external_tools import HttpApiTool
             self.registry.register(HttpApiTool({

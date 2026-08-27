@@ -592,7 +592,7 @@ def test_skills_playbook_specialist_matching():
     assert ICS_ATTACK_SKILL.body in relevant_skills(E, "enumerate the modbus PLC")
     assert IOT_ATTACK_SKILL.body in relevant_skills(E, "binwalk the firmware image")
     assert WIRELESS_ATTACK_SKILL.body in relevant_skills(E, "capture the WPA2 handshake and deauth")
-    assert OSINT_SKILL.body in relevant_skills(E, "passive subdomain enum with amass and shodan")
+    assert OSINT_SKILL.body in relevant_skills(E, "passive subdomain enum with amass and zoomeye")
     assert DFIR_SKILL.body in relevant_skills(E, "build a timeline and write sigma rules")
 
     # Tor / dark-web requests pull the dark-web playbook, which steers OFF surface

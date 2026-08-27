@@ -4,7 +4,7 @@ external_tools.py - bring-your-own tools (integrations).
 Let an operator route their OWN tools into Mapache from config, without writing a
 plugin, in two flavours:
 
-  * HTTP/API tools  - wrap a REST endpoint (Shodan, Censys, VirusTotal, GreyNoise,
+  * HTTP/API tools  - wrap a REST endpoint (VirusTotal, GreyNoise, Censys, AbuseIPDB,
     an internal service …). Declared with a URL template + params; the agent calls
     it like any tool. API keys go in via ${ENV} refs so they never sit in the spec.
     Requests honor the egress profile (proxy/Tor), so lookups aren't attributable
@@ -116,7 +116,7 @@ def _param_schema(spec: dict) -> dict:
 
 
 class HttpApiTool(BaseTool):
-    """A REST/API endpoint wrapped as a tool (e.g. Shodan). Set per-instance."""
+    """A REST/API endpoint wrapped as a tool (e.g. VirusTotal). Set per-instance."""
 
     name = "http_api_tool"  # placeholder for BaseTool.__init_subclass__
     description = "external API tool"
@@ -137,8 +137,8 @@ class HttpApiTool(BaseTool):
         self._signup = spec.get("signup_url") or ""
         # Which ${ENV} vars this endpoint needs (the API key etc.) - so we can fail
         # fast with a clear message instead of firing a doomed credential-less request
-        # that the provider bounces (Shodan/Cloudflare answer a keyless call with an
-        # HTTP 403 challenge, which reads like "Shodan is blocking me", not "set a key").
+        # that the provider bounces (a Cloudflare-fronted API answers a keyless call
+        # with an HTTP 403 challenge, which reads like a block, not "set a key").
         blob = " ".join([self._url, *map(str, self._headers.values()),
                          str(self._body or "")])
         self._required_env = _ENV_RE.findall(blob)

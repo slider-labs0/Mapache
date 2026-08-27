@@ -16,7 +16,7 @@ Works on:
     - Docker containers with security tools
 
 Covered tool categories:
-    Recon:       nmap, masscan, amass, subfinder, theHarvester, shodan
+    Recon:       nmap, masscan, amass, subfinder, theHarvester
     Web:         nikto, dirb, gobuster, sqlmap, wfuzz, ffuf
     Exploitation: msfconsole, searchsploit
     Password:    hashcat, hydra, medusa, crunch

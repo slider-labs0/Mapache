@@ -183,7 +183,7 @@ def _default_config() -> dict[str, Any]:
         # http://host:port; wrapper = auto|proxychains|torsocks|none (shell tools).
         "egress": {"mode": "direct"},
         # Integrations: bring-your-own tools the agent can call. Each entry is an
-        # http spec (wrap an API like Shodan; keys via ${ENV}) or a command spec
+        # http spec (wrap an API like VirusTotal; keys via ${ENV}) or a command spec
         # (wrap a CLI / GitHub repo). See tools/external_tools.py for the shape.
         "integrations": [],
         # Community skill hub (feature I): registry = path to a local index.json

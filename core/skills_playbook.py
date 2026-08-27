@@ -672,7 +672,7 @@ WIRELESS_ATTACK_SKILL = Skill(
 # --- OSINT / passive recon. Keyword-driven; strictly passive. ---------------- #
 _OSINT_HINT_RE = re.compile(
     r"\b(osint|footprint\w*|passive[-\s]?recon\w*|subdomain[-\s]?enum\w*|\bwhois\b|"
-    r"dns[-\s]?enum\w*|shodan|censys|the[-\s]?harvester|\bamass\b|maltego|google[-\s]?"
+    r"dns[-\s]?enum\w*|zoomeye|censys|crt\.?sh|the[-\s]?harvester|\bamass\b|maltego|google[-\s]?"
     r"dork\w*|breach[-\s]?data|credential[-\s]?leak\w*|employee[-\s]?(email|enum)|"
     r"github[-\s]?leak\w*|dehashed|leak[-\s]?database)\b",
     re.IGNORECASE)
@@ -707,7 +707,8 @@ OSINT_SKILL = Skill(
         "subdomain enumeration, ALWAYS available, no key. Start here.\n"
         "   - ZoomEye device/service search via its MCP: call the tool "
         "`mcp__zoomeye__zoomeye_search` directly (query by product/port/country, e.g. "
-        "'webcam', 'app:\"Apache\"', 'port:554'). This is the Shodan-search substitute. "
+        "'webcam', 'app:\"Apache\"', 'port:554'). This is the internet-wide exposed-device "
+        "search tool. "
         "If that tool is not in your tool list, ZoomEye is not configured - say so in one "
         "line (the operator enables it in mcp.json with a free ZOOMEYE_API_KEY) and fall "
         "back to crtsh_search + public web_search dorks. Do NOT web_search for 'zoomeye "
