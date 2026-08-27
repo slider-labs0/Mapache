@@ -674,7 +674,12 @@ _OSINT_HINT_RE = re.compile(
     r"\b(osint|footprint\w*|passive[-\s]?recon\w*|subdomain[-\s]?enum\w*|\bwhois\b|"
     r"dns[-\s]?enum\w*|zoomeye|censys|crt\.?sh|the[-\s]?harvester|\bamass\b|maltego|google[-\s]?"
     r"dork\w*|breach[-\s]?data|credential[-\s]?leak\w*|employee[-\s]?(email|enum)|"
-    r"github[-\s]?leak\w*|dehashed|leak[-\s]?database)\b",
+    r"github[-\s]?leak\w*|dehashed|leak[-\s]?database|"
+    # Device-exposure / internet-wide asset search (the ZoomEye/Censys use case):
+    r"web[-\s]?cams?|cctv|ip[-\s]?cameras?|security[-\s]?cameras?|\brtsp\b|\bdvr\b|\bnvr\b|"
+    r"exposed[-\s]?(device|service|host|camera|server|asset|system)s?|"
+    r"internet[-\s]?facing|internet[-\s]?wide|unprotected[-\s]?(camera|device|service)s?|"
+    r"\biot\b|shodan[-\s]?style|device[-\s]?search)\b",
     re.IGNORECASE)
 
 
