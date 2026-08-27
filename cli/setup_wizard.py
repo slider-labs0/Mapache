@@ -454,6 +454,84 @@ def _step_messaging(cfg, raw: dict) -> None:
         _nested_set(raw, ("messaging", "discord_token"), dc)
 
 
+# API-keyed hacking tools that are NOT HTTP-catalog integrations: a built-in tool or an
+# MCP server reads the key straight from the environment. (display, env_var, signup_url,
+# blurb, keyless_ok).
+_ENV_ONLY_API_TOOLS = [
+    ("Netlas", "NETLAS_API_KEY", "https://netlas.io",
+     "Free exposed-device / camera search (netlas_search). Works keyless; a key raises "
+     "the daily quota to 50/day.", True),
+    ("ZoomEye", "ZOOMEYE_API_KEY", "https://www.zoomeye.org/profile",
+     "Device search via its MCP (mcp.json). NOTE: ZoomEye gates search behind paid "
+     "credits, so netlas_search is the free go-to.", False),
+]
+
+
+def _persist_env_var(name: str, value: str) -> None:
+    """Persist an env var for future sessions (best-effort, per-OS). Also sets it for
+    this process so a following smoke test / same-session use sees it."""
+    os.environ[name] = value
+    try:
+        if os.name == "nt":
+            import subprocess
+            subprocess.run(["setx", name, value], capture_output=True, check=False)
+            print(_paint(f"    ok {name} saved to your user environment "
+                         "(open a NEW terminal to use it).", "green"))
+        else:
+            print(_paint(f"    to persist, add to your shell profile: "
+                         f"export {name}='<your key>'", "grey"))
+    except Exception as exc:  # pragma: no cover - best-effort
+        print(_paint(f"    [!] couldn't persist {name} ({exc}); set it manually.", "amber"))
+
+
+def _prompt_api_key(display: str, env_var: str, signup_url: str, blurb: str,
+                    keyless_ok: bool = False) -> bool:
+    """Show one API-keyed tool and prompt for its key. Returns True if a key was set.
+    Enter skips (keeps any current value)."""
+    cur = os.environ.get(env_var, "")
+    status = (_paint("key already set", "green") if cur
+              else _paint("keyless works, key optional" if keyless_ok else "no key yet",
+                          "grey" if keyless_ok else "amber"))
+    _panel(display, [
+        _paint(blurb, "white"),
+        _paint(f"env: {env_var}   get one: {signup_url}", "grey"),
+        _paint("status: ", "grey") + status,
+        _paint("Paste key (Enter to skip):", "white"),
+    ])
+    key, changed = _read_secret(cur)
+    if changed and key:
+        _persist_env_var(env_var, key)
+        return True
+    return False
+
+
+def _step_integrations(cfg, raw: dict) -> None:
+    """Prompt for API keys for the hacking tools that use an API. Catalog HTTP-API tools
+    (VirusTotal/GreyNoise/AbuseIPDB) register their tool(s) + persist the spec when a key
+    is given; env-only tools (Netlas built-in, ZoomEye MCP) just store the key. Every
+    tool is Enter-to-skip; keys persist to the user environment."""
+    from core.integration_catalog import CATALOG
+    if _menu("API keys", "Configure API keys for hacking tools that use one "
+             "(VirusTotal, GreyNoise, AbuseIPDB, Netlas, ZoomEye)?",
+             [("skip", "keyless tools still work"),
+              ("set up", "paste keys now - Enter skips any tool")], default_idx=0) == 0:
+        return
+    existing = {i.get("name") for i in (raw.get("integrations") or [])
+                if isinstance(i, dict)}
+    # HTTP-catalog integrations: a key means we persist the spec so the tool(s) register
+    # on the next launch.
+    for r in CATALOG:
+        if _prompt_api_key(r.display, r.env_var, r.signup_url, r.blurb):
+            ints = raw.setdefault("integrations", [])
+            for spec in r.specs:
+                if spec["name"] not in existing:
+                    ints.append(spec)
+                    existing.add(spec["name"])
+    # Env-only tools (a built-in / an MCP reads the env directly - no spec to persist).
+    for display, env_var, url, blurb, keyless_ok in _ENV_ONLY_API_TOOLS:
+        _prompt_api_key(display, env_var, url, blurb, keyless_ok=keyless_ok)
+
+
 # Friendly strategy names → the value written to config. "swarm" activates the
 # multi-agent supervisor at launch (mapache_cli maps it to AUTO routing + fan-out).
 _STRATEGIES = [
@@ -552,6 +630,7 @@ async def run_setup(argv: Optional[list[str]] = None) -> int:
         await _step_ollama(cfg, raw, default_model)
     _step_bins()
     _step_prefs(cfg, raw)
+    _step_integrations(cfg, raw)
     _step_messaging(cfg, raw)
 
     saved = save_global_config(raw)

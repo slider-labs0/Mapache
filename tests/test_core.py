@@ -2256,6 +2256,48 @@ def test_wizard_prefs_edit_raw():
     print("  PASS  wizard_prefs_edit_raw")
 
 
+def test_wizard_integrations_step():
+    """The setup wizard prompts for API keys for the hacking tools that use one: a
+    catalog HTTP tool (VirusTotal) persists its spec + sets the env; an env-only tool
+    (Netlas) just sets the env; 'skip' does nothing; each tool is Enter-to-skip."""
+    import builtins
+    import os
+    from cli import setup_wizard
+
+    def _feed(answers, fn):
+        it = iter(answers)
+        orig_in, orig_persist = builtins.input, setup_wizard._persist_env_var
+        builtins.input = lambda *a, **k: next(it)
+        setup_wizard._persist_env_var = lambda name, val: os.environ.__setitem__(name, val)
+        try:
+            return fn()
+        finally:
+            builtins.input = orig_in
+            setup_wizard._persist_env_var = orig_persist
+
+    # Skip at the first menu → nothing configured.
+    raw: dict = {}
+    _feed([""], lambda: setup_wizard._step_integrations(None, raw))
+    assert "integrations" not in raw or not raw["integrations"]
+
+    # Set up: VirusTotal key, skip GreyNoise + AbuseIPDB, Netlas key, skip ZoomEye.
+    for v in ("VT_API_KEY", "NETLAS_API_KEY"):
+        os.environ.pop(v, None)
+    raw = {}
+    _feed(["2", "vt-key", "", "", "netlas-key", ""],
+          lambda: setup_wizard._step_integrations(None, raw))
+    # VirusTotal is a catalog HTTP tool → its specs are persisted so they register.
+    names = {i.get("name") for i in raw.get("integrations", [])}
+    assert {"vt_file", "vt_ip"} <= names
+    assert os.environ.get("VT_API_KEY") == "vt-key"
+    # Netlas is a keyless built-in → key set in env, no spec persisted.
+    assert os.environ.get("NETLAS_API_KEY") == "netlas-key"
+    assert not any(n and n.startswith("netlas") for n in names)
+    os.environ.pop("VT_API_KEY", None)
+    os.environ.pop("NETLAS_API_KEY", None)
+    print("  PASS  wizard_integrations_step")
+
+
 def test_wizard_configure_model_choice():
     # Pure config mutation for both a local and a cloud choice, then round-trip
     # it through MapacheConfig to prove the chosen model actually routes.
@@ -7204,6 +7246,7 @@ async def run_all():
     print("\nSetup wizard (feature C1)")
     test_config_save_and_raw_roundtrip()
     test_wizard_prefs_edit_raw()
+    test_wizard_integrations_step()
     test_wizard_configure_model_choice()
     await test_wizard_choose_cloud_model_interactive()
     await test_wizard_roles_and_model_roles_config()
