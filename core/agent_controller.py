@@ -1506,7 +1506,11 @@ class AgentController:
                 fallback_target=self.chain.attack_state.target,
             )
             if not decision.allowed:
-                logger.warning("RoE refused %s: %s", tool_name, decision.reason)
+                # INFO (file log only), NOT warning: the operator already sees a clean
+                # "[blocked] RoE: refused ..." line from the agent.scope_refused event
+                # below. A warning here would ALSO print to the console/TUI and clobber
+                # that clean line with a raw "agent_controller RoE refused ..." duplicate.
+                logger.info("RoE refused %s: %s", tool_name, decision.reason)
                 self.context.add_tool_result(
                     tool_call_id, tool_name,
                     f"REFUSED by engagement scope: {decision.reason}.\n"
