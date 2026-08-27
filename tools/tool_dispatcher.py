@@ -104,7 +104,10 @@ class ToolDispatcher:
         decision = self.scope.check(tool_name, args)
         if not decision.allowed:
             self._refused_count += 1
-            logger.warning("RoE refused %s: %s", tool_name, decision.reason)
+            # INFO (file log only), not warning: a warning prints to the console/TUI and
+            # clobbers the transcript. The refusal is already returned to the model below
+            # (and surfaced cleanly by the controller's agent.scope_refused event).
+            logger.info("RoE refused %s: %s", tool_name, decision.reason)
             return (
                 f"REFUSED by engagement scope: {decision.reason}. "
                 "This action was NOT executed."
@@ -115,7 +118,10 @@ class ToolDispatcher:
             validated_args = validate_args(tool_name, tool.parameters, args)
         except SchemaValidationError as exc:
             self._error_count += 1
-            logger.warning("Schema validation failed: %s", exc)
+            # INFO, not warning: the clean "Error: Invalid arguments ..." string below is
+            # returned to the model and shown in the transcript; a warning here would ALSO
+            # print a raw "Schema validation failed: ..." line into the UI.
+            logger.info("Schema validation failed: %s", exc)
             return (
                 f"Error: Invalid arguments for tool '{tool_name}'.\n"
                 f"Problems: {'; '.join(exc.errors)}\n"
