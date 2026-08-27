@@ -301,6 +301,17 @@ def _load_json_file(path: Optional[Path]) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
+def _is_junk_model_id(model_id: str) -> bool:
+    """A provider model-list entry that is not a real, routable model id: an empty or
+    whitespace token, a display name with spaces ('Ox Alpha'), a bare number ('4'), or
+    the meta-alias 'auto' (which collides with the auto strategy). Real ids look like
+    'qwen3-max', 'z-ai/glm-5.2', 'grok-4', 'anthropic/claude-sonnet-5'."""
+    m = (model_id or "").strip()
+    if not m or " " in m or m.isdigit() or m.lower() == "auto":
+        return True
+    return False
+
+
 @dataclass
 class ProviderConfig:
     name: str
@@ -435,7 +446,12 @@ class MapacheConfig:
         for prov in self.providers.values():
             if prov.is_cloud and prov.is_usable:
                 out.extend(prov.models)
-        return out
+        # Drop junk that leaks in from provider model-list discovery (a stray token
+        # like '4', a display name with a space like 'Ox Alpha', or the meta-alias
+        # 'auto') so it never becomes a routable model.
+        seen: set[str] = set()
+        return [m for m in out
+                if not _is_junk_model_id(m) and not (m in seen or seen.add(m))]
 
     def usable_providers(self) -> list[ProviderConfig]:
         return [p for p in self.providers.values() if p.is_usable]

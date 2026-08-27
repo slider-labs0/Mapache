@@ -1798,12 +1798,38 @@ async def test_routing_strategy_switch_changes_executor():
     engine = _routing(RoutingStrategy.AUTO)
     routed = RoutedModel(engine, FakePool(), primary_model_id="qwen2.5:14b")
 
-    # AUTO scores executor by role only → 14B (higher executor_score) wins.
+    # AUTO uses the operator's configured (primary) model for every role.
     assert routed.model_for(ModelRole.EXECUTOR) == "qwen2.5:14b"
-    # Switching to PIPELINE (speed-weighted) flips it to the 7B.
+    # Switching to PIPELINE (per-role, speed-weighted executor) flips it to the 7B.
     routed.set_strategy(RoutingStrategy.PIPELINE)
     assert routed.model_for(ModelRole.EXECUTOR) == "qwen2.5:7b"
     print("  PASS  routing_strategy_switch_changes_executor")
+
+
+async def test_routing_auto_uses_configured_model():
+    """AUTO/swarm routes every role to the model the operator configured (no arbitrary
+    default): pick qwen -> qwen agents, pick claude -> claude agents. Junk pool entries
+    never become routable."""
+    from core.config import _is_junk_model_id
+    from models.model_registry import ModelRegistry, ModelRole
+    from models.routing_engine import RoutingEngine, RoutingStrategy
+
+    pool = ["z-ai/glm-5.2", "anthropic/claude-sonnet-5", "qwen3-max", "grok-4"]
+    for chosen in ("qwen3-max", "anthropic/claude-sonnet-5", "grok-4"):
+        eng = RoutingEngine(ModelRegistry(), strategy=RoutingStrategy.AUTO,
+                            primary_model_id=chosen, local_only=False)
+        eng.set_available_models(pool)
+        for role in (ModelRole.PLANNER, ModelRole.EXECUTOR, ModelRole.VERIFIER):
+            assert eng.route(role).model_id == chosen, (chosen, role)
+
+    # Junk model-id filter: display names / bare numbers / the 'auto' alias are junk;
+    # real ids are not.
+    assert _is_junk_model_id("Ox Alpha") and _is_junk_model_id("4")
+    assert _is_junk_model_id("auto") and _is_junk_model_id("")
+    assert not _is_junk_model_id("qwen3-max")
+    assert not _is_junk_model_id("anthropic/claude-sonnet-5")
+    assert not _is_junk_model_id("stealth/ox-alpha")
+    print("  PASS  routing_auto_uses_configured_model")
 
 
 # ------------------------------------------------------------------ #
@@ -7431,6 +7457,7 @@ async def run_all():
     await test_routing_pipeline_picks_fast_executor()
     await test_routing_excludes_embedding_only_model()
     await test_routing_strategy_switch_changes_executor()
+    await test_routing_auto_uses_configured_model()
 
     print("\n" + "─" * 40)
     print("All tests passed.\n")
