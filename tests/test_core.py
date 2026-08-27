@@ -2642,6 +2642,23 @@ async def test_provider_usage_and_token_accounting():
                           {"tools": [{"x": 1}]}, on_token=lambda t: None)
     assert resp["message"].get("tool_calls"), "tool call still captured"
     assert sc.session_tokens == 321, "streamed usage counted despite the tool call"
+
+    # Swarm: a child's usage bubbles up to the parent LIVE (via _parent_controller), so
+    # the TUI Budget reflects operator spend during the run, not only at completion - and
+    # it must not double-count. Nested delegations chain up.
+    parent = AgentController(model_provider=_M(), mode=AgentMode.AGENT,
+                             use_function_calling=False)
+    child = AgentController(model_provider=_M(), mode=AgentMode.AGENT,
+                            use_function_calling=False)
+    child._parent_controller = parent
+    child._add_usage({"total_tokens": 100})
+    child._add_usage({"total_tokens": 50})
+    assert child.session_tokens == 150 and parent.session_tokens == 150
+    grandchild = AgentController(model_provider=_M(), mode=AgentMode.AGENT,
+                                 use_function_calling=False)
+    grandchild._parent_controller = child
+    grandchild._add_usage({"total_tokens": 30})
+    assert child.session_tokens == 180 and parent.session_tokens == 180
     print("  PASS  provider_usage_and_token_accounting")
 
 

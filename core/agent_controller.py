@@ -1061,9 +1061,18 @@ class AgentController:
         return {"message": message}
 
     def _add_usage(self, usage: Any) -> None:
-        """Accumulate a provider `usage` block into the session token total."""
+        """Accumulate a provider `usage` block into the session token total, and bubble
+        it up to the parent controller so a swarm's live token count (TUI Budget)
+        updates DURING an operator's work, not only when it finishes."""
         if isinstance(usage, dict):
-            self.session_tokens += int(usage.get("total_tokens") or 0)
+            n = int(usage.get("total_tokens") or 0)
+            self.session_tokens += n
+            parent = getattr(self, "_parent_controller", None)
+            if parent is not None and n:
+                try:
+                    parent._add_usage({"total_tokens": n})
+                except Exception:
+                    pass
 
     # ------------------------------------------------------------------ #
     # Response parsing
@@ -1923,6 +1932,10 @@ class AgentController:
             # prior findings through it and records its own for the next stage.
             knowledge_graph=self.knowledge_graph,
         )
+        # Token accounting bubbles up live: the child adds each usage block to its own
+        # AND the parent's session_tokens as it works, so the TUI Budget reflects a
+        # swarm's spend in real time (not only when each operator finishes).
+        child._parent_controller = self
         # Stall/iteration tuning lives as per-INSTANCE overrides on the lead (a
         # flag-hunt harness, for example, raises STALL_ABORT_NOPROG so the "no new
         # findings in N steps" backstop doesn't kill a legitimate flag hunt that
@@ -1981,10 +1994,8 @@ class AgentController:
         try:
             result = await child.run(child_task, session_id=f"{session_id}:{suffix}")
         finally:
-            # Roll the child's token usage up into the parent so the engagement total
-            # (shown in the TUI Budget) reflects ALL agents, not just the lead - a swarm
-            # spends most of its tokens inside these operator children.
-            self.session_tokens += int(getattr(child, "session_tokens", 0) or 0)
+            # (Token usage already bubbled up live via child._parent_controller during
+            # the run - see _add_usage - so there is nothing to roll up here.)
             # Dispose the child's private backend (e.g. stop the container it
             # started) - factories opt in by exposing `aclose` on the backend.
             await self._teardown_backend(child_backend)
