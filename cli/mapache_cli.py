@@ -1740,6 +1740,18 @@ class MapacheCLI:
                 await ticker
             except asyncio.CancelledError:
                 pass
+        # Final HUD refresh: token usage lands at the END of a turn's stream (the usage
+        # chunk is the last piece), so the ticker's last tick often still read 0. Push
+        # one more tick with the settled totals so the Budget reflects the real spend
+        # instead of freezing at the pre-usage value.
+        _tui = getattr(self, "tui", None)
+        if _tui is not None:
+            try:
+                elapsed = time.monotonic() - getattr(self, "_turn_start_ts", time.monotonic())
+                tokens = getattr(getattr(self, "controller", None), "session_tokens", 0)
+                _tui.dashboard.tick(elapsed, tokens)
+            except Exception:
+                pass
         if clear:
             self.render.thinking_clear()
 
