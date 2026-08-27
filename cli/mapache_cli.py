@@ -787,9 +787,13 @@ class MapacheCLI:
             # Integrations (bring-your-own tools): http (e.g. VirusTotal) + command (a
             # CLI / GitHub repo) specs from config.integrations. They run through the
             # execution backend + egress like the built-ins. Warn-don't-block.
+            # Skip retired integrations (e.g. Shodan) left in an old ~/.mapache/config.json
+            # so a removed tool never resurrects from stale persisted config.
+            from core.integration_catalog import is_retired_spec
+            _cfg_ints = [i for i in (getattr(self.config, "integrations", None) or [])
+                         if not is_retired_spec(i)]
             ext_tools, ext_warn = build_external_tools(
-                getattr(self.config, "integrations", None),
-                backend=self.exec_backend, egress=self.egress)
+                _cfg_ints, backend=self.exec_backend, egress=self.egress)
             for _w in ext_warn:
                 print(f"  [!] {_w}")
             registered_ext = []

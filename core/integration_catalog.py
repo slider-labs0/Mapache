@@ -89,6 +89,24 @@ CATALOG: tuple[IntegrationRecipe, ...] = (
 
 _BY_KEY = {r.key: r for r in CATALOG}
 
+# Integrations that were removed from Mapache. A persisted spec for one of these (left
+# in a user's ~/.mapache/config.json by an old wizard setup) is skipped at load so a
+# retired tool can never resurrect from stale config. Matched by tool name or a retired
+# API host in the URL.
+RETIRED_INTEGRATIONS = frozenset({"shodan_host", "shodan_search", "shodan_internetdb"})
+_RETIRED_HOSTS = ("shodan.io",)
+
+
+def is_retired_spec(spec: Any) -> bool:
+    """True if an integration spec is a removed tool that should not be loaded."""
+    if not isinstance(spec, dict):
+        return False
+    if str(spec.get("name", "")) in RETIRED_INTEGRATIONS:
+        return True
+    url = str(spec.get("url", "")).lower()
+    return any(h in url for h in _RETIRED_HOSTS)
+
+
 # Stamp each spec with its recipe's signup URL so the built tool can point the
 # operator at where to get a key when the credential is missing (HttpApiTool reads
 # spec["signup_url"]). Done once here so it survives persistence and covers every

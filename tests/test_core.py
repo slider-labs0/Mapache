@@ -6683,6 +6683,14 @@ def test_integration_catalog():
         tools, warns = build_external_tools(list(recipe.specs))
         assert tools and not warns, (recipe.key, warns)
         assert recipe.env_var and recipe.signup_url
+    # Retired integrations (e.g. Shodan) left in a stale persisted config are skipped
+    # at load - by tool name or a retired API host in the URL - so a removed tool never
+    # resurrects. Live integrations are untouched.
+    from core.integration_catalog import is_retired_spec
+    assert is_retired_spec({"name": "shodan_search", "url": "x"})
+    assert is_retired_spec({"name": "custom", "url": "https://api.shodan.io/x"})
+    assert not is_retired_spec({"name": "vt_ip", "url": "https://virustotal.com"})
+    assert not is_retired_spec("not-a-dict")
     print("  PASS  integration_catalog")
     cfg = MapacheConfig.from_dict(
         {"execution": {"backend": "docker", "container": "kali"}})
