@@ -1432,6 +1432,26 @@ async def test_mcp_tool_allowlist():
         assert cfgs[0].tools == ["browser_click", "browser_type"]
         assert cfgs[0].timeout == 90.0
 
+    # A server env can reference a secret as ${VAR}; it interpolates from the
+    # environment (so keys like ZOOMEYE_API_KEY aren't pasted into mcp.json). An
+    # unresolved ${VAR} is dropped rather than passed as "" (which would clobber a
+    # value already exported for that key); literals pass through unchanged.
+    os.environ["ZOOMEYE_API_KEY"] = "zk_live"
+    os.environ.pop("UNSET_MCP_KEY", None)
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "mcp.json")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write('{"mcpServers": {"zoomeye": {"command": "uvx", '
+                        '"args": ["zoomeye-mcp"], "env": {'
+                        '"ZOOMEYE_API_KEY": "${ZOOMEYE_API_KEY}", '
+                        '"MISS": "${UNSET_MCP_KEY}", "LIT": "plain"}}}}')
+            cfg = load_mcp_config(p)[0]
+        assert cfg.command == "uvx" and cfg.args == ["zoomeye-mcp"]
+        assert cfg.env == {"ZOOMEYE_API_KEY": "zk_live", "LIT": "plain"}
+    finally:
+        os.environ.pop("ZOOMEYE_API_KEY", None)
+
     # The client honors the per-server timeout (used for slow Tor page loads).
     from integrations.mcp.mcp_client import MCPStdioClient, DEFAULT_TIMEOUT
     assert MCPStdioClient(MCPServerConfig(name="a", command="x", timeout=90)).\
@@ -6615,9 +6635,6 @@ def test_integration_catalog():
     r2 = detect_missing_integration(
         "shodan this ip", {"shodan_host", "shodan_search"}, environ={})
     assert r2 is not None and r2.key == "shodan"
-    # ZoomEye - the free Shodan-search alternative - is in the catalog and prompts.
-    assert detect_missing_integration(
-        "search zoomeye for webcams", set(), environ={}).key == "zoomeye"
     # Other services + unrelated input.
     assert detect_missing_integration(
         "run this hash through virustotal", set(), environ={}).key == "virustotal"

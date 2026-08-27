@@ -58,32 +58,6 @@ CATALOG: tuple[IntegrationRecipe, ...] = (
         ),
     ),
     IntegrationRecipe(
-        key="zoomeye", display="ZoomEye", env_var="ZOOMEYE_API_KEY",
-        signup_url="https://www.zoomeye.org/profile",
-        blurb="Free-tier Shodan-search alternative - find exposed hosts/devices by "
-              "service, port, product, or country.",
-        triggers=("zoomeye", "zoom eye"),
-        specs=(
-            {"name": "zoomeye_search", "kind": "http", "method": "GET",
-             "url": "https://api.zoomeye.org/host/search?query={query}&page=1",
-             "headers": {"API-KEY": "${ZOOMEYE_API_KEY}"},
-             "description": "ZoomEye host/device search (e.g. 'webcam', "
-                            "'app:\"Apache\" +country:US', 'port:8080'). Free tier with a "
-                            "monthly query quota - a Shodan-search alternative.",
-             "params": {"query": {"type": "string", "description": "ZoomEye dork/query",
-                                  "required": True}},
-             "permission": "network"},
-            {"name": "zoomeye_web", "kind": "http", "method": "GET",
-             "url": "https://api.zoomeye.org/web/search?query={query}&page=1",
-             "headers": {"API-KEY": "${ZOOMEYE_API_KEY}"},
-             "description": "ZoomEye web-app search (title, headers, tech stack) for a "
-                            "query. Free tier, uses the monthly quota.",
-             "params": {"query": {"type": "string", "description": "ZoomEye web query",
-                                  "required": True}},
-             "permission": "network"},
-        ),
-    ),
-    IntegrationRecipe(
         key="virustotal", display="VirusTotal", env_var="VT_API_KEY",
         signup_url="https://www.virustotal.com/gui/my-apikey",
         blurb="Reputation for file hashes, IPs, and domains from 70+ AV/threat feeds.",

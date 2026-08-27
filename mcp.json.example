@@ -17,6 +17,12 @@
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
       "env": {}
+    },
+    "zoomeye": {
+      "_comment": "ZoomEye's official MCP server - a free-tier Shodan-search alternative: query exposed hosts/devices/web apps by service, port, product, or country. Needs a free API key from https://www.zoomeye.org/profile (put it in env below or export ZOOMEYE_API_KEY). Runs via uv's uvx (install uv: https://docs.astral.sh/uv/); its tools appear as mcp__zoomeye__*.",
+      "command": "uvx",
+      "args": ["zoomeye-mcp"],
+      "env": {"ZOOMEYE_API_KEY": "${ZOOMEYE_API_KEY}"}
     }
   }
 }
