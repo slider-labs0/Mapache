@@ -3300,6 +3300,84 @@ async def test_offensive_arsenal():
     print("  PASS  offensive_arsenal")
 
 
+async def test_advanced_web_weapons():
+    """Beyond-common web classes: SSRF, CORS misconfig, SSTI (engine fingerprint), and
+    NoSQL injection - each confirms only on a real signal in a mocked response, and is
+    wired into the web operator's tool set."""
+    import httpx
+    import security_tools.web_advanced as wa
+    from core.operators import get_operator
+
+    def _patch(handler):
+        orig = wa.HttpClient
+        wa.HttpClient = lambda *a, **k: orig(*a, **{**k, "transport": httpx.MockTransport(handler)})
+        return orig
+
+    # SSRF: the server leaks AWS IMDS credentials when it fetches the metadata IP.
+    def ssrf_h(req):
+        if "169.254.169.254" in str(req.url):
+            return httpx.Response(200, text='{"AccessKeyId":"ASIA1","SecretAccessKey":"s"}')
+        return httpx.Response(200, text="benign page")
+    orig = _patch(ssrf_h)
+    try:
+        r = await wa.SsrfProbeTool().execute(url="http://t/fetch?url=x", param="url")
+        assert r.metadata.get("hits", 0) >= 1 and "SSRF CONFIRMED" in r.output
+    finally:
+        wa.HttpClient = orig
+
+    # CORS: reflects the attacker Origin AND allows credentials -> critical.
+    def cors_h(req):
+        o = req.headers.get("origin", "")
+        return httpx.Response(200, headers={"Access-Control-Allow-Origin": o,
+                                            "Access-Control-Allow-Credentials": "true"})
+    orig = _patch(cors_h)
+    try:
+        r = await wa.CorsAuditTool().execute(url="https://api.t/me")
+        assert r.metadata.get("critical", 0) >= 1 and "MISCONFIGURATION" in r.output
+        # A locked-down policy is not flagged.
+        orig2 = wa.HttpClient
+        wa.HttpClient = lambda *a, **k: (
+            (lambda oc: oc(*a, **{**k, "transport": httpx.MockTransport(
+                lambda req: httpx.Response(200, headers={"Access-Control-Allow-Origin":
+                                                         "https://api.t"}))}))(orig))
+        safe = await wa.CorsAuditTool().execute(url="https://api.t/me")
+        wa.HttpClient = orig2
+        assert safe.metadata.get("critical", 0) == 0
+    finally:
+        wa.HttpClient = orig
+
+    # SSTI: the server evaluates the template expression -> 49 appears.
+    def ssti_h(req):
+        return (httpx.Response(200, text="x=49") if "7" in str(req.url) and "%7B" in str(req.url).upper()
+                else httpx.Response(200, text="x=raw"))
+    orig = _patch(ssti_h)
+    try:
+        r = await wa.SstiProbeTool().execute(url="http://t/r?name=x", param="name")
+        assert r.metadata.get("ssti") is True and "SSTI CONFIRMED" in r.output
+    finally:
+        wa.HttpClient = orig
+
+    # NoSQLi: an operator object changes the response vs the benign baseline.
+    def nosql_h(req):
+        b = req.content.decode("utf-8", "ignore")
+        if any(op in b for op in ("$ne", "$gt", "$regex")):
+            return httpx.Response(200, text='{"token":"authed"}' * 4)
+        return httpx.Response(401, text="no")
+    orig = _patch(nosql_h)
+    try:
+        r = await wa.NoSqliProbeTool().execute(url="http://t/login",
+                                               fields="username,password",
+                                               body={"username": "a", "password": "b"})
+        assert r.metadata.get("injectable") is True
+    finally:
+        wa.HttpClient = orig
+
+    # Wired into the web operator.
+    web = get_operator("web_operator")
+    assert {"ssrf_probe", "cors_audit", "ssti_probe", "nosqli_probe"} <= set(web.tools)
+    print("  PASS  advanced_web_weapons")
+
+
 async def test_evidence_first_findings():
     """Evidence-first deliverable: report_finding records a structured, evidence-carrying
     finding (severity/asset/impact/remediation auto-filled by category), the store dedups
@@ -7369,6 +7447,7 @@ async def run_all():
     await test_prompt_injection_defense_and_offense()
     await test_tiered_model_routing()
     await test_offensive_arsenal()
+    await test_advanced_web_weapons()
     await test_evidence_first_findings()
     await test_http_repeater_burp_lite()
     await test_route_enumeration()

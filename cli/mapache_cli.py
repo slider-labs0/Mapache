@@ -724,10 +724,19 @@ class MapacheCLI:
             from security_tools.llm_attacks import LlmInjectTool
             from security_tools.ad_tools import AdAttackTool
             from security_tools.reversing_tools import BinaryAnalyzeTool
+            # Advanced web-attack classes beyond the common SQLi/IDOR/XSS: SSRF,
+            # CORS misconfig, SSTI (engine-fingerprinted -> RCE), NoSQL injection.
+            # They share the authenticated web session + egress with the other web tools.
+            from security_tools.web_advanced import (SsrfProbeTool, CorsAuditTool,
+                                                     SstiProbeTool, NoSqliProbeTool)
             for _t in (SearchPayloadsTool(), JwtTool(), GraphqlTool(session=web_session),
                        SecretScanTool(), TechDetectTool(session=web_session),
                        CloudMetadataTool(), LlmInjectTool(session=web_session),
-                       AdAttackTool(), BinaryAnalyzeTool()):
+                       AdAttackTool(), BinaryAnalyzeTool(),
+                       SsrfProbeTool(egress=self.egress, session=web_session),
+                       CorsAuditTool(egress=self.egress, session=web_session),
+                       SstiProbeTool(egress=self.egress, session=web_session),
+                       NoSqliProbeTool(egress=self.egress, session=web_session)):
                 self.registry.register(_t)
             # Real headless browser (capability #1): renders JavaScript/SPAs that the
             # raw HTTP tools can't. Safe to register even without Playwright - it

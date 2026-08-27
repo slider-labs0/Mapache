@@ -99,7 +99,8 @@ _RECON = {"nmap_scan", "web_fetch", "web_search", "http_request", "http_repeater
           "shell", "searchsploit", "tech_detect"}
 _WEB = {"kali_run", "web_fetch", "web_search", "http_request", "http_repeater",
         "browser", "sqlmap", "fuzz", "burp_scan", "burp_proxy", "searchsploit", "shell",
-        "tech_detect", "jwt_tool", "graphql", "llm_inject", "code_run"}
+        "tech_detect", "jwt_tool", "graphql", "llm_inject", "code_run",
+        "ssrf_probe", "cors_audit", "ssti_probe", "nosqli_probe"}
 _EXPLOIT = {"msf_search", "msf_run", "msf_sessions", "searchsploit", "http_request",
             "http_repeater", "sqlmap", "fuzz", "kali_run", "shell", "jwt_tool", "graphql",
             "llm_inject", "ad_attack", "code_run"}
