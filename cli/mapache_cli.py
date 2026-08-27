@@ -762,6 +762,22 @@ class MapacheCLI:
                                   "required": True}},
                 "permission": "network",
             }, egress=self.egress))
+            # Free, keyless Certificate Transparency search (crt.sh): find an org's
+            # subdomains/hostnames from issued TLS certs. No key - a strong Shodan-free
+            # passive-recon primitive. Query a domain (example.com) or a wildcard
+            # (%.example.com) for subdomains.
+            self.registry.register(HttpApiTool({
+                "name": "crtsh_search", "kind": "http", "method": "GET",
+                "url": "https://crt.sh/?q={query}&output=json",
+                "description": "Certificate Transparency search (crt.sh): subdomains and "
+                               "hostnames from issued TLS certificates for a domain. Free, "
+                               "no API key. Use a bare domain (example.com) or a wildcard "
+                               "(%.example.com) to enumerate subdomains. Passive.",
+                "params": {"query": {"type": "string", "description":
+                                     "domain or wildcard, e.g. example.com or %.example.com",
+                                     "required": True}},
+                "permission": "network",
+            }, egress=self.egress))
 
             # Phase 6 - Advanced security
             self.registry.register(MetasploitSearchTool())

@@ -6615,6 +6615,9 @@ def test_integration_catalog():
     r2 = detect_missing_integration(
         "shodan this ip", {"shodan_host", "shodan_search"}, environ={})
     assert r2 is not None and r2.key == "shodan"
+    # ZoomEye - the free Shodan-search alternative - is in the catalog and prompts.
+    assert detect_missing_integration(
+        "search zoomeye for webcams", set(), environ={}).key == "zoomeye"
     # Other services + unrelated input.
     assert detect_missing_integration(
         "run this hash through virustotal", set(), environ={}).key == "virustotal"
