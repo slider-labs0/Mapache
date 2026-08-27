@@ -2632,6 +2632,44 @@ def test_scope_fallback_target_and_ip_in_command():
     print("  PASS  scope_fallback_target_and_ip_in_command")
 
 
+def test_scope_lan_scan_guard():
+    """The agent may not scan internal/RFC1918 hosts it invented - even with no
+    scope.json - unless the range is the stated target, is in scope, or allow_private
+    is set. Non-scanner tools and public/loopback targets are unaffected."""
+    s = EngagementScope()  # no scope.json at all
+    assert not s.active
+    # Agent invents a LAN scan while the engagement target is a domain → refused.
+    d = s.check("nmap_scan", {"target": "192.168.1.0/24"},
+                fallback_target="campushillchurch.net")
+    assert not d.allowed and "192.168.1.0" in d.reason and "LAN" in d.reason
+    # A raw shell running a scanner against the LAN → refused too.
+    assert not s.check("shell", {"cmd": "nmap -sV 10.0.0.0/24"},
+                       fallback_target="example.com").allowed
+    assert not s.check("shell", {"cmd": "gobuster dir -u http://192.168.0.5"},
+                       fallback_target="example.com").allowed
+    # But the LAN host IS the stated target → allowed.
+    assert s.check("nmap_scan", {"target": "192.168.1.5"},
+                   fallback_target="192.168.1.5").allowed
+    assert s.check("nmap_scan", {"target": "192.168.1.7"},
+                   fallback_target="192.168.1.0/24").allowed
+    # Loopback (local practice target) and public hosts are never LAN-guarded.
+    assert s.check("nmap_scan", {"target": "127.0.0.1"}).allowed
+    assert s.check("nmap_scan", {"target": "scanme.nmap.org"},
+                   fallback_target="scanme.nmap.org").allowed
+    # A private IP that merely appears in a non-scanner command (reading a log) is
+    # NOT a scan → allowed (no false positive).
+    assert s.check("shell", {"cmd": "grep 10.0.0.5 /var/log/auth.log"}).allowed
+    # allow_private lifts the guard for a deliberate internal engagement.
+    sp = EngagementScope(allow_private=True)
+    assert sp.check("nmap_scan", {"target": "192.168.1.0/24"},
+                    fallback_target="example.com").allowed
+    # Listing the range in scope also allows it; a different LAN range stays refused.
+    sc = EngagementScope.from_dict({"targets": ["192.168.1.0/24"]})
+    assert sc.check("nmap_scan", {"target": "192.168.1.50"}).allowed
+    assert not sc.check("nmap_scan", {"target": "10.0.0.0/24"}).allowed
+    print("  PASS  scope_lan_scan_guard")
+
+
 def test_scope_forbidden_tools_and_patterns():
     s = EngagementScope.from_dict({
         "targets": ["10.10.10.0/24"],
@@ -7129,6 +7167,7 @@ async def run_all():
     test_scope_inactive_allows_everything()
     test_scope_target_allowlist()
     test_scope_fallback_target_and_ip_in_command()
+    test_scope_lan_scan_guard()
     test_scope_forbidden_tools_and_patterns()
     test_scope_load_fail_soft()
     await test_controller_scope_refusal()

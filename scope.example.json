@@ -1,5 +1,5 @@
 {
-  "_comment": "Rules-of-Engagement scope (feature J). Copy to scope.json in your working dir (or pass --scope <path>) to enforce. Mapache refuses any tool call against an out-of-scope target, a forbidden tool, or a forbidden argument pattern — before it runs. Delete this file (or leave no scope.json) to disable enforcement entirely.",
+  "_comment": "Rules-of-Engagement scope (feature J). Copy to scope.json in your working dir (or pass --scope <path>) to enforce. Mapache refuses any tool call against an out-of-scope target, a forbidden tool, or a forbidden argument pattern — before it runs. Delete this file (or leave no scope.json) to disable enforcement entirely. NOTE: scanning private/RFC1918 (LAN) ranges is refused by default even with no scope file, unless the range is your target/in 'targets' or you set 'allow_private': true below.",
   "name": "ACME external pentest 2026-06",
   "targets": [
     "10.10.10.0/24",
@@ -14,5 +14,7 @@
     "shutdown",
     "mkfs"
   ],
-  "allow_loopback": true
+  "allow_loopback": true,
+  "_comment_allow_private": "Set to true ONLY for a deliberate internal/LAN engagement, to lift the default guard that refuses scanning private/RFC1918 ranges. Leave false for external/OSINT work.",
+  "allow_private": false
 }
