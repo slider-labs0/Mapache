@@ -11,8 +11,10 @@ rendered arithmetic result), not a guess.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+import ssl
 import time
 import urllib.parse
 from typing import Any, Optional
@@ -415,3 +417,141 @@ class NoSqliProbeTool(_WebToolBase):
             header + "\n\nNo NoSQL-injection signal (responses matched the baseline). The "
             "backend may not be Mongo-style, or it coerces the operators to strings.",
             metadata={"url": url, "injectable": False})
+
+
+# --------------------------------------------------------------------------- #
+# HTTP request smuggling (front-end/back-end desync)
+# --------------------------------------------------------------------------- #
+
+class SmuggleProbeTool(_WebToolBase):
+    """Detect HTTP request smuggling (front-end/back-end desync) with the timing
+    technique: send crafted CL.TE / TE.CL / TE-obfuscation probes on a raw HTTP/1.1
+    connection and flag the class whose probe hangs (the back-end waits for body bytes
+    that never arrive) while a baseline request is fast. DETECTION ONLY - it does not
+    smuggle a malicious request. Raw sockets, so it goes DIRECT (does not honor an
+    egress proxy/Tor), and it can disturb a shared front-end, so use it only in scope."""
+
+    name = "smuggle_probe"
+    description = (
+        "Detect HTTP request smuggling (CL.TE / TE.CL desync, plus Transfer-Encoding "
+        "header-obfuscation TE.TE) with the timing technique: a probe that desyncs makes "
+        "the back-end wait for body bytes that never arrive, so its response is delayed "
+        "while a baseline request is fast. Give the `url`. DETECTION ONLY (no malicious "
+        "request is smuggled). Uses a raw socket (goes direct, not via the egress proxy) "
+        "and can disturb a shared front-end - run it only against an authorized target."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "Target URL, e.g. https://t/ (a POST-able path)."},
+        },
+        "required": ["url"],
+    }
+    permissions = {Permission.NETWORK}
+    timeout = 60
+    tags = ["web", "smuggling", "desync"]
+
+    _WAIT = 8.0  # per-probe response wait; a desync hangs to about here
+
+    def _raw(self, host: str, path: str, headers: list[str], body: str) -> bytes:
+        head = [f"POST {path} HTTP/1.1", f"Host: {host}", "Connection: close",
+                "Content-Type: application/x-www-form-urlencoded", *headers]
+        return ("\r\n".join(head) + "\r\n\r\n" + body).encode("latin-1", "ignore")
+
+    async def _send(self, host: str, port: int, tls: bool, raw: bytes) -> float:
+        """Send `raw`, return seconds until the first response byte (or the wait cap)."""
+        ctx = None
+        if tls:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+        start = time.monotonic()
+        writer = None
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(host, port, ssl=ctx), timeout=self._WAIT)
+            writer.write(raw)
+            await writer.drain()
+            try:
+                await asyncio.wait_for(reader.read(1), timeout=self._WAIT)
+            except asyncio.TimeoutError:
+                return self._WAIT  # hung waiting for the body it was told to expect
+            return time.monotonic() - start
+        except asyncio.TimeoutError:
+            return self._WAIT
+        except Exception:
+            return -1.0
+        finally:
+            if writer is not None:
+                try:
+                    writer.close()
+                except Exception:
+                    pass
+
+    async def execute(self, url: str, **kwargs: Any) -> ToolResult:
+        url = (url or "").strip()
+        if not url:
+            return ToolResult.fail("smuggle_probe: 'url' is required")
+        parts = urllib.parse.urlsplit(url if "://" in url else "http://" + url)
+        tls = parts.scheme == "https"
+        host = parts.hostname or ""
+        if not host:
+            return ToolResult.fail("smuggle_probe: could not parse a host from the URL")
+        port = parts.port or (443 if tls else 80)
+        path = parts.path or "/"
+
+        # Baseline: a well-formed request should answer quickly - take the faster of two.
+        base_raw = self._raw(host, path, ["Content-Length: 0"], "")
+        b1 = await self._send(host, port, tls, base_raw)
+        b2 = await self._send(host, port, tls, base_raw)
+        good = [t for t in (b1, b2) if t >= 0]
+        if not good:
+            return ToolResult.fail(
+                f"smuggle_probe: could not reach {host}:{port} (connection failed).")
+        baseline = min(good)
+
+        # CL.TE: front uses Content-Length (4), back uses Transfer-Encoding -> back hangs
+        # waiting for the chunk terminator.
+        clte = self._raw(host, path, ["Transfer-Encoding: chunked", "Content-Length: 4"],
+                         "1\r\nA\r\nX")
+        # TE.CL: front uses Transfer-Encoding (0-chunk = done), back uses Content-Length
+        # (6) and waits for bytes that were not forwarded.
+        tecl = self._raw(host, path, ["Transfer-Encoding: chunked", "Content-Length: 6"],
+                         "0\r\n\r\nX")
+        # TE.TE: obfuscate one TE header so exactly one hop honors it.
+        tete = self._raw(host, path,
+                         ["Transfer-Encoding: chunked", "Transfer-Encoding: xchunked",
+                          "Content-Length: 4"], "1\r\nA\r\nX")
+
+        probes = [("CL.TE", clte), ("TE.CL", tecl), ("TE.TE (obfuscated)", tete)]
+        rows: list[str] = []
+        vulnerable: list[str] = []
+        # A probe is a desync signal when it reaches the wait cap (the back-end hung
+        # waiting for body bytes) AND is clearly slower than the fast baseline.
+        cap = self._WAIT - 0.5
+        for label, raw in probes:
+            t = await self._send(host, port, tls, raw)
+            if t < 0:
+                rows.append(f"  {label:20} -> connection error")
+                continue
+            hung = t >= cap and t >= baseline * 2 + 0.5
+            rows.append(f"  {label:20} -> {t:.1f}s"
+                        + ("  <-- HUNG (desync signal)" if hung else ""))
+            if hung:
+                vulnerable.append(label)
+
+        header = (f"smuggle_probe - {host}:{port}{path}\n"
+                  f"  baseline (well-formed) -> {baseline:.1f}s "
+                  f"(hang cap {cap:.1f}s)\n" + "\n".join(rows))
+        if vulnerable:
+            return ToolResult.ok(
+                header + "\n\nLIKELY REQUEST SMUGGLING (" + ", ".join(vulnerable) + "): a "
+                "desync probe hung while the baseline was fast. Confirm by re-running "
+                "(timing can be noisy) and, in scope, escalate carefully - request "
+                "smuggling can affect OTHER users of the shared front-end.",
+                metadata={"host": host, "vulnerable": vulnerable})
+        return ToolResult.ok(
+            header + "\n\nNo desync signal (all probes answered near the baseline). Note "
+            "timing detection has false negatives behind aggressive normalizers - a "
+            "differential-response test is the follow-up.",
+            metadata={"host": host, "vulnerable": []})

@@ -728,7 +728,8 @@ class MapacheCLI:
             # CORS misconfig, SSTI (engine-fingerprinted -> RCE), NoSQL injection.
             # They share the authenticated web session + egress with the other web tools.
             from security_tools.web_advanced import (SsrfProbeTool, CorsAuditTool,
-                                                     SstiProbeTool, NoSqliProbeTool)
+                                                     SstiProbeTool, NoSqliProbeTool,
+                                                     SmuggleProbeTool)
             for _t in (SearchPayloadsTool(), JwtTool(), GraphqlTool(session=web_session),
                        SecretScanTool(), TechDetectTool(session=web_session),
                        CloudMetadataTool(), LlmInjectTool(session=web_session),
@@ -736,7 +737,8 @@ class MapacheCLI:
                        SsrfProbeTool(egress=self.egress, session=web_session),
                        CorsAuditTool(egress=self.egress, session=web_session),
                        SstiProbeTool(egress=self.egress, session=web_session),
-                       NoSqliProbeTool(egress=self.egress, session=web_session)):
+                       NoSqliProbeTool(egress=self.egress, session=web_session),
+                       SmuggleProbeTool(egress=self.egress, session=web_session)):
                 self.registry.register(_t)
             # Real headless browser (capability #1): renders JavaScript/SPAs that the
             # raw HTTP tools can't. Safe to register even without Playwright - it
