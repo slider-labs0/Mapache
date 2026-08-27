@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import re
 import shutil
 import sys
 import threading
@@ -1547,6 +1548,29 @@ class MapacheCLI:
         if not keep_going and self.tui is not None and self.tui._app is not None:
             self.tui._app.exit()
 
+    _ENGAGEMENT_RE = re.compile(
+        r"\b(scan|nmap|enumerate|recon|exploit|attack|pentest|pen[- ]?test|vuln\w*|"
+        r"cve|payload|inject\w*|brute[- ]?force|crack|privesc|escalat\w*|lateral|"
+        r"exfil\w*|foothold|shell|rce|sqli|xss|ssrf|lfi|rfi|idor|subdomain|osint|"
+        r"footprint|camera|webcam|exposed|breach|phish\w*|credential|password|"
+        r"metasploit|msf|hydra|gobuster|ffuf|sqlmap|nikto|burp|target|host)\b",
+        re.IGNORECASE)
+    # scheme://host, a bare domain, or an IPv4 - a concrete target in the text.
+    _TARGET_RE = re.compile(
+        r"\b(?:[a-z][a-z0-9+.\-]*://\S+|(?:\d{1,3}\.){3}\d{1,3}"
+        r"|[a-z0-9-]+(?:\.[a-z0-9-]+)+\.[a-z]{2,})\b", re.IGNORECASE)
+
+    def _is_engagement_objective(self, text: str) -> bool:
+        """Whether this input is an actual engagement to route through the swarm, vs a
+        greeting / plain question that the lead should just answer. True if a target is
+        already set, or the text names a target (host/URL/IP) or offensive intent."""
+        t = (text or "").strip()
+        if not t:
+            return False
+        if str(getattr(self.controller.chain.attack_state, "target", "") or "").strip():
+            return True
+        return bool(self._ENGAGEMENT_RE.search(t) or self._TARGET_RE.search(t))
+
     async def _agent_turn(self, user_input: str) -> None:
         if self.controller is None:
             return
@@ -1563,7 +1587,10 @@ class MapacheCLI:
         # specialist operators instead of the single lead loop. Its delegate.start/
         # end events drive the existing handoff banners + colour routing, so the
         # operators are visible as they're deployed.
-        if self.swarm:
+        # BUT: a non-actionable input (a greeting, a plain question) with no target is
+        # not an engagement - don't deploy a Recon Operator to nmap-scan nothing for
+        # "hello". Hand those to the lead agent for a normal reply.
+        if self.swarm and self._is_engagement_objective(user_input):
             try:
                 from core.orchestrator import Supervisor, make_model_planner
                 sres = await Supervisor(

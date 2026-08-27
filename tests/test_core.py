@@ -6071,6 +6071,29 @@ async def test_social_lookup_instagram_to_linkedin():
     print("  PASS  social_lookup_instagram_to_linkedin")
 
 
+def test_swarm_skips_non_engagement_input():
+    """Swarm must not deploy a Recon Operator to nmap-scan nothing for a greeting. Only
+    an actual engagement (a target is set, or the text names a host/URL/IP or offensive
+    intent) routes through the swarm; small-talk goes to the lead."""
+    import types
+    from cli.mapache_cli import MapacheCLI
+
+    cli = object.__new__(MapacheCLI)
+    cli.controller = types.SimpleNamespace(
+        chain=types.SimpleNamespace(attack_state=types.SimpleNamespace(target="")))
+
+    for chit in ("hello", "hi there", "thanks!", "what can you do?", "how are you"):
+        assert cli._is_engagement_objective(chit) is False, chit
+    for job in ("scan example.com", "enumerate the host", "find exposed cameras",
+                "nmap 10.0.0.5", "pentest https://acme.io", "recon acme.com",
+                "exploit the target"):
+        assert cli._is_engagement_objective(job) is True, job
+    # Once a target is set, even a bare follow-up continues the engagement.
+    cli.controller.chain.attack_state.target = "10.0.0.5"
+    assert cli._is_engagement_objective("what next") is True
+    print("  PASS  swarm_skips_non_engagement_input")
+
+
 def test_enhanced_input_completion():
     from cli import enhanced_input as ei
 
@@ -7443,6 +7466,7 @@ async def run_all():
     test_tui_dashboard_model()
     test_agent_color_routing()
     await test_subagent_trace_dedupes_action()
+    test_swarm_skips_non_engagement_input()
     test_enhanced_input_completion()
     await test_cli_ptk_turn_no_concurrent_prompt()
 
