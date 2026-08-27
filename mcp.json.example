@@ -19,9 +19,9 @@
       "env": {}
     },
     "zoomeye": {
-      "_comment": "ZoomEye's official MCP server (github.com/zoomeye-ai/mcp_zoomeye) - query exposed hosts/devices/web apps by service, port, product, or country. Needs a free API key from https://www.zoomeye.org/profile (put it in env below or export ZOOMEYE_API_KEY). Runs via uv's uvx (install uv: https://docs.astral.sh/uv/); its tools appear as mcp__zoomeye__*.",
+      "_comment": "ZoomEye's official MCP server (github.com/zoomeye-ai/mcp_zoomeye) - query exposed hosts/devices/web apps by service, port, product, or country. Needs a free API key from https://www.zoomeye.org/profile (put it in env below or export ZOOMEYE_API_KEY). Runs via uv's uvx (install uv: https://docs.astral.sh/uv/); its tools appear as mcp__zoomeye__*. NOTE: the published mcp-server-zoomeye 0.1.5 forgets to declare httpx and predates the mcp 2.x API rewrite, so we inject '--with httpx' and pin '--with mcp<2'; drop those two once upstream ships a fixed release.",
       "command": "uvx",
-      "args": ["mcp-server-zoomeye"],
+      "args": ["--with", "httpx", "--with", "mcp<2", "mcp-server-zoomeye"],
       "env": {"ZOOMEYE_API_KEY": "${ZOOMEYE_API_KEY}"}
     }
   }
