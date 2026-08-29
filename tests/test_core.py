@@ -3366,6 +3366,154 @@ async def test_domain_capability_tools():
     print("  PASS  domain_capability_tools")
 
 
+async def test_remaining_discipline_tools():
+    """The final discipline weapons - ICS/Modbus enum, Wi-Fi handshake analysis, DFIR
+    log-timeline, supply-chain dep audit, Solidity static scan - each produces evidence
+    from a real target and is wired into its operator."""
+    import asyncio
+    import os
+    import struct
+    import tempfile
+    from core.operators import get_operator
+    from security_tools.ics_tools import ModbusScanTool
+    from security_tools.wireless_tools import HandshakeAnalyzeTool
+    from security_tools.dfir_tools import LogTimelineTool
+    from security_tools.supply_chain_tools import DepAuditTool, _typosquat, _dl_distance
+    from security_tools.contract_tools import ContractScanTool
+
+    # --- ICS: read-only Modbus/TCP against a mock PLC ----------------------- #
+    async def _plc(reader, writer):
+        try:
+            while True:
+                head = await reader.readexactly(7)
+                txid, _pid, length, unit = struct.unpack(">HHHB", head)
+                pdu = await reader.readexactly(length - 1)
+                func = pdu[0]
+                if func == 0x2B and pdu[1] == 0x0E:
+                    objs = [(0, b"Schneider Electric"), (1, b"BMXP342020"), (2, b"v2.7")]
+                    body = bytes([0x2B, 0x0E, 0x01, 0x81, 0x00, 0x00, len(objs)])
+                    for oid, val in objs:
+                        body += bytes([oid, len(val)]) + val
+                elif func == 0x03:
+                    _s, cnt = struct.unpack(">HH", pdu[1:5])
+                    regs = b"".join(struct.pack(">H", 100 + i) for i in range(cnt))
+                    body = bytes([0x03, len(regs)]) + regs
+                elif func == 0x01:
+                    body = bytes([0x01, 0x01, 0b10101010])
+                else:
+                    body = bytes([func | 0x80, 0x01])
+                writer.write(struct.pack(">HHHB", txid, 0, len(body) + 1, unit) + body)
+                await writer.drain()
+        except Exception:
+            pass
+        finally:
+            try:
+                writer.close()
+            except Exception:
+                pass
+    srv = await asyncio.start_server(_plc, "127.0.0.1", 0)
+    port = srv.sockets[0].getsockname()[1]
+    async with srv:
+        r = await ModbusScanTool().execute(host="127.0.0.1", port=port, unit_id=1, count=4)
+        assert r.success and "Schneider Electric" in r.output and "BMXP342020" in r.output
+        assert r.metadata["identity"] >= 2 and r.metadata["reads"] >= 1
+        assert "unauthenticated" in r.output.lower()
+    # Unreachable port -> clean failure (not a crash).
+    r = await ModbusScanTool().execute(host="127.0.0.1", port=1, unit_id=1)
+    assert not r.success
+
+    # --- Wireless: a synthetic pcap with a beacon + M1(PMKID)+M2 EAPOL ------- #
+    def _radiotap():
+        return b"\x00\x00\x08\x00\x00\x00\x00\x00"
+    def _beacon(bssid, ssid):
+        return (b"\x80\x00\x00\x00" + b"\xff" * 6 + bssid + bssid + b"\x00\x00" +
+                b"\x00" * 8 + b"\x64\x00" + b"\x11\x04" + b"\x00" + bytes([len(ssid)]) + ssid)
+    def _eapol(bssid, cli, key_info, pmkid=None, from_ds=True):
+        fc = b"\x08" + (b"\x02" if from_ds else b"\x01")
+        a1, a2, a3 = (cli, bssid, bssid) if from_ds else (bssid, cli, cli)
+        mac = fc + b"\x00\x00" + a1 + a2 + a3 + b"\x00\x00"
+        snap = b"\xaa\xaa\x03\x00\x00\x00\x88\x8e"
+        kd = (b"\xdd\x14\x00\x0f\xac\x04" + pmkid) if pmkid else b""
+        body = (b"\x02\x03" + struct.pack(">H", 90) + b"\x02" +
+                struct.pack(">H", key_info) + b"\x00\x10" + b"\x00" * 90 + kd)
+        return mac + snap + body
+    def _rec(p):
+        return struct.pack("<IIII", 0, 0, len(p), len(p)) + p
+    BSSID, CLI = b"\xaa" * 6, b"\xbb" * 6
+    pkts = [_beacon(BSSID, b"TestNet0"),
+            _eapol(BSSID, CLI, 0x0088, pmkid=bytes(range(16)), from_ds=True),
+            _eapol(BSSID, CLI, 0x0108, from_ds=False)]
+    cap = struct.pack("<IHHIIII", 0xa1b2c3d4, 2, 4, 0, 0, 65535, 127) + \
+        b"".join(_rec(_radiotap() + p) for p in pkts)
+
+    with tempfile.TemporaryDirectory() as d:
+        fp = os.path.join(d, "h.pcap")
+        with open(fp, "wb") as fh:
+            fh.write(cap)
+        r = await HandshakeAnalyzeTool().execute(path=fp)
+        assert r.success and r.metadata["crackable"] == 1 and r.metadata["pmkid"] == 1
+        assert "TestNet0" in r.output and "hashcat -m 22000" in r.output
+        # An empty/garbage file is rejected cleanly.
+        bad = os.path.join(d, "bad.pcap")
+        with open(bad, "wb") as fh:
+            fh.write(b"not a pcap file at all")
+        assert not (await HandshakeAnalyzeTool().execute(path=bad)).success
+
+        # --- DFIR: an auth.log + access.log with real IOCs ------------------ #
+        with open(os.path.join(d, "auth.log"), "w") as fh:
+            for i in range(7):
+                fh.write(f"Aug 28 10:0{i}:00 h sshd[1]: Failed password for admin "
+                         "from 1.2.3.4 port 5 ssh2\n")
+            fh.write("Aug 28 10:08:00 h sshd[1]: Accepted password for admin from "
+                     "1.2.3.4 port 5 ssh2\n")
+            fh.write("Aug 28 10:09:00 h useradd[1]: new user: name=backdoor, UID=0\n")
+        with open(os.path.join(d, "access.log"), "w") as fh:
+            fh.write('9.9.9.9 - - [28/Aug/2026:10:00:00 +0000] "GET /x?id=1 union '
+                     'select 1,2 HTTP/1.1" 200 12 "-" "sqlmap/1.6"\n')
+            fh.write('9.9.9.9 - - [28/Aug/2026:10:00:01 +0000] "GET /../../../../etc/'
+                     'passwd HTTP/1.1" 200 12 "-" "curl/8"\n')
+        r = await LogTimelineTool().execute(path=d)
+        assert r.success and r.metadata["web_attacks"] >= 2
+        assert r.metadata["brute_force_ips"] >= 1
+        assert "SUCCESS AFTER" in r.output and "backdoor" in r.output
+
+    # --- Supply chain: typosquat + install script + URL dep ----------------- #
+    assert _dl_distance("reqeusts", "requests") == 1
+    assert _typosquat("reqeusts", "pypi") == "requests"
+    assert _typosquat("requests", "pypi") is None  # the real package is not flagged
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "package.json"), "w") as fh:
+            fh.write('{"dependencies":{"express":"^4.0.0","lodahs":"1.0.0",'
+                     '"evil":"git+https://x/y"},"scripts":{"postinstall":"node s.js"}}')
+        with open(os.path.join(d, "requirements.txt"), "w") as fh:
+            fh.write("reqeusts\nflask>=1.0\nnumpy==1.2.3\n")
+        r = await DepAuditTool().execute(path=d)
+        assert r.metadata["typosquats"] >= 2 and r.metadata["install_scripts"] >= 1
+        assert r.metadata["url_deps"] >= 1 and "typosquat" in r.output.lower()
+
+    # --- web3: Solidity static analysis ------------------------------------- #
+    src = ("pragma solidity ^0.7.0;\ncontract Bank {\n"
+           " mapping(address=>uint) public bal;\n address owner;\n"
+           " function withdraw() public {\n"
+           "  (bool ok,) = msg.sender.call{value: bal[msg.sender]}(\"\");\n"
+           "  bal[msg.sender] = 0;\n }\n"
+           " function setOwner(address n) public { owner = n; }\n"
+           " function auth() public { require(tx.origin == owner); }\n"
+           " function kill() public { selfdestruct(payable(owner)); }\n}\n")
+    r = await ContractScanTool().execute(source=src)
+    assert r.success and r.metadata["findings"] >= 4
+    for kw in ("REENTRANCY", "tx.origin", "selfdestruct", "setOwner"):
+        assert kw in r.output, kw
+
+    # --- operator wiring ---------------------------------------------------- #
+    assert "modbus_scan" in get_operator("ics_operator").tools
+    assert "handshake_analyze" in get_operator("wireless_operator").tools
+    assert "log_timeline" in get_operator("forensicator").tools
+    assert "dep_audit" in get_operator("supply_chain_operator").tools
+    assert "contract_scan" in get_operator("contract_auditor").tools
+    print("  PASS  remaining_discipline_tools")
+
+
 async def test_advanced_web_weapons():
     """Beyond-common web classes: SSRF, CORS misconfig, SSTI (engine fingerprint), and
     NoSQL injection - each confirms only on a real signal in a mocked response, and is
@@ -3837,6 +3985,34 @@ def test_attack_logic_next_moves():
     # The moves are injected into the prompt block.
     block = s.to_prompt_block()
     assert "PRIORITIZED NEXT MOVES" in block
+
+    # Deeper killchains: a FOOTHOLD pivots to the staged post-exploitation chain
+    # (privesc -> loot -> lateral -> persist), and it outranks more enumeration.
+    s = AttackState(); s.target = "h"; s.open_ports = ["22/tcp"]
+    s.notes = ["got a shell as www-data uid=33"]
+    assert any("FOOTHOLD (Linux)" in m and "linPEAS" in m and "LATERAL" in m
+               for m in next_moves(s))
+    s = AttackState(); s.target = "h"; s.open_ports = ["445/tcp"]
+    s.notes = ["reverse shell on a windows host"]
+    assert any("FOOTHOLD (Windows)" in m and "Domain Admin" in m for m in next_moves(s))
+
+    # Cross-signal combo: creds + SMB -> secretsdump/lateral, not just a generic spray.
+    s = AttackState(); s.target = "h"; s.open_ports = ["445/tcp"]; s.credentials = ["a:b"]
+    assert any("secretsdump" in m for m in next_moves(s))
+
+    # The remaining disciplines route to their evidence-first tools.
+    for notes, tool in [
+        (["exposed modbus PLC on 502"], "modbus_scan"),
+        (["captured a wpa handshake / pmkid in wifi.pcap"], "handshake_analyze"),
+        (["analyze auth.log for the incident timeline"], "log_timeline"),
+        (["audit the project's package.json dependencies"], "dep_audit"),
+        (["review the solidity smart contract for reentrancy"], "contract_scan"),
+    ]:
+        s = AttackState(); s.target = "t"; s.notes = notes
+        assert any(tool in m for m in next_moves(s)), (tool, next_moves(s))
+    # ICS routing must carry the read-only / safety guardrail.
+    s = AttackState(); s.target = "plc"; s.open_ports = ["502/tcp"]
+    assert any("modbus_scan" in m and "READ-ONLY" in m for m in next_moves(s))
     print("  PASS  attack_logic_next_moves")
 
 
@@ -7651,6 +7827,7 @@ async def run_all():
     await test_offensive_arsenal()
     await test_advanced_web_weapons()
     await test_domain_capability_tools()
+    await test_remaining_discipline_tools()
     await test_evidence_first_findings()
     await test_http_repeater_burp_lite()
     await test_route_enumeration()

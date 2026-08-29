@@ -728,6 +728,13 @@ class MapacheCLI:
             from security_tools.cloud_enum import CloudEnumTool
             from security_tools.device_tools import MobileScanTool, FirmwareScanTool
             from security_tools.reversing_tools import BinaryAnalyzeTool
+            # The remaining discipline weapons: ICS/Modbus enum, Wi-Fi handshake
+            # analysis, DFIR log-timeline, supply-chain dep audit, Solidity static scan.
+            from security_tools.ics_tools import ModbusScanTool
+            from security_tools.wireless_tools import HandshakeAnalyzeTool
+            from security_tools.dfir_tools import LogTimelineTool
+            from security_tools.supply_chain_tools import DepAuditTool
+            from security_tools.contract_tools import ContractScanTool
             # Advanced web-attack classes beyond the common SQLi/IDOR/XSS: SSRF,
             # CORS misconfig, SSTI (engine-fingerprinted -> RCE), NoSQL injection.
             # They share the authenticated web session + egress with the other web tools.
@@ -743,7 +750,8 @@ class MapacheCLI:
                        CloudMetadataTool(), LlmInjectTool(session=web_session),
                        AdAttackTool(), BinaryAnalyzeTool(),
                        CloudEnumTool(backend=self.exec_backend), MobileScanTool(),
-                       FirmwareScanTool(),
+                       FirmwareScanTool(), ModbusScanTool(), HandshakeAnalyzeTool(),
+                       LogTimelineTool(), DepAuditTool(), ContractScanTool(),
                        SsrfProbeTool(**_es), CorsAuditTool(**_es), SstiProbeTool(**_es),
                        NoSqliProbeTool(**_es), SmuggleProbeTool(**_es),
                        ProtoPollutionTool(**_es), XxeTool(**_es), DeserializeGadgetTool(),

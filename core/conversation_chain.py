@@ -96,6 +96,12 @@ PORT_TOOLS = {
     "445":  {"msf_search", "msf_run", "kali_run"},
     "139":  {"msf_search", "msf_run", "kali_run"},
     "3389": {"msf_search", "msf_run", "kali_run"},
+    # ICS/OT: Modbus, S7comm, DNP3, EtherNet/IP, BACnet -> read-only enum tool.
+    "502":  {"modbus_scan", "kali_run"},
+    "102":  {"modbus_scan", "kali_run"},
+    "20000": {"modbus_scan", "kali_run"},
+    "44818": {"modbus_scan", "kali_run"},
+    "47808": {"modbus_scan", "kali_run"},
 }
 
 

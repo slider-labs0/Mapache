@@ -13,6 +13,7 @@ injects the top few into the CURRENT ATTACK STATE block each turn.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -64,6 +65,16 @@ _SERVICE_MOVES: dict[str, str] = {
 
 _WEB_PORTS = {"80", "443", "8080", "8000", "8443", "8888", "3000", "5000"}
 
+# Signals that we already have code execution / a foothold somewhere - the pivot from
+# "get in" to "go deeper" (privilege escalation, looting, lateral movement, persistence).
+_FOOTHOLD_RE = re.compile(
+    r"\b(shell|rce|remote code|meterpreter|reverse shell|command exec|foothold|"
+    r"www-data|uid=\d|whoami|id=\d|got a shell|popped|initial access|"
+    r"authenticated as|logged in as|session established)\b", re.I)
+# We are on a Windows/AD host (shapes the post-exploitation chain).
+_WINDOWS_RE = re.compile(r"\b(windows|smb|netbios|active directory|ntlm|kerberos|"
+                         r"domain controller|winrm|\.local\\|administrator)\b", re.I)
+
 
 def _ports(state: Any) -> set:
     return {str(p).split("/")[0].strip() for p in (getattr(state, "open_ports", None) or [])}
@@ -94,15 +105,39 @@ def next_moves(state: Any) -> list[str]:
             (getattr(state, "disclosed_creds", None) or [])
     flags = getattr(state, "flags", None) or []
 
+    have_foothold = bool(_FOOTHOLD_RE.search(hay))
+    is_windows = bool(_WINDOWS_RE.search(hay)) or bool(ports & {"445", "139", "3389", "5985", "88"})
+
     # 1. Trivial wins first (an already-open shell).
     if "1524" in ports:
         moves.append(_SERVICE_MOVES["1524"])
 
-    # 2. Credentials in hand but no confirmed access -> spray + escalate everywhere.
-    if creds and not flags:
-        moves.append("Credentials in hand: SPRAY them across EVERY service (SSH/SMB/RDP/"
-                     "WinRM/web login/db) - creds rarely work only where found. On any "
-                     "shell, escalate (SUID/sudo/kernel/cron) and loot more creds.")
+    # 1b. Foothold in hand -> the STAGED post-exploitation chain (this is where most
+    #     engagements actually win the objective, so it outranks more enumeration).
+    if have_foothold:
+        if is_windows:
+            moves.append("FOOTHOLD (Windows): 1) run winPEAS/whoami /priv for token & "
+                         "service-perm privesc; 2) loot creds - Mimikatz/LSASS, SAM, DPAPI, "
+                         "and secretsdump; 3) with a hash/ticket move LATERALLY (pass-the-"
+                         "hash via evil-winrm/psexec), Kerberoast/DCSync toward Domain Admin "
+                         "(tool: ad_attack); 4) only then persist. Chain creds->lateral->DA.")
+        else:
+            moves.append("FOOTHOLD (Linux): 1) run linPEAS + `sudo -l` + SUID/capability "
+                         "sweep + writable cron/service for privesc; 2) loot ~/.ssh, .bash_"
+                         "history, .env, config creds, DB dumps; 3) pivot LATERALLY with "
+                         "recovered keys/creds (ssh, reused passwords); 4) enumerate the "
+                         "internal network from this host. Escalate BEFORE moving on.")
+
+    # 2. Credentials in hand -> targeted, high-yield use (not just a generic spray).
+    if creds and not (flags and have_foothold):
+        moves.append("Credentials in hand: SPRAY across EVERY service (SSH/SMB/RDP/WinRM/"
+                     "web/db) - creds rarely work only where found.")
+        if ports & {"445", "139"}:
+            moves.append("With creds + SMB: `secretsdump` for hashes, `crackmapexec smb` to "
+                         "find where they are admin, then psexec/evil-winrm for a shell "
+                         "(tool: ad_attack / kali_run).")
+        if "1433" in ports:
+            moves.append("With creds + MSSQL: log in and enable xp_cmdshell for RCE.")
 
     # 3. Active Directory (Kerberos/LDAP) gets a dedicated chain.
     if ports & {"88", "389", "636"} or "domain controller" in hay or "kerberos" in hay:
@@ -144,7 +179,57 @@ def next_moves(state: Any) -> list[str]:
                      "then test its API backend for authz/IDOR with http_repeater.")
     if any(k in hay for k in ("firmware", "binwalk", "squashfs", "u-boot", "embedded")):
         moves.append("Firmware in scope: extract (binwalk -eM) then hunt hardcoded "
-                     "accounts/keys/creds (tool: firmware_scan, operator=iot_operator).")
+                     "accounts/keys/creds (tool: firmware_scan, operator=iot_operator). "
+                     "Chain a recovered account into the device's web UI / SSH / Modbus.")
+
+    # 8c. ICS / OT (SAFETY-CRITICAL - read-only first).
+    if ports & {"502", "102", "20000", "44818", "47808"} or \
+            any(k in hay for k in ("modbus", "scada", "plc", "s7comm", "bacnet", "dnp3", "hmi")):
+        moves.append("ICS/OT device: enumerate READ-ONLY first - modbus_scan reads device "
+                     "identity + live registers to PROVE unauthenticated access (the "
+                     "finding). NEVER write to a production controller; writes only against "
+                     "an explicit in-scope canary. Safety/physical impact outranks depth "
+                     "(operator=ics_operator).")
+
+    # 8d. Wireless capture -> offline crack.
+    if any(k in hay for k in (".cap", ".pcap", "handshake", "wpa", "eapol", "pmkid",
+                              "airodump", "essid", "bssid", "wifi", "wi-fi")):
+        moves.append("Wi-Fi capture present: handshake_analyze it - confirm a crackable "
+                     "4-way handshake or PMKID, then crack offline (hashcat -m 22000). A "
+                     "recovered PSK is the finding (operator=wireless_operator).")
+
+    # 8e. DFIR / log analysis (defensive/purple).
+    if any(k in hay for k in ("auth.log", "access.log", "syslog", "incident", "dfir",
+                              "forensic", "timeline", "log analysis", "compromise")):
+        moves.append("Logs to analyze: log_timeline builds a suspicious-event timeline "
+                     "(brute force, login-after-failures, new users, web attacks) with the "
+                     "IOCs quoted - then correlate the intrusion path and map actions to the "
+                     "detections that should have fired (operator=forensicator).")
+
+    # 8f. Supply chain.
+    if any(k in hay for k in ("package.json", "requirements.txt", "package-lock", "yarn.lock",
+                              "npm", "pypi", "dependency", "supply chain", "typosquat",
+                              "pipeline", "ci/cd")):
+        moves.append("Dependency manifest in scope: dep_audit for typosquats / dependency-"
+                     "confusion, install-time scripts (code exec on install), and unpinned "
+                     "deps; then confirm a claimable/newer public name online "
+                     "(operator=supply_chain_operator).")
+
+    # 8g. Smart contract / web3.
+    if any(k in hay for k in (".sol", "solidity", "smart contract", "evm", "erc20", "erc-20",
+                              "reentrancy", "defi", "web3", "blockchain")):
+        moves.append("Solidity source in scope: contract_scan for the fund-draining classes "
+                     "(reentrancy, tx.origin auth, delegatecall, unprotected selfdestruct/"
+                     "setters), then PoC each on a forked-mainnet test and confirm with "
+                     "slither/mythril (operator=contract_auditor).")
+
+    # 8h. OSINT / recon-only targets (people, orgs, exposed assets).
+    if not ports and any(k in hay for k in ("osint", "email", "@", "linkedin", "instagram",
+                                            "phone", "username", "leak", "breach")):
+        moves.append("OSINT target: pivot across sources - osint_search deep fan-out, "
+                     "phone_lookup, social_lookup (e.g. the LinkedIn behind an IG handle), "
+                     "crt.sh for subdomains; correlate identities into an attack surface "
+                     "(operator=osint_operator).")
 
     # 8. Nothing actionable yet -> discipline-appropriate first step (respect scope).
     if not moves:
@@ -163,4 +248,4 @@ def next_moves(state: Any) -> list[str]:
         if m not in seen:
             seen.add(m)
             out.append(m)
-    return out[:6]
+    return out[:7]

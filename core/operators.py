@@ -193,8 +193,10 @@ _add(Operator(
     name="contract_auditor", title="Contract Auditor", phase="exploitation",
     model_role="planner",  # deep reasoning over source
     description="Solidity / EVM smart-contract audits.",
-    # http_request: JSON-RPC calls to a node / block explorer APIs.
-    tools={"shell", "file_read", "file_write", "web_fetch", "http_request", "create_tool"},
+    # contract_scan: offline Solidity static analysis (reentrancy/tx.origin/delegatecall/
+    # unprotected setters); http_request: JSON-RPC calls to a node / block explorer APIs.
+    tools={"shell", "file_read", "file_write", "contract_scan", "web_fetch",
+           "http_request", "create_tool"},
     expertise="Solidity/EVM review for reentrancy, oracle manipulation, flash-loan abuse, "
               "and broken access control; run slither/mythril-style analysis through shell "
               "and reason over the source.",
@@ -295,7 +297,10 @@ _add(Operator(
     name="wireless_operator", title="Wireless Operator", phase="exploitation",
     requires_remote=True,
     description="Wi-Fi / BLE / Zigbee / sub-GHz attacks.",
-    tools={"shell", "kali_run", "create_tool"},
+    # handshake_analyze: the OFFLINE half - crack a captured WPA handshake/PMKID
+    # anywhere (capturing needs the radio via the remote link); file_* to manage captures.
+    tools={"shell", "kali_run", "handshake_analyze", "file_read", "file_list",
+           "file_search", "create_tool"},
     expertise="WPA2 handshake/PMKID capture, WPA3-SAE downgrade, WPA-Enterprise evil-twin, "
               "KARMA/Mana, deauth, WPS Pixie Dust, BLE GATT, Zigbee Touchlink, sub-GHz "
               "replay. Needs a radio via hardware passthrough or an SSH dropbox.",
@@ -316,8 +321,9 @@ _add(Operator(
     name="ics_operator", title="ICS Operator", phase="enumeration", roe_gated=True,
     read_only=True,
     description="ICS / OT / SCADA attacks (Modbus, DNP3, S7comm, BACnet, OPC-UA).",
-    # http_request: HMI / engineering-workstation web interfaces (read-only enum).
-    tools={"shell", "kali_run", "web_fetch", "http_request", "create_tool"},
+    # modbus_scan: read-only Modbus/TCP enumeration (device id + live registers) - the
+    # unauthenticated-PLC finding; http_request: HMI / engineering-workstation web UIs.
+    tools={"shell", "kali_run", "web_fetch", "http_request", "modbus_scan", "create_tool"},
     triggers={"502", "20000", "102", "44818", "47808", "modbus", "s7", "bacnet", "dnp3"},
     expertise="Modbus/DNP3/S7comm/BACnet/OPC-UA enumeration. OT is fragile: read-only "
               "enumeration first, and writes only against an explicit in-scope lab/canary - "
@@ -327,7 +333,8 @@ _add(Operator(
     name="forensicator", title="Forensicator", phase="analysis", read_only=True,
     model_role="planner",  # timeline/IOC analysis + detection mapping
     description="DFIR / purple-team validation - timelines, IOCs, attack→detection mapping.",
-    tools={"shell", "kali_run", "file_read", "file_list", "file_search"},
+    # log_timeline: parse auth/syslog/web logs into a suspicious-event timeline with IOCs.
+    tools={"shell", "kali_run", "log_timeline", "file_read", "file_list", "file_search"},
     expertise="disk/memory/log/network timeline analysis, IOC extraction, and mapping the "
               "engagement's actions to the detections they should have triggered - the "
               "purple-team validation pass.",
@@ -338,7 +345,8 @@ _add(Operator(
     description="Supply-chain attacks - dependencies, build pipelines, package integrity.",
     # web_fetch/http_request: query package-registry APIs (npm/pypi) for typosquat /
     # dependency-confusion checks and provenance metadata.
-    tools={"shell", "kali_run", "file_read", "web_search", "web_fetch",
+    # dep_audit: offline manifest audit (typosquats/install-scripts/unpinned/URL deps).
+    tools={"shell", "kali_run", "dep_audit", "file_read", "web_search", "web_fetch",
            "http_request", "create_tool"},
     expertise="dependency confusion / typosquatting, compromised or malicious packages, "
               "CI/CD pipeline and build-artifact integrity, and signing/provenance gaps "
