@@ -1,0 +1,58 @@
+{
+  "discipline": "wireless",
+  "title": "WiFi Challenge Lab-style clientless PMKID: weak WPA2 PSK",
+  "difficulty": "medium",
+  "win_condition": "finding",
+  "target": {
+    "kind": "analysis"
+  },
+  "objective": "The artifacts directory holds a wireless capture summary showing a PMKID grabbed from an access point (a clientless attack - no connected client needed) and notes on the network. Identify the weakness that makes the network compromisable, explain why the PMKID enables an offline attack, cite the ESSID/BSSID and hash evidence, name the class with a CWE, and recommend the fix.",
+  "artifacts_dir": "artifacts",
+  "tags": [
+    "wireless",
+    "wpa2",
+    "pmkid",
+    "clientless",
+    "wifi-challenge"
+  ],
+  "rubric": {
+    "cwe": "CWE-521",
+    "vuln_keywords": [
+      "weak passphrase",
+      "weak psk",
+      "weak password",
+      "pmkid",
+      "clientless attack",
+      "crackable",
+      "guessable",
+      "dictionary"
+    ],
+    "evidence_markers": [
+      "PMKID",
+      "ESSID",
+      "BSSID",
+      "WPA*01",
+      "hashcat",
+      "22000",
+      "hcxdumptool",
+      "handshake"
+    ],
+    "grounded_markers": [
+      "PMKID",
+      "WPA*01"
+    ],
+    "remediation_keywords": [
+      "strong passphrase",
+      "long passphrase",
+      "wpa3",
+      "sae",
+      "disable pmkid",
+      "802.1x",
+      "high entropy",
+      "rotate",
+      "random"
+    ],
+    "min_evidence": 2
+  },
+  "id": "wireless-wifichallenge-pmkid"
+}

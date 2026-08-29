@@ -26,15 +26,59 @@ Install:
 from __future__ import annotations
 
 import asyncio
+import glob
+import os
 import platform
 import shutil
 import socket
+import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
 from browser.http_client import HttpClient
 from core.logger import get_logger
+
+
+def find_tor_binary() -> tuple[Optional[str], Optional[str]]:
+    """Locate a tor executable and, for a Tor Browser bundle, its Data/Tor dir
+    (which holds geoip). Returns (tor_path, data_dir); data_dir is None for a
+    system `tor` on PATH. Lets Mapache start Tor itself instead of asking the user."""
+    onpath = shutil.which("tor")
+    if onpath:
+        return onpath, None
+    system = platform.system()
+    candidates: list[str] = []
+    if system == "Windows":
+        rel = os.path.join("Browser", "TorBrowser", "Tor", "tor.exe")
+        roots = [
+            os.path.expanduser(r"~\Desktop\Tor Browser"),
+            os.path.expanduser(r"~\Downloads\Tor Browser"),
+            os.path.expanduser(r"~\OneDrive\Desktop\Tor Browser"),
+            os.path.join(os.environ.get("PROGRAMFILES", r"C:\Program Files"), "Tor Browser"),
+            os.path.join(os.environ.get("LOCALAPPDATA", ""), "Tor Browser"),
+        ]
+        candidates = [os.path.join(r, rel) for r in roots if r]
+    elif system == "Darwin":
+        candidates = [
+            "/Applications/Tor Browser.app/Contents/MacOS/Tor/tor",
+            os.path.expanduser("~/Applications/Tor Browser.app/Contents/MacOS/Tor/tor"),
+            "/opt/homebrew/bin/tor", "/usr/local/bin/tor",
+        ]
+    else:  # Linux / other
+        candidates = ["/usr/bin/tor", "/usr/sbin/tor"]
+        candidates += glob.glob(
+            os.path.expanduser("~/tor-browser*/Browser/TorBrowser/Tor/tor"))
+        candidates += glob.glob(os.path.expanduser(
+            "~/.local/share/torbrowser/tbb/*/tor-browser/Browser/TorBrowser/Tor/tor"))
+    for c in candidates:
+        if c and os.path.isfile(c):
+            # a bundle tor sits at .../TorBrowser/Tor/tor(.exe); geoip is in
+            # .../TorBrowser/Data/Tor (one level up from the Tor dir).
+            data = os.path.normpath(os.path.join(os.path.dirname(c), "..", "Data", "Tor"))
+            return c, (data if os.path.isdir(data) else None)
+    return None, None
 
 logger = get_logger(__name__)
 
@@ -153,7 +197,7 @@ class TorController:
         is_tor = False
         try:
             async with HttpClient(
-                proxy=f"socks5://127.0.0.1:{self.socks_port}",
+                proxy=f"socks5h://127.0.0.1:{self.socks_port}",
                 timeout=15.0,
             ) as client:
                 is_tor, exit_ip = await client.check_tor()
@@ -198,7 +242,7 @@ class TorController:
                 await asyncio.sleep(3)
                 # Get new IP
                 async with HttpClient(
-                    proxy=f"socks5://127.0.0.1:{self.socks_port}",
+                    proxy=f"socks5h://127.0.0.1:{self.socks_port}",
                     timeout=15.0,
                 ) as client:
                     _, new_ip = await client.check_tor()
@@ -250,7 +294,8 @@ class TorController:
     ) -> HttpClient:
         """Return an HttpClient pre-configured to route through Tor."""
         return HttpClient(
-            proxy=f"socks5://127.0.0.1:{self.socks_port}",
+            # socks5h: remote DNS so .onion hidden services resolve at the Tor proxy.
+            proxy=f"socks5h://127.0.0.1:{self.socks_port}",
             timeout=timeout,
             verify_ssl=verify_ssl,
         )
@@ -260,60 +305,69 @@ class TorController:
     # ------------------------------------------------------------------ #
 
     async def start(self, tor_cmd: str = "tor") -> tuple[bool, str]:
-        """
-        Start a Tor process. Only needed if Tor isn't already running.
-        Prefers the system Tor daemon.
-        """
+        """Start Tor if it isn't already running. Locates a system `tor` OR a Tor
+        Browser bundle (Windows/macOS/Linux), launches it detached on this controller's
+        SOCKS and control ports, and waits for the SOCKS port to come up. Mapache starts
+        Tor itself - it does not ask the operator to launch it."""
         if await self.is_running():
             return True, f"Tor already running on port {self.socks_port}"
 
-        tor_path = shutil.which(tor_cmd)
+        tor_path, data_dir = find_tor_binary()
+        if not tor_path:
+            tor_path = shutil.which(tor_cmd)
         if not tor_path:
             return False, (
-                "Tor not found in PATH.\n"
-                "Install: sudo apt install tor (Linux) or "
-                "download Tor Browser (Windows/Mac)"
+                "No tor binary found (checked PATH and common Tor Browser locations). "
+                "Install: `sudo apt install tor` (Linux), `brew install tor` (macOS), "
+                "or install the Tor Browser bundle (Windows/macOS)."
             )
 
-        if not HAS_STEM:
-            # Start without stem - just subprocess
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    tor_path,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
-                # Wait for it to start
-                for _ in range(10):
-                    await asyncio.sleep(1)
-                    if await self.is_running():
-                        return True, f"Tor started (PID {proc.pid})"
-                return False, "Tor started but not responding on SOCKS port"
-            except Exception as exc:
-                return False, f"Failed to start Tor: {exc}"
-
-        # Start with stem for better control
+        # Fresh, writable DataDirectory (so we never fight a running Tor Browser for its
+        # lock); pull geoip from the bundle when available for correct exit selection.
+        run_dir = os.path.join(tempfile.gettempdir(), f"mapache-tor-{self.socks_port}")
         try:
-            loop = asyncio.get_event_loop()
-            success, msg = await loop.run_in_executor(None, self._start_with_stem, tor_path)
-            return success, msg
-        except Exception as exc:
-            return False, f"Failed to start Tor: {exc}"
+            os.makedirs(run_dir, exist_ok=True)
+        except Exception:
+            run_dir = tempfile.mkdtemp(prefix="mapache-tor-")
+        argv = [tor_path,
+                "--SocksPort", str(self.socks_port),
+                "--ControlPort", str(self.control_port),
+                "--DataDirectory", run_dir]
+        if data_dir:
+            geoip, geoip6 = os.path.join(data_dir, "geoip"), os.path.join(data_dir, "geoip6")
+            if os.path.isfile(geoip):
+                argv += ["--GeoIPFile", geoip]
+            if os.path.isfile(geoip6):
+                argv += ["--GeoIPv6File", geoip6]
 
-    def _start_with_stem(self, tor_path: str) -> tuple[bool, str]:
+        loop = asyncio.get_event_loop()
         try:
-            self._process = stem.process.launch_tor_with_config(
-                tor_cmd=tor_path,
-                config={
-                    "SocksPort": str(self.socks_port),
-                    "ControlPort": str(self.control_port),
-                    "DataDirectory": "/tmp/mapache_tor",
-                },
-                timeout=60,
-            )
-            return True, f"Tor launched successfully"
+            self._process = await loop.run_in_executor(None, self._spawn_detached, argv)
         except Exception as exc:
-            return False, str(exc)
+            return False, f"Failed to launch tor ({tor_path}): {exc}"
+
+        # Wait for bootstrap (SOCKS port open). A bundle tor bootstraps in a few seconds.
+        for _ in range(45):
+            await asyncio.sleep(1)
+            if await self.is_running():
+                return True, (f"Tor started (pid {getattr(self._process, 'pid', '?')}) via "
+                              f"{tor_path} - SOCKS 127.0.0.1:{self.socks_port}, "
+                              f"control {self.control_port}")
+        return False, ("Tor was launched but its SOCKS port did not come up in time - the "
+                       "port may be busy or tor could not bootstrap.")
+
+    def _spawn_detached(self, argv: list[str]) -> Any:
+        """Launch tor as a detached background process that outlives this call."""
+        kwargs: dict[str, Any] = {
+            "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
+            "stdin": subprocess.DEVNULL,
+        }
+        if os.name == "nt":
+            # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+            kwargs["creationflags"] = 0x00000008 | 0x00000200
+        else:
+            kwargs["start_new_session"] = True
+        return subprocess.Popen(argv, **kwargs)
 
     async def stop(self) -> None:
         if self._process:

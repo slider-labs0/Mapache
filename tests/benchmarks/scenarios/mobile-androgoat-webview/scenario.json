@@ -1,0 +1,55 @@
+{
+  "discipline": "mobile",
+  "title": "AndroGoat-style insecure WebView (JS bridge + remote content)",
+  "difficulty": "medium",
+  "win_condition": "finding",
+  "target": {
+    "kind": "analysis"
+  },
+  "objective": "Statically analyze the decompiled Android app (Kotlin) in the artifacts directory. A WebView loads remote content with settings that let that content reach native code. Identify the insecure-WebView weakness, cite the exact APIs and the exposed interface, name the class with a CWE, and recommend the fix.",
+  "artifacts_dir": "artifacts",
+  "tags": [
+    "mobile",
+    "android",
+    "webview",
+    "javascript-bridge",
+    "androgoat"
+  ],
+  "rubric": {
+    "cwe": "CWE-749",
+    "vuln_keywords": [
+      "insecure webview",
+      "javascript interface",
+      "addjavascriptinterface",
+      "exposed native",
+      "webview",
+      "js bridge",
+      "remote code"
+    ],
+    "evidence_markers": [
+      "addJavascriptInterface",
+      "setJavaScriptEnabled(true)",
+      "loadUrl",
+      "@JavascriptInterface",
+      "http://",
+      "getContext",
+      "NativeBridge"
+    ],
+    "grounded_markers": [
+      "addJavascriptInterface",
+      "setJavaScriptEnabled(true)"
+    ],
+    "remediation_keywords": [
+      "removeJavascriptInterface",
+      "https",
+      "disable javascript",
+      "setJavaScriptEnabled(false)",
+      "trusted content",
+      "restrict",
+      "do not expose",
+      "allowlist"
+    ],
+    "min_evidence": 2
+  },
+  "id": "mobile-androgoat-webview"
+}

@@ -43,9 +43,10 @@ httpx>=0.24
 # python-telegram-bot>=20.0
 # discord.py>=2.3
 
-# ── Optional: signed skill provenance ─────────────────────────────────────────
-# ed25519 signatures for the skill hub. Without it, provenance falls back to
-# HMAC-SHA256 (still works).
+# ── Optional: signed skill provenance + RS256 JWT attacks ─────────────────────
+# ed25519 signatures for the skill hub (falls back to HMAC-SHA256 without it), and
+# RS256 signing for jwt_tool's jwk_inject / jku_inject header attacks (those two
+# actions report they need it when absent; kid_inject/HS* work without).
 # cryptography>=41.0
 
 # ── Optional: voice I/O ───────────────────────────────────────────────────────
@@ -54,3 +55,8 @@ httpx>=0.24
 # Speech-to-text. faster-whisper is lighter; openai-whisper pulls in torch (large).
 # faster-whisper>=1.0
 # openai-whisper>=20231117
+
+# ── Optional: OSINT phone-number intel ────────────────────────────────────────
+# Enriches phone_lookup with carrier, line-type, and region data. Without it the
+# tool falls back to a built-in country-code table (format + dorks still work).
+# phonenumbers>=8.13

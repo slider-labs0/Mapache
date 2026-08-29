@@ -648,6 +648,36 @@ class WebSearchTool(BaseTool):
         return results
 
 
+_TRANSIENT_TOR_ERRORS = (
+    "ttl exp", "ttl expired", "could not connect", "general socks", "socks server failure",
+    "host unreachable", "network unreachable", "connection refused", "timed out",
+    "timeout", "temporarily", "no route",
+)
+
+
+def _is_transient_tor_error(err: str) -> bool:
+    """A Tor SOCKS/circuit error that typically clears on retry (fresh circuit or once
+    bootstrap completes) - as opposed to a permanent failure. TTL-expired and general
+    SOCKS failures are the classic transient ones right after Tor starts."""
+    e = (err or "").lower()
+    return any(m in e for m in _TRANSIENT_TOR_ERRORS)
+
+
+# Errors that mean a .onion did not complete a valid HTTP exchange: the service is
+# offline or behind DDoS/anti-bot protection (e.g. Dread's EndGame), NOT a Tor/address
+# problem. "illegal request line" / protocol errors are what a DDoS-gated onion returns.
+_DEAD_ONION_ERRORS = (
+    "illegal request line", "illegal response", "remoteprotocol", "protocol error",
+    "connection reset", "server disconnected", "incomplete", "peer closed", "eof occurred",
+    "ttl exp", "host unreachable", "connection refused", "no route",
+)
+
+
+def _looks_like_dead_onion(err: str) -> bool:
+    e = (err or "").lower()
+    return any(m in e for m in _DEAD_ONION_ERRORS)
+
+
 class TorFetchTool(BaseTool):
     name = "tor_fetch"
     description = (
@@ -687,7 +717,24 @@ class TorFetchTool(BaseTool):
         max_length: int = 4000,
         **kwargs: Any,
     ) -> ToolResult:
-        proxy = f"socks5://127.0.0.1:{tor_port}"
+        # Ensure Tor is up - start it ourselves if needed instead of deferring to the
+        # user. TorController locates a system tor or a Tor Browser bundle and launches it.
+        from browser.tor_controller import TorController
+        controller = TorController(socks_port=tor_port, control_port=tor_port + 1)
+        if not await controller.is_running():
+            ok, msg = await controller.start()
+            if not ok:
+                return ToolResult.fail(
+                    f"Tor is not running and could not be auto-started on port {tor_port}: "
+                    f"{msg}")
+
+        # socks5h (not socks5): let the Tor proxy resolve the hostname remotely.
+        # .onion addresses have no DNS and cannot be resolved client-side, so plain
+        # socks5:// fails on hidden services ("illegal request line" / lookup errors).
+        proxy = f"socks5h://127.0.0.1:{tor_port}"
+        is_onion = ".onion" in url
+        last_err = ""
+        ip: Optional[str] = None
 
         try:
             async with HttpClient(
@@ -695,35 +742,231 @@ class TorFetchTool(BaseTool):
                 timeout=45.0,
                 verify_ssl=False,  # Many .onion sites have self-signed certs
             ) as client:
-                # First verify Tor is working
-                is_tor, ip = await client.check_tor()
-                if not is_tor:
-                    return ToolResult.fail(
-                        f"Tor does not appear to be running on port {tor_port}.\n"
-                        f"Start Tor: 'tor' (Linux) or open Tor Browser (Windows/Mac).\n"
-                        f"If using Tor Browser, try tor_port=9150 instead."
-                    )
-
-                response = await client.get(url)
-
+                # Tor circuits can be transiently unready (right after start) or fail with
+                # "TTL expired" / "general SOCKS failure". Retry with a fresh circuit before
+                # giving up, so one blip is not reported as an unreachable target.
+                for attempt in range(3):
+                    if ip is None:
+                        try:
+                            is_tor, ip_probe = await client.check_tor()
+                            if is_tor:
+                                ip = ip_probe
+                        except Exception:
+                            pass
+                    response = await client.get(url)
+                    if response.success:
+                        output = format_response(response, max_content=max_length)
+                        output = (f"[Routed via Tor - External IP: {ip or 'unknown'}]\n\n"
+                                  + output)
+                        return ToolResult.ok(output, metadata={
+                            "url": url, "via_tor": True, "exit_ip": ip,
+                            "attempts": attempt + 1})
+                    last_err = response.error or "unknown error"
+                    if attempt == 2 or not _is_transient_tor_error(last_err):
+                        break
+                    await asyncio.sleep(2.5)
+                    try:
+                        await controller.new_circuit()  # fresh exit before retrying
+                    except Exception:
+                        pass
         except Exception as exc:
             if "SOCKS" in str(exc) or "Connection" in str(exc):
                 return ToolResult.fail(
-                    f"Cannot connect to Tor on port {tor_port}. "
-                    f"Is Tor running? Try: tor_port=9150 for Tor Browser."
-                )
+                    f"Cannot connect to Tor on port {tor_port}. Is Tor running? "
+                    f"Try tor_port=9150 (Tor Browser).")
             return ToolResult.fail(str(exc))
 
-        if not response.success and response.error:
-            return ToolResult.fail(f"Fetch failed: {response.error}")
+        # A .onion that never completes a valid HTTP exchange is offline or behind
+        # DDoS/anti-bot protection - the verified address is fine; retrying/other
+        # directories will NOT help, so say so plainly instead of flailing.
+        if is_onion and _looks_like_dead_onion(last_err):
+            return ToolResult.fail(
+                f"The hidden service did not return a valid HTTP response "
+                f"('{last_err}'). The .onion ADDRESS IS CORRECT but the site appears "
+                f"OFFLINE or is behind a DDoS access-queue (Dread/EndGame). tor_fetch "
+                f"(plain HTTP) cannot pass a queue/captcha front. Open it with the "
+                f"Tor-routed BROWSER instead - it waits through the access queue and gets "
+                f"forwarded to the site. Do NOT search clearnet or other directories for "
+                f"another address; the address is correct.")
+        hint = ("" if not is_onion else
+                " - for a .onion this usually means the hidden service is offline/"
+                "unreachable, not a Tor problem")
+        return ToolResult.fail(f"Fetch failed: {last_err}{hint}")
 
-        output = format_response(response, max_content=max_length)
-        output = f"[Routed via Tor - External IP: {ip}]\n\n" + output
 
-        return ToolResult.ok(
-            output,
-            metadata={"url": url, "via_tor": True, "exit_ip": ip},
-        )
+class TorControlTool(BaseTool):
+    name = "tor_control"
+    description = (
+        "Manage the local Tor process yourself. action='start' launches Tor if it is "
+        "not already running - it auto-locates a system `tor` OR a Tor Browser bundle "
+        "(Windows/macOS/Linux), so you do NOT need to ask the operator to start it. "
+        "action='status' reports whether Tor is up and the current exit IP; "
+        "action='new_circuit' requests a fresh exit IP. Call start before tor_fetch or "
+        "the Tor-routed browser when Tor is not yet running."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["start", "status", "new_circuit"],
+                "description": "start (launch Tor) | status | new_circuit",
+                "default": "start",
+            },
+            "tor_port": {
+                "type": "integer",
+                "description": "SOCKS port to use/start (default 9050; Tor Browser uses 9150)",
+                "default": 9050,
+            },
+        },
+        "required": [],
+    }
+    permissions = {Permission.NETWORK, Permission.TOR, Permission.SHELL}
+    timeout = 90
+    tags = ["tor", "onion", "dark-web", "opsec"]
+
+    async def execute(self, action: str = "start", tor_port: int = 9050,
+                      **kwargs: Any) -> ToolResult:
+        from browser.tor_controller import TorController
+        controller = TorController(socks_port=tor_port, control_port=tor_port + 1)
+
+        if action == "status":
+            status = await controller.get_status()
+            return ToolResult.ok(status.to_string())
+
+        if action == "new_circuit":
+            ok, msg = await controller.new_circuit()
+            return ToolResult.ok(msg) if ok else ToolResult.fail(msg)
+
+        # default: start
+        ok, msg = await controller.start()
+        if not ok:
+            return ToolResult.fail(msg)
+        status = await controller.get_status()
+        return ToolResult.ok(msg + "\n" + status.to_string(),
+                             metadata={"socks_port": tor_port})
+
+
+# dark.fail is the canonical VERIFIED-links directory for major dark-web services
+# (markets, forums like Dread, etc.). Unlike Ahmia's keyword search - which is anti-bot
+# gated and serves an empty shell to non-Tor-Browser clients - dark.fail is plain
+# server-rendered HTML that lists each service's official onion(s) + online/offline
+# status, so it can be read reliably over Tor or clearnet.
+DARKFAIL_CLEARNET = "https://dark.fail/"
+DARKFAIL_ONION = ("http://darkfailenbsdla5mal2mxn2uz66od5vtzd5qozslagrfzachha3f3id"
+                  ".onion/")
+_ONION_RE = re.compile(r"\b[a-z2-7]{56}\.onion\b|\b[a-z2-7]{16}\.onion\b")
+
+
+def _parse_darkfail(html: str) -> list[tuple[str, str, bool]]:
+    """Parse dark.fail into (service_name, onion, online) rows. Each service is an
+    <h4><a ...>Name</a></h4> followed by <li class="... online|offline ...">
+    <code>http://<onion></code> mirror entries."""
+    rows: list[tuple[str, str, bool]] = []
+    for block in re.split(r"<h4>", html)[1:]:
+        nm = re.search(r"<a [^>]*>([^<]+)</a>", block)
+        name = (nm.group(1).strip() if nm else "?")
+        for li in re.finditer(
+                r'<li class="([^"]*)"[^>]*>\s*<code>\s*https?://([a-z2-7]{56}\.onion)',
+                block):
+            rows.append((name, li.group(2), "offline" not in li.group(1).lower()))
+    return rows
+
+
+class OnionSearchTool(BaseTool):
+    name = "onion_search"
+    description = (
+        "Look up the VERIFIED .onion address of a known dark-web service (a market, or a "
+        "forum like Dread, etc.) from the dark.fail directory - the canonical verified-"
+        "links site. Give a service name/keyword (e.g. 'dread') and this returns the "
+        "official onion(s) for matching services WITH their online/offline status, so you "
+        "don't guess addresses or scrape anti-bot search engines. With no query it lists "
+        "every service dark.fail tracks. Then use tor_fetch/browser to open a live one. "
+        "NOTE: many services (Dread included) are frequently offline/DDoSed - if the "
+        "status says offline, the address is correct but the site is down; do not loop."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string",
+                      "description": "Service name/keyword, e.g. 'dread'. Omit to list all.",
+                      "default": ""},
+            "tor_port": {"type": "integer",
+                         "description": "Tor SOCKS port (default 9050; Tor Browser uses 9150)",
+                         "default": 9050},
+        },
+        "required": [],
+    }
+    permissions = {Permission.NETWORK, Permission.TOR}
+    timeout = 90
+    tags = ["tor", "onion", "dark-web", "osint", "search"]
+
+    async def execute(self, query: str = "", tor_port: int = 9050,
+                      **kwargs: Any) -> ToolResult:
+        # Try clearnet dark.fail first (fast), then its onion over Tor as a fallback.
+        html, err = await self._fetch_with_retry(DARKFAIL_CLEARNET, proxy=None)
+        source = DARKFAIL_CLEARNET
+        if html is None:
+            from browser.tor_controller import TorController
+            controller = TorController(socks_port=tor_port, control_port=tor_port + 1)
+            if not await controller.is_running():
+                await controller.start()
+            html, err = await self._fetch_with_retry(
+                DARKFAIL_ONION, proxy=f"socks5h://127.0.0.1:{tor_port}")
+            source = DARKFAIL_ONION
+        if html is None:
+            return ToolResult.fail(f"Could not reach dark.fail (clearnet or onion): {err}")
+
+        rows = _parse_darkfail(html)
+        if not rows:
+            return ToolResult.fail(
+                "Reached dark.fail but parsed no services (layout may have changed).")
+
+        q = query.strip().lower()
+        if q:
+            matched = [r for r in rows if q in r[0].lower()]
+            if not matched:
+                names = sorted({name for name, _, _ in rows})
+                return ToolResult.ok(
+                    f"No service matching '{query}' on dark.fail. Tracked services: "
+                    + ", ".join(names))
+            rows = matched
+
+        # Dedup (name, onion), keep online first for readability.
+        seen: set = set()
+        online, offline = [], []
+        for name, onion, is_on in rows:
+            key = (name, onion)
+            if key in seen:
+                continue
+            seen.add(key)
+            (online if is_on else offline).append(f"  [{name}] http://{onion}")
+        lines = [f"onion_search('{query}') via dark.fail (verified links):" if q
+                 else "dark.fail verified links:", ""]
+        if online:
+            lines += ["ONLINE:"] + online
+        if offline:
+            lines += ["", "OFFLINE (address is correct but the site is down right now):"] + offline
+        lines.append("\nVerify over Tor before trusting; addresses can still be cloned.")
+        return ToolResult.ok("\n".join(lines),
+                             metadata={"query": query, "source": source,
+                                       "online": len(online), "offline": len(offline)})
+
+    async def _fetch_with_retry(self, url: str,
+                                proxy: Optional[str]) -> tuple[Optional[str], str]:
+        try:
+            async with HttpClient(proxy=proxy, timeout=45.0, verify_ssl=False) as client:
+                for attempt in range(3):
+                    resp = await client.get(url)
+                    if resp.success:
+                        return resp.text, ""
+                    err = resp.error or "unknown error"
+                    if attempt == 2 or not _is_transient_tor_error(err):
+                        return None, err
+                    await asyncio.sleep(2.5)
+        except Exception as exc:
+            return None, str(exc)
+        return None, "exhausted retries"
 
 
 class EgressCheckTool(BaseTool):

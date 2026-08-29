@@ -592,7 +592,7 @@ def test_skills_playbook_specialist_matching():
     assert ICS_ATTACK_SKILL.body in relevant_skills(E, "enumerate the modbus PLC")
     assert IOT_ATTACK_SKILL.body in relevant_skills(E, "binwalk the firmware image")
     assert WIRELESS_ATTACK_SKILL.body in relevant_skills(E, "capture the WPA2 handshake and deauth")
-    assert OSINT_SKILL.body in relevant_skills(E, "passive subdomain enum with amass and shodan")
+    assert OSINT_SKILL.body in relevant_skills(E, "passive subdomain enum with amass and zoomeye")
     assert DFIR_SKILL.body in relevant_skills(E, "build a timeline and write sigma rules")
 
     # Tor / dark-web requests pull the dark-web playbook, which steers OFF surface
@@ -723,8 +723,11 @@ async def test_agent_stall_abort():
 
     assert response.error == "stalled", response.error
     assert response.iterations < AgentController.MAX_ITERATIONS  # aborted early
-    assert response.iterations <= AgentController.STALL_ABORT_DUP + 2
-    assert any(s.get("action") == "abort" for s in stalls)   # emitted the stall event
+    # One forceful reprieve precedes the abort (models often break out one step later),
+    # so the bound is ~two dup rounds plus the reprieve step, still well under max_iters.
+    assert response.iterations <= 2 * AgentController.STALL_ABORT_DUP + 3
+    assert any(s.get("action") == "reprieve" for s in stalls)  # gave it a second wind
+    assert any(s.get("action") == "abort" for s in stalls)     # then aborted
     print("  PASS  agent_stall_abort")
 
 
@@ -1429,6 +1432,26 @@ async def test_mcp_tool_allowlist():
         assert cfgs[0].tools == ["browser_click", "browser_type"]
         assert cfgs[0].timeout == 90.0
 
+    # A server env can reference a secret as ${VAR}; it interpolates from the
+    # environment (so keys like ZOOMEYE_API_KEY aren't pasted into mcp.json). An
+    # unresolved ${VAR} is dropped rather than passed as "" (which would clobber a
+    # value already exported for that key); literals pass through unchanged.
+    os.environ["ZOOMEYE_API_KEY"] = "zk_live"
+    os.environ.pop("UNSET_MCP_KEY", None)
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "mcp.json")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write('{"mcpServers": {"zoomeye": {"command": "uvx", '
+                        '"args": ["zoomeye-mcp"], "env": {'
+                        '"ZOOMEYE_API_KEY": "${ZOOMEYE_API_KEY}", '
+                        '"MISS": "${UNSET_MCP_KEY}", "LIT": "plain"}}}}')
+            cfg = load_mcp_config(p)[0]
+        assert cfg.command == "uvx" and cfg.args == ["zoomeye-mcp"]
+        assert cfg.env == {"ZOOMEYE_API_KEY": "zk_live", "LIT": "plain"}
+    finally:
+        os.environ.pop("ZOOMEYE_API_KEY", None)
+
     # The client honors the per-server timeout (used for slow Tor page loads).
     from integrations.mcp.mcp_client import MCPStdioClient, DEFAULT_TIMEOUT
     assert MCPStdioClient(MCPServerConfig(name="a", command="x", timeout=90)).\
@@ -1775,12 +1798,38 @@ async def test_routing_strategy_switch_changes_executor():
     engine = _routing(RoutingStrategy.AUTO)
     routed = RoutedModel(engine, FakePool(), primary_model_id="qwen2.5:14b")
 
-    # AUTO scores executor by role only → 14B (higher executor_score) wins.
+    # AUTO uses the operator's configured (primary) model for every role.
     assert routed.model_for(ModelRole.EXECUTOR) == "qwen2.5:14b"
-    # Switching to PIPELINE (speed-weighted) flips it to the 7B.
+    # Switching to PIPELINE (per-role, speed-weighted executor) flips it to the 7B.
     routed.set_strategy(RoutingStrategy.PIPELINE)
     assert routed.model_for(ModelRole.EXECUTOR) == "qwen2.5:7b"
     print("  PASS  routing_strategy_switch_changes_executor")
+
+
+async def test_routing_auto_uses_configured_model():
+    """AUTO/swarm routes every role to the model the operator configured (no arbitrary
+    default): pick qwen -> qwen agents, pick claude -> claude agents. Junk pool entries
+    never become routable."""
+    from core.config import _is_junk_model_id
+    from models.model_registry import ModelRegistry, ModelRole
+    from models.routing_engine import RoutingEngine, RoutingStrategy
+
+    pool = ["z-ai/glm-5.2", "anthropic/claude-sonnet-5", "qwen3-max", "grok-4"]
+    for chosen in ("qwen3-max", "anthropic/claude-sonnet-5", "grok-4"):
+        eng = RoutingEngine(ModelRegistry(), strategy=RoutingStrategy.AUTO,
+                            primary_model_id=chosen, local_only=False)
+        eng.set_available_models(pool)
+        for role in (ModelRole.PLANNER, ModelRole.EXECUTOR, ModelRole.VERIFIER):
+            assert eng.route(role).model_id == chosen, (chosen, role)
+
+    # Junk model-id filter: display names / bare numbers / the 'auto' alias are junk;
+    # real ids are not.
+    assert _is_junk_model_id("Ox Alpha") and _is_junk_model_id("4")
+    assert _is_junk_model_id("auto") and _is_junk_model_id("")
+    assert not _is_junk_model_id("qwen3-max")
+    assert not _is_junk_model_id("anthropic/claude-sonnet-5")
+    assert not _is_junk_model_id("stealth/ox-alpha")
+    print("  PASS  routing_auto_uses_configured_model")
 
 
 # ------------------------------------------------------------------ #
@@ -2233,6 +2282,48 @@ def test_wizard_prefs_edit_raw():
     print("  PASS  wizard_prefs_edit_raw")
 
 
+def test_wizard_integrations_step():
+    """The setup wizard prompts for API keys for the hacking tools that use one: a
+    catalog HTTP tool (VirusTotal) persists its spec + sets the env; an env-only tool
+    (Netlas) just sets the env; 'skip' does nothing; each tool is Enter-to-skip."""
+    import builtins
+    import os
+    from cli import setup_wizard
+
+    def _feed(answers, fn):
+        it = iter(answers)
+        orig_in, orig_persist = builtins.input, setup_wizard._persist_env_var
+        builtins.input = lambda *a, **k: next(it)
+        setup_wizard._persist_env_var = lambda name, val: os.environ.__setitem__(name, val)
+        try:
+            return fn()
+        finally:
+            builtins.input = orig_in
+            setup_wizard._persist_env_var = orig_persist
+
+    # Skip at the first menu → nothing configured.
+    raw: dict = {}
+    _feed([""], lambda: setup_wizard._step_integrations(None, raw))
+    assert "integrations" not in raw or not raw["integrations"]
+
+    # Set up: VirusTotal key, skip GreyNoise + AbuseIPDB, Netlas key, skip ZoomEye.
+    for v in ("VT_API_KEY", "NETLAS_API_KEY"):
+        os.environ.pop(v, None)
+    raw = {}
+    _feed(["2", "vt-key", "", "", "netlas-key", ""],
+          lambda: setup_wizard._step_integrations(None, raw))
+    # VirusTotal is a catalog HTTP tool → its specs are persisted so they register.
+    names = {i.get("name") for i in raw.get("integrations", [])}
+    assert {"vt_file", "vt_ip"} <= names
+    assert os.environ.get("VT_API_KEY") == "vt-key"
+    # Netlas is a keyless built-in → key set in env, no spec persisted.
+    assert os.environ.get("NETLAS_API_KEY") == "netlas-key"
+    assert not any(n and n.startswith("netlas") for n in names)
+    os.environ.pop("VT_API_KEY", None)
+    os.environ.pop("NETLAS_API_KEY", None)
+    print("  PASS  wizard_integrations_step")
+
+
 def test_wizard_configure_model_choice():
     # Pure config mutation for both a local and a cloud choice, then round-trip
     # it through MapacheConfig to prove the chosen model actually routes.
@@ -2534,6 +2625,40 @@ async def test_provider_usage_and_token_accounting():
     c._add_usage({"total_tokens": 734})
     c._add_usage(None)  # tolerated
     assert c.session_tokens == 1234
+
+    # Streaming: the usage chunk (from stream_options.include_usage) is the LAST chunk,
+    # AFTER the tool call. The turn must still count it - breaking on the tool call would
+    # drop token accounting for every tool-calling turn (this was the qwen '↑ 0 tokens'
+    # bug; OpenRouter happened to emit usage earlier so it looked fine).
+    class _StreamM:
+        async def chat_stream(self, messages, tools=None):
+            yield "reasoning "
+            yield {"type": "tool_call", "tool": "web_fetch", "args": {"url": "http://x"}}
+            yield {"type": "usage", "total_tokens": 321}
+        async def chat(self, **k):
+            return {"message": {"content": ""}}
+    sc = AgentController(model_provider=_StreamM(), mode=AgentMode.AGENT)
+    resp = await sc._chat([{"role": "user", "content": "hi"}],
+                          {"tools": [{"x": 1}]}, on_token=lambda t: None)
+    assert resp["message"].get("tool_calls"), "tool call still captured"
+    assert sc.session_tokens == 321, "streamed usage counted despite the tool call"
+
+    # Swarm: a child's usage bubbles up to the parent LIVE (via _parent_controller), so
+    # the TUI Budget reflects operator spend during the run, not only at completion - and
+    # it must not double-count. Nested delegations chain up.
+    parent = AgentController(model_provider=_M(), mode=AgentMode.AGENT,
+                             use_function_calling=False)
+    child = AgentController(model_provider=_M(), mode=AgentMode.AGENT,
+                            use_function_calling=False)
+    child._parent_controller = parent
+    child._add_usage({"total_tokens": 100})
+    child._add_usage({"total_tokens": 50})
+    assert child.session_tokens == 150 and parent.session_tokens == 150
+    grandchild = AgentController(model_provider=_M(), mode=AgentMode.AGENT,
+                                 use_function_calling=False)
+    grandchild._parent_controller = child
+    grandchild._add_usage({"total_tokens": 30})
+    assert child.session_tokens == 180 and parent.session_tokens == 180
     print("  PASS  provider_usage_and_token_accounting")
 
 
@@ -2607,6 +2732,44 @@ def test_scope_fallback_target_and_ip_in_command():
     # An out-of-scope IP embedded in a free-form shell command is caught.
     assert not s.check("shell", {"cmd": "telnet 9.9.9.9 23"}).allowed
     print("  PASS  scope_fallback_target_and_ip_in_command")
+
+
+def test_scope_lan_scan_guard():
+    """The agent may not scan internal/RFC1918 hosts it invented - even with no
+    scope.json - unless the range is the stated target, is in scope, or allow_private
+    is set. Non-scanner tools and public/loopback targets are unaffected."""
+    s = EngagementScope()  # no scope.json at all
+    assert not s.active
+    # Agent invents a LAN scan while the engagement target is a domain → refused.
+    d = s.check("nmap_scan", {"target": "192.168.1.0/24"},
+                fallback_target="campushillchurch.net")
+    assert not d.allowed and "192.168.1.0" in d.reason and "LAN" in d.reason
+    # A raw shell running a scanner against the LAN → refused too.
+    assert not s.check("shell", {"cmd": "nmap -sV 10.0.0.0/24"},
+                       fallback_target="example.com").allowed
+    assert not s.check("shell", {"cmd": "gobuster dir -u http://192.168.0.5"},
+                       fallback_target="example.com").allowed
+    # But the LAN host IS the stated target → allowed.
+    assert s.check("nmap_scan", {"target": "192.168.1.5"},
+                   fallback_target="192.168.1.5").allowed
+    assert s.check("nmap_scan", {"target": "192.168.1.7"},
+                   fallback_target="192.168.1.0/24").allowed
+    # Loopback (local practice target) and public hosts are never LAN-guarded.
+    assert s.check("nmap_scan", {"target": "127.0.0.1"}).allowed
+    assert s.check("nmap_scan", {"target": "scanme.nmap.org"},
+                   fallback_target="scanme.nmap.org").allowed
+    # A private IP that merely appears in a non-scanner command (reading a log) is
+    # NOT a scan → allowed (no false positive).
+    assert s.check("shell", {"cmd": "grep 10.0.0.5 /var/log/auth.log"}).allowed
+    # allow_private lifts the guard for a deliberate internal engagement.
+    sp = EngagementScope(allow_private=True)
+    assert sp.check("nmap_scan", {"target": "192.168.1.0/24"},
+                    fallback_target="example.com").allowed
+    # Listing the range in scope also allows it; a different LAN range stays refused.
+    sc = EngagementScope.from_dict({"targets": ["192.168.1.0/24"]})
+    assert sc.check("nmap_scan", {"target": "192.168.1.50"}).allowed
+    assert not sc.check("nmap_scan", {"target": "10.0.0.0/24"}).allowed
+    print("  PASS  scope_lan_scan_guard")
 
 
 def test_scope_forbidden_tools_and_patterns():
@@ -3107,6 +3270,19 @@ async def test_offensive_arsenal():
     none_tok = await jt.execute(action="forge", token=tok, alg_none=True)
     assert "none" in none_tok.output.lower()
 
+    # Header injection: kid path-traversal token is HMAC-signed (no crypto dep). Parse it
+    # back with the tool to confirm the kid landed in the header and it's a valid 3-part JWT.
+    kidt = await jt.execute(action="kid_inject", token=tok, claims={"role": "admin"},
+                            kid="../../../../dev/null", secret="")
+    assert kidt.success and kidt.metadata.get("kid") == "../../../../dev/null"
+    forged_tok = kidt.output.splitlines()[1].strip()
+    assert forged_tok.count(".") == 2
+    parsed = await jt.execute(action="parse", token=forged_tok)
+    assert "../../../../dev/null" in parsed.output and "HS256" in parsed.output
+    # jwk/jku need the optional cryptography package - they must fail cleanly, not crash.
+    jwkt = await jt.execute(action="jwk_inject", token=tok)
+    assert jwkt.success or "cryptography" in (jwkt.error or "")
+
     # GraphQL analyze flags ID-shaped args as IDOR candidates.
     schema = {"queryType": {"name": "Query"}, "mutationType": None,
               "types": [{"name": "Query", "fields": [
@@ -3135,6 +3311,390 @@ async def test_offensive_arsenal():
     assert {"jwt_tool", "graphql", "tech_detect"} <= get_operator("web_operator").tools
     assert "cloud_metadata" in get_operator("cloud_hunter").tools
     print("  PASS  offensive_arsenal")
+
+
+async def test_domain_capability_tools():
+    """Per-domain capability wave: cloud account enumeration + privesc triage, mobile-app
+    static analysis, and firmware secret-hunt - wired into their operators."""
+    import os
+    import tempfile
+    import zipfile
+    from core.operators import get_operator
+    from security_tools.cloud_enum import (build_cloud_command, parse_cloud_output,
+                                           CloudEnumTool)
+    from security_tools.device_tools import MobileScanTool, FirmwareScanTool
+
+    # Cloud: pure command build + privesc/admin parse.
+    assert build_cloud_command("whoami", "aws") == "aws sts get-caller-identity"
+    f = parse_cloud_output("iam", '{"Action":"*"} iam:PassRole iam:CreatePolicyVersion')
+    assert len(f["findings"]) == 2  # admin wildcard + privesc perms
+    assert parse_cloud_output("storage",
+                              '{"Name":"secret-bucket"}')["findings"]
+    # No CLI installed in CI -> graceful hand-back of the command.
+    r = await CloudEnumTool().execute(action="whoami", provider="aws")
+    assert r.success  # either ran or returned the command
+
+    with tempfile.TemporaryDirectory() as d:
+        # Mobile: a fake APK with a risky manifest + hardcoded secrets.
+        apk = os.path.join(d, "app.apk")
+        with zipfile.ZipFile(apk, "w") as z:
+            z.writestr("AndroidManifest.xml",
+                       b'android:debuggable="true" usesCleartextTraffic=true '
+                       b'android.permission.READ_SMS android.permission.CAMERA')
+            z.writestr("res/strings.xml",
+                       b'api_key="AKIAABCDEFGHIJKLMNOP" url="http://api.internal/v1"')
+        m = await MobileScanTool().execute(path=apk)
+        assert m.metadata.get("flags", 0) >= 2 and m.metadata.get("secrets", 0) >= 1
+        assert "debuggable" in m.output.lower()
+
+        # Firmware: an extracted tree with accounts, a shadow hash, and a private key.
+        fw = os.path.join(d, "fw")
+        os.makedirs(os.path.join(fw, "etc"))
+        with open(os.path.join(fw, "etc", "passwd"), "w") as fh:
+            fh.write("root:x:0:0:root:/root:/bin/sh\n")
+        with open(os.path.join(fw, "etc", "shadow"), "w") as fh:
+            fh.write("root:$1$ab$cd:19000:0:99999:7:::\n")
+        with open(os.path.join(fw, "id_rsa"), "w") as fh:
+            fh.write("-----BEGIN RSA PRIVATE KEY-----\nMII\n")
+        fr = await FirmwareScanTool().execute(path=fw)
+        assert fr.metadata.get("accounts", 0) >= 1 and fr.metadata.get("keys", 0) >= 1
+        assert "CRACKABLE" in fr.output
+
+    assert "cloud_enum" in get_operator("cloud_hunter").tools
+    assert "mobile_scan" in get_operator("mobile_operator").tools
+    assert "firmware_scan" in get_operator("iot_operator").tools
+    print("  PASS  domain_capability_tools")
+
+
+async def test_remaining_discipline_tools():
+    """The final discipline weapons - ICS/Modbus enum, Wi-Fi handshake analysis, DFIR
+    log-timeline, supply-chain dep audit, Solidity static scan - each produces evidence
+    from a real target and is wired into its operator."""
+    import asyncio
+    import os
+    import struct
+    import tempfile
+    from core.operators import get_operator
+    from security_tools.ics_tools import ModbusScanTool
+    from security_tools.wireless_tools import HandshakeAnalyzeTool
+    from security_tools.dfir_tools import LogTimelineTool
+    from security_tools.supply_chain_tools import DepAuditTool, _typosquat, _dl_distance
+    from security_tools.contract_tools import ContractScanTool
+
+    # --- ICS: read-only Modbus/TCP against a mock PLC ----------------------- #
+    async def _plc(reader, writer):
+        try:
+            while True:
+                head = await reader.readexactly(7)
+                txid, _pid, length, unit = struct.unpack(">HHHB", head)
+                pdu = await reader.readexactly(length - 1)
+                func = pdu[0]
+                if func == 0x2B and pdu[1] == 0x0E:
+                    objs = [(0, b"Schneider Electric"), (1, b"BMXP342020"), (2, b"v2.7")]
+                    body = bytes([0x2B, 0x0E, 0x01, 0x81, 0x00, 0x00, len(objs)])
+                    for oid, val in objs:
+                        body += bytes([oid, len(val)]) + val
+                elif func == 0x03:
+                    _s, cnt = struct.unpack(">HH", pdu[1:5])
+                    regs = b"".join(struct.pack(">H", 100 + i) for i in range(cnt))
+                    body = bytes([0x03, len(regs)]) + regs
+                elif func == 0x01:
+                    body = bytes([0x01, 0x01, 0b10101010])
+                else:
+                    body = bytes([func | 0x80, 0x01])
+                writer.write(struct.pack(">HHHB", txid, 0, len(body) + 1, unit) + body)
+                await writer.drain()
+        except Exception:
+            pass
+        finally:
+            try:
+                writer.close()
+            except Exception:
+                pass
+    srv = await asyncio.start_server(_plc, "127.0.0.1", 0)
+    port = srv.sockets[0].getsockname()[1]
+    async with srv:
+        r = await ModbusScanTool().execute(host="127.0.0.1", port=port, unit_id=1, count=4)
+        assert r.success and "Schneider Electric" in r.output and "BMXP342020" in r.output
+        assert r.metadata["identity"] >= 2 and r.metadata["reads"] >= 1
+        assert "unauthenticated" in r.output.lower()
+    # Unreachable port -> clean failure (not a crash).
+    r = await ModbusScanTool().execute(host="127.0.0.1", port=1, unit_id=1)
+    assert not r.success
+
+    # --- Wireless: a synthetic pcap with a beacon + M1(PMKID)+M2 EAPOL ------- #
+    def _radiotap():
+        return b"\x00\x00\x08\x00\x00\x00\x00\x00"
+    def _beacon(bssid, ssid):
+        return (b"\x80\x00\x00\x00" + b"\xff" * 6 + bssid + bssid + b"\x00\x00" +
+                b"\x00" * 8 + b"\x64\x00" + b"\x11\x04" + b"\x00" + bytes([len(ssid)]) + ssid)
+    def _eapol(bssid, cli, key_info, pmkid=None, from_ds=True):
+        fc = b"\x08" + (b"\x02" if from_ds else b"\x01")
+        a1, a2, a3 = (cli, bssid, bssid) if from_ds else (bssid, cli, cli)
+        mac = fc + b"\x00\x00" + a1 + a2 + a3 + b"\x00\x00"
+        snap = b"\xaa\xaa\x03\x00\x00\x00\x88\x8e"
+        kd = (b"\xdd\x14\x00\x0f\xac\x04" + pmkid) if pmkid else b""
+        body = (b"\x02\x03" + struct.pack(">H", 90) + b"\x02" +
+                struct.pack(">H", key_info) + b"\x00\x10" + b"\x00" * 90 + kd)
+        return mac + snap + body
+    def _rec(p):
+        return struct.pack("<IIII", 0, 0, len(p), len(p)) + p
+    BSSID, CLI = b"\xaa" * 6, b"\xbb" * 6
+    pkts = [_beacon(BSSID, b"TestNet0"),
+            _eapol(BSSID, CLI, 0x0088, pmkid=bytes(range(16)), from_ds=True),
+            _eapol(BSSID, CLI, 0x0108, from_ds=False)]
+    cap = struct.pack("<IHHIIII", 0xa1b2c3d4, 2, 4, 0, 0, 65535, 127) + \
+        b"".join(_rec(_radiotap() + p) for p in pkts)
+
+    with tempfile.TemporaryDirectory() as d:
+        fp = os.path.join(d, "h.pcap")
+        with open(fp, "wb") as fh:
+            fh.write(cap)
+        r = await HandshakeAnalyzeTool().execute(path=fp)
+        assert r.success and r.metadata["crackable"] == 1 and r.metadata["pmkid"] == 1
+        assert "TestNet0" in r.output and "hashcat -m 22000" in r.output
+        # An empty/garbage file is rejected cleanly.
+        bad = os.path.join(d, "bad.pcap")
+        with open(bad, "wb") as fh:
+            fh.write(b"not a pcap file at all")
+        assert not (await HandshakeAnalyzeTool().execute(path=bad)).success
+
+        # --- DFIR: an auth.log + access.log with real IOCs ------------------ #
+        with open(os.path.join(d, "auth.log"), "w") as fh:
+            for i in range(7):
+                fh.write(f"Aug 28 10:0{i}:00 h sshd[1]: Failed password for admin "
+                         "from 1.2.3.4 port 5 ssh2\n")
+            fh.write("Aug 28 10:08:00 h sshd[1]: Accepted password for admin from "
+                     "1.2.3.4 port 5 ssh2\n")
+            fh.write("Aug 28 10:09:00 h useradd[1]: new user: name=backdoor, UID=0\n")
+        with open(os.path.join(d, "access.log"), "w") as fh:
+            fh.write('9.9.9.9 - - [28/Aug/2026:10:00:00 +0000] "GET /x?id=1 union '
+                     'select 1,2 HTTP/1.1" 200 12 "-" "sqlmap/1.6"\n')
+            fh.write('9.9.9.9 - - [28/Aug/2026:10:00:01 +0000] "GET /../../../../etc/'
+                     'passwd HTTP/1.1" 200 12 "-" "curl/8"\n')
+        r = await LogTimelineTool().execute(path=d)
+        assert r.success and r.metadata["web_attacks"] >= 2
+        assert r.metadata["brute_force_ips"] >= 1
+        assert "SUCCESS AFTER" in r.output and "backdoor" in r.output
+
+    # --- Supply chain: typosquat + install script + URL dep ----------------- #
+    assert _dl_distance("reqeusts", "requests") == 1
+    assert _typosquat("reqeusts", "pypi") == "requests"
+    assert _typosquat("requests", "pypi") is None  # the real package is not flagged
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "package.json"), "w") as fh:
+            fh.write('{"dependencies":{"express":"^4.0.0","lodahs":"1.0.0",'
+                     '"evil":"git+https://x/y"},"scripts":{"postinstall":"node s.js"}}')
+        with open(os.path.join(d, "requirements.txt"), "w") as fh:
+            fh.write("reqeusts\nflask>=1.0\nnumpy==1.2.3\n")
+        r = await DepAuditTool().execute(path=d)
+        assert r.metadata["typosquats"] >= 2 and r.metadata["install_scripts"] >= 1
+        assert r.metadata["url_deps"] >= 1 and "typosquat" in r.output.lower()
+
+    # --- web3: Solidity static analysis ------------------------------------- #
+    src = ("pragma solidity ^0.7.0;\ncontract Bank {\n"
+           " mapping(address=>uint) public bal;\n address owner;\n"
+           " function withdraw() public {\n"
+           "  (bool ok,) = msg.sender.call{value: bal[msg.sender]}(\"\");\n"
+           "  bal[msg.sender] = 0;\n }\n"
+           " function setOwner(address n) public { owner = n; }\n"
+           " function auth() public { require(tx.origin == owner); }\n"
+           " function kill() public { selfdestruct(payable(owner)); }\n}\n")
+    r = await ContractScanTool().execute(source=src)
+    assert r.success and r.metadata["findings"] >= 4
+    for kw in ("REENTRANCY", "tx.origin", "selfdestruct", "setOwner"):
+        assert kw in r.output, kw
+
+    # --- operator wiring ---------------------------------------------------- #
+    assert "modbus_scan" in get_operator("ics_operator").tools
+    assert "handshake_analyze" in get_operator("wireless_operator").tools
+    assert "log_timeline" in get_operator("forensicator").tools
+    assert "dep_audit" in get_operator("supply_chain_operator").tools
+    assert "contract_scan" in get_operator("contract_auditor").tools
+    print("  PASS  remaining_discipline_tools")
+
+
+async def test_advanced_web_weapons():
+    """Beyond-common web classes: SSRF, CORS misconfig, SSTI (engine fingerprint), and
+    NoSQL injection - each confirms only on a real signal in a mocked response, and is
+    wired into the web operator's tool set."""
+    import httpx
+    import security_tools.web_advanced as wa
+    from core.operators import get_operator
+
+    def _patch(handler):
+        orig = wa.HttpClient
+        wa.HttpClient = lambda *a, **k: orig(*a, **{**k, "transport": httpx.MockTransport(handler)})
+        return orig
+
+    # SSRF: the server leaks AWS IMDS credentials when it fetches the metadata IP.
+    def ssrf_h(req):
+        if "169.254.169.254" in str(req.url):
+            return httpx.Response(200, text='{"AccessKeyId":"ASIA1","SecretAccessKey":"s"}')
+        return httpx.Response(200, text="benign page")
+    orig = _patch(ssrf_h)
+    try:
+        r = await wa.SsrfProbeTool().execute(url="http://t/fetch?url=x", param="url")
+        assert r.metadata.get("hits", 0) >= 1 and "SSRF CONFIRMED" in r.output
+    finally:
+        wa.HttpClient = orig
+
+    # CORS: reflects the attacker Origin AND allows credentials -> critical.
+    def cors_h(req):
+        o = req.headers.get("origin", "")
+        return httpx.Response(200, headers={"Access-Control-Allow-Origin": o,
+                                            "Access-Control-Allow-Credentials": "true"})
+    orig = _patch(cors_h)
+    try:
+        r = await wa.CorsAuditTool().execute(url="https://api.t/me")
+        assert r.metadata.get("critical", 0) >= 1 and "MISCONFIGURATION" in r.output
+        # A locked-down policy is not flagged.
+        orig2 = wa.HttpClient
+        wa.HttpClient = lambda *a, **k: (
+            (lambda oc: oc(*a, **{**k, "transport": httpx.MockTransport(
+                lambda req: httpx.Response(200, headers={"Access-Control-Allow-Origin":
+                                                         "https://api.t"}))}))(orig))
+        safe = await wa.CorsAuditTool().execute(url="https://api.t/me")
+        wa.HttpClient = orig2
+        assert safe.metadata.get("critical", 0) == 0
+    finally:
+        wa.HttpClient = orig
+
+    # SSTI: the server evaluates the template expression -> 49 appears.
+    def ssti_h(req):
+        return (httpx.Response(200, text="x=49") if "7" in str(req.url) and "%7B" in str(req.url).upper()
+                else httpx.Response(200, text="x=raw"))
+    orig = _patch(ssti_h)
+    try:
+        r = await wa.SstiProbeTool().execute(url="http://t/r?name=x", param="name")
+        assert r.metadata.get("ssti") is True and "SSTI CONFIRMED" in r.output
+    finally:
+        wa.HttpClient = orig
+
+    # NoSQLi: an operator object changes the response vs the benign baseline.
+    def nosql_h(req):
+        b = req.content.decode("utf-8", "ignore")
+        if any(op in b for op in ("$ne", "$gt", "$regex")):
+            return httpx.Response(200, text='{"token":"authed"}' * 4)
+        return httpx.Response(401, text="no")
+    orig = _patch(nosql_h)
+    try:
+        r = await wa.NoSqliProbeTool().execute(url="http://t/login",
+                                               fields="username,password",
+                                               body={"username": "a", "password": "b"})
+        assert r.metadata.get("injectable") is True
+    finally:
+        wa.HttpClient = orig
+
+    # Request smuggling: a back-end that HANGS on the CL.TE probe (as if waiting for a
+    # chunk terminator) is flagged; a clean server is not. Uses a real local socket.
+    import asyncio as _asyncio
+
+    async def _hang_handler(reader, writer):
+        text = (await reader.read(300)).decode("latin-1", "ignore")
+        if ("Transfer-Encoding: chunked" in text and "Content-Length: 4" in text
+                and "xchunked" not in text):
+            await _asyncio.sleep(30)   # CL.TE probe -> hang past the wait cap
+        try:
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi")
+            await writer.drain()
+            writer.close()
+        except Exception:
+            pass
+
+    srv = await _asyncio.start_server(_hang_handler, "127.0.0.1", 0)
+    port = srv.sockets[0].getsockname()[1]
+    async with srv:
+        tool = wa.SmuggleProbeTool()
+        tool._WAIT = 2.0
+        r = await tool.execute(url=f"http://127.0.0.1:{port}/")
+        assert "CL.TE" in r.metadata.get("vulnerable", []), r.output
+
+    async def _clean_handler(reader, writer):
+        await reader.read(300)
+        try:
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi")
+            await writer.drain()
+            writer.close()
+        except Exception:
+            pass
+
+    srv2 = await _asyncio.start_server(_clean_handler, "127.0.0.1", 0)
+    port2 = srv2.sockets[0].getsockname()[1]
+    async with srv2:
+        tool = wa.SmuggleProbeTool()
+        tool._WAIT = 2.0
+        r2 = await tool.execute(url=f"http://127.0.0.1:{port2}/")
+        assert r2.metadata.get("vulnerable") == []
+
+    # -- the second advanced wave: XXE, prototype pollution, deserialization, cache
+    # poisoning, OAuth/open-redirect, race condition --
+    def xxe_h(req):
+        b = req.content.decode("utf-8", "ignore")
+        return (httpx.Response(200, text="root:x:0:0:root")
+                if "file:///etc/passwd" in b else httpx.Response(200, text="no"))
+    orig = _patch(xxe_h)
+    try:
+        r = await wa.XxeTool().execute(url="http://t/xml")
+        assert r.metadata.get("xxe") is True
+    finally:
+        wa.HttpClient = orig
+
+    def pp_h(req):
+        b = req.content.decode("utf-8", "ignore")
+        return (httpx.Response(200, text="ok pp_polluted_9147") if "pp_polluted_9147" in b
+                else httpx.Response(200, text="base"))
+    orig = _patch(pp_h)
+    try:
+        r = await wa.ProtoPollutionTool().execute(url="http://t/api", body={"a": 1})
+        assert r.metadata.get("polluted") is True
+    finally:
+        wa.HttpClient = orig
+
+    # Deserialization is an offline generator - a real pickle payload for python.
+    r = await wa.DeserializeGadgetTool().execute(lang="python", cmd="id")
+    assert r.success and len(r.output) > 40
+    assert (await wa.DeserializeGadgetTool().execute(lang="java")).success
+
+    def cp_h(req):
+        xfh = req.headers.get("x-forwarded-host", "")
+        return httpx.Response(200, headers={"Cache-Control": "public", "Age": "5"},
+                              text=f"<script src=//{xfh}/a.js>")
+    orig = _patch(cp_h)
+    try:
+        r = await wa.CachePoisonTool().execute(url="http://t/")
+        assert "X-Forwarded-Host" in r.metadata.get("candidates", [])
+    finally:
+        wa.HttpClient = orig
+
+    def oa_h(req):
+        return (httpx.Response(302, headers={"Location": "https://evil.example/cb?code=X"})
+                if "evil.example" in str(req.url) else httpx.Response(200, text="ok"))
+    orig = _patch(oa_h)
+    try:
+        r = await wa.OauthProbeTool().execute(
+            url="http://t/auth?redirect_uri=https://t/cb", param="redirect_uri")
+        assert r.metadata.get("vulnerable")
+    finally:
+        wa.HttpClient = orig
+
+    _cnt = {"n": 0}
+    def race_h(req):
+        _cnt["n"] += 1
+        return httpx.Response(200 if _cnt["n"] <= 3 else 409, text="x" * _cnt["n"])
+    orig = _patch(race_h)
+    try:
+        r = await wa.RaceProbeTool().execute(url="http://t/redeem", body={"c": "X"}, count=10)
+        assert r.metadata.get("race") is True and r.metadata.get("successes") == 3
+    finally:
+        wa.HttpClient = orig
+
+    # Wired into the web operator.
+    web = get_operator("web_operator")
+    assert {"ssrf_probe", "cors_audit", "ssti_probe", "nosqli_probe", "smuggle_probe",
+            "proto_pollution", "xxe_tool", "deserialize_gadget", "cache_poison",
+            "oauth_probe", "race_probe"} <= set(web.tools)
+    print("  PASS  advanced_web_weapons")
 
 
 async def test_evidence_first_findings():
@@ -3397,6 +3957,65 @@ def test_next_step_is_discipline_aware():
     print("  PASS  next_step_is_discipline_aware")
 
 
+def test_attack_logic_next_moves():
+    """The finding-driven move engine turns raw findings into prioritized, cross-domain
+    next actions, and they surface in the attack-state block."""
+    from core.conversation_chain import AttackState
+    from core.attack_logic import next_moves
+
+    # Instant-win: ingreslock is called out first.
+    s = AttackState(); s.target = "10.0.0.5"; s.open_ports = ["1524/tcp", "445/tcp"]
+    mv = next_moves(s)
+    assert mv and "OPEN ROOT SHELL" in mv[0]
+
+    # Credentials in hand -> spray guidance appears near the top.
+    s = AttackState(); s.target = "t"; s.open_ports = ["22/tcp"]; s.credentials = ["u:p"]
+    assert any("SPRAY" in m for m in next_moves(s))
+
+    # Active Directory ports -> a dedicated AD chain.
+    s = AttackState(); s.target = "dc"; s.open_ports = ["88/tcp", "389/tcp"]
+    assert any("Active Directory" in m and "Kerberoast" in m for m in next_moves(s))
+
+    # Web + token + cloud -> the right specialist tools are named.
+    s = AttackState(); s.target = "app"; s.open_ports = ["443/tcp"]
+    s.notes = ["captured a JWT eyJhbGci", "reaches aws 169.254.169.254 metadata"]
+    joined = " ".join(next_moves(s))
+    assert "web_operator" in joined and "jwt_tool" in joined and "metadata" in joined
+
+    # The moves are injected into the prompt block.
+    block = s.to_prompt_block()
+    assert "PRIORITIZED NEXT MOVES" in block
+
+    # Deeper killchains: a FOOTHOLD pivots to the staged post-exploitation chain
+    # (privesc -> loot -> lateral -> persist), and it outranks more enumeration.
+    s = AttackState(); s.target = "h"; s.open_ports = ["22/tcp"]
+    s.notes = ["got a shell as www-data uid=33"]
+    assert any("FOOTHOLD (Linux)" in m and "linPEAS" in m and "LATERAL" in m
+               for m in next_moves(s))
+    s = AttackState(); s.target = "h"; s.open_ports = ["445/tcp"]
+    s.notes = ["reverse shell on a windows host"]
+    assert any("FOOTHOLD (Windows)" in m and "Domain Admin" in m for m in next_moves(s))
+
+    # Cross-signal combo: creds + SMB -> secretsdump/lateral, not just a generic spray.
+    s = AttackState(); s.target = "h"; s.open_ports = ["445/tcp"]; s.credentials = ["a:b"]
+    assert any("secretsdump" in m for m in next_moves(s))
+
+    # The remaining disciplines route to their evidence-first tools.
+    for notes, tool in [
+        (["exposed modbus PLC on 502"], "modbus_scan"),
+        (["captured a wpa handshake / pmkid in wifi.pcap"], "handshake_analyze"),
+        (["analyze auth.log for the incident timeline"], "log_timeline"),
+        (["audit the project's package.json dependencies"], "dep_audit"),
+        (["review the solidity smart contract for reentrancy"], "contract_scan"),
+    ]:
+        s = AttackState(); s.target = "t"; s.notes = notes
+        assert any(tool in m for m in next_moves(s)), (tool, next_moves(s))
+    # ICS routing must carry the read-only / safety guardrail.
+    s = AttackState(); s.target = "plc"; s.open_ports = ["502/tcp"]
+    assert any("modbus_scan" in m and "READ-ONLY" in m for m in next_moves(s))
+    print("  PASS  attack_logic_next_moves")
+
+
 def test_discipline_benchmarks_valid():
     # The real-world, multi-discipline Docker benchmark suite must be well-formed
     # and self-consistent WITHOUT needing Docker or a model: every scenario is
@@ -3407,11 +4026,12 @@ def test_discipline_benchmarks_valid():
     from pathlib import Path as _Path
     bench = _Path(__file__).resolve().parent / "benchmarks"
     _sys.path.insert(0, str(bench))
+    _sys.path.insert(0, str(bench.parent))  # tests/ - so the top-level runner imports
     from grader import load_all, grade  # noqa: E402
     from benchmark_disciplines import check_scenarios  # noqa: E402
 
     scenarios = load_all(bench / "scenarios")
-    assert len(scenarios) >= 16, f"expected >=16 scenarios, got {len(scenarios)}"
+    assert len(scenarios) >= 30, f"expected >=30 scenarios, got {len(scenarios)}"
 
     # Full-spectrum: every non-web discipline Mapache claims is represented, so the
     # suite can never quietly regress into a web/CTF-only benchmark.
@@ -3452,6 +4072,78 @@ def test_discipline_benchmarks_valid():
                   tool_corpus="MERGER-ACME-CONFIDENTIAL")
     assert not wrong.passed and "diagnosis" in wrong.missing, wrong
     print("  PASS  discipline_benchmarks_valid")
+
+
+async def test_checklist_tool_and_panel():
+    # The checklist feature: the update_plan tool writes the chain's todo list, and the
+    # TUI dashboard renders it as a panel with per-step status + progress - so the user
+    # sees each step and its progress. Works for function-calling models (which use the
+    # tool) as well as the JSON-mode "plan" type.
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
+    from core.conversation_chain import ConversationChain
+    from tools.reporting_tools import PlanTool
+    from cli.tui import DashboardModel
+
+    chain = ConversationChain()
+    emitted = {}
+    class _Bus:
+        async def emit(self, topic, data, **kw):
+            emitted["topic"], emitted["data"] = topic, data
+    tool = PlanTool(chain_getter=lambda: chain, bus_getter=lambda: _Bus())
+    res = await tool.execute(todos=[
+        {"task": "recon", "status": "completed"},
+        {"task": "enumerate", "status": "in_progress"},
+        {"task": "report", "status": "pending"}])
+    assert res.success
+    assert [(t.task, t.status) for t in chain.todos] == [
+        ("recon", "completed"), ("enumerate", "in_progress"), ("report", "pending")]
+    # the tool emits agent.todos so the UI can update live
+    assert emitted.get("topic") == "agent.todos"
+    assert len(emitted["data"]["todos"]) == 3
+
+    # the dashboard renders a Checklist panel with markers + progress
+    d = DashboardModel()
+    d.set_checklist(emitted["data"]["todos"])
+    out = d.render(color=False)
+    assert "Checklist (1/3)" in out
+    assert "[x] recon" in out and "[~] enumerate" in out and "[ ] report" in out
+    # empty checklist -> no panel
+    assert "Checklist" not in DashboardModel().render(color=False)
+    print("  PASS  checklist_tool_and_panel")
+
+
+def test_autoattacker_battery_valid():
+    # The AutoAttacker post-breach battery must be well-formed WITHOUT Docker/model:
+    # unique task ids, real completion markers, all AutoAttacker categories covered,
+    # and the transcript grader passes a grounded completion while rejecting a guess.
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent))
+    import benchmark_autoattacker as aa  # noqa: E402
+
+    ids = [t.id for t in aa.TASKS]
+    assert len(ids) == len(set(ids)), "duplicate task ids"
+    assert len(aa.TASKS) >= 8, "battery too small"
+    cats = {t.category for t in aa.TASKS}
+    for c in ["discovery", "cred-access", "collection", "privesc", "exfil", "persistence"]:
+        assert c in cats, f"AutoAttacker category not covered: {c}"
+    for t in aa.TASKS:
+        assert t.markers and t.min_markers <= len(t.markers), t.id
+
+    # Grader: a completion whose real evidence surfaces the loot PASSES.
+    cloud = next(t for t in aa.TASKS if t.id == "credaccess-cloud")
+    g = aa.grade_task(cloud,
+                      final_answer="Found cloud creds in /home/dev/.aws/credentials.",
+                      tool_corpus="aws_access_key_id = AKIAIOSFODNN7EXAMPLE")
+    assert g.passed, g
+    # A plausible claim with no recovered evidence FAILS (anti-fabrication).
+    bad = aa.grade_task(cloud,
+                        final_answer="There are probably AWS keys somewhere on disk.",
+                        tool_corpus="(nothing found)")
+    assert not bad.passed, bad
+    print("  PASS  autoattacker_battery_valid")
 
 
 def test_cybench_harness_loader():
@@ -4963,6 +5655,62 @@ def test_action_narration():
     print("  PASS  action_narration")
 
 
+async def test_subagent_trace_dedupes_action():
+    """A delegated sub-agent narrates its action as ONE segment header per process.
+    A burst of identical calls prints the header once and commits NO per-call success
+    line (the live loader shows those); only a failure settles a permanent line, and a
+    new process starts a fresh segment. The live loader tracks the in-flight tool."""
+    import io
+    from cli.mapache_cli import MapacheCLI
+
+    cli = object.__new__(MapacheCLI)
+    cli._trace_last_action = {}
+    cli.tui = None
+    cli._running_tool = None
+    cli._running_action = None
+    cli._SHELL_TOOLS = getattr(MapacheCLI, "_SHELL_TOOLS", set())
+
+    class _Ev:
+        def __init__(self, d): self.data = d
+
+    agent = {"operator": "web_operator", "depth": 1}
+    buf = io.StringIO()
+    _orig = sys.stdout
+    sys.stdout = buf
+
+    async def _call(name, args, err=False):
+        await cli._on_task_start(_Ev(
+            {"tool_name": name, "args": args, "_agent": agent}))
+        # While the tool is "in flight" the loader names it.
+        assert cli._running_tool == name
+        await cli._on_task_end(_Ev(
+            {"tool_name": name, "duration_ms": 200, "error": err, "_agent": agent}))
+
+    try:
+        await cli._on_delegate_start(_Ev({"operator": "web_operator"}))
+        for _ in range(3):
+            await _call("http_request", {"url": "http://x/login"})
+        await _call("jwt_tool", {})
+        await _call("http_request", {"url": "http://x/api"}, err=True)  # settles + re-arms
+        await _call("http_request", {"url": "http://x/api"})
+    finally:
+        sys.stdout = _orig
+    out = buf.getvalue()
+
+    # Header printed once per process: burst(1) + post-jwt(1) + post-error(1) = 3.
+    assert out.count("Sending an HTTP request") == 3
+    assert out.count("Running jwt tool") == 1
+    # NO per-call success lines - that repetition is exactly what we removed.
+    assert "ok http_request" not in out and "ok jwt_tool" not in out
+    # A failure DOES settle a permanent line (not repetitive, must be visible).
+    assert out.count("x http_request") == 1
+    assert "⤷ [web_operator] Sending an HTTP request" in out
+    # Ending the delegation clears the live loader so no stale tool lingers.
+    await cli._on_delegate_end(_Ev({"operator": "web_operator"}))
+    assert cli._running_tool is None and cli._running_action is None
+    print("  PASS  subagent_trace_dedupes_action")
+
+
 class _FakeChain:
     def __init__(self, state):
         self.attack_state = state
@@ -5642,6 +6390,166 @@ async def test_web_fetch_surfaces_attack_surface():
     print("  PASS  web_fetch_surfaces_attack_surface")
 
 
+def test_osint_search_logic_and_registration():
+    """osint_search classifies the subject, builds multi-category dorks, and is wired
+    into the OSINT operator + tool registry."""
+    from security_tools.osint_tools import OsintSearchTool
+    from core.operators import get_operator
+    o = OsintSearchTool()
+    assert o._guess_kind("a@b.com") == "email"
+    assert o._guess_kind("+14155550100") == "phone"
+    assert o._guess_kind("acme.com") == "domain"
+    assert o._guess_kind("johnny_x") == "username"
+    assert o._guess_kind("John Doe") == "person"
+    cats = {c for c, _ in o._dorks("John Doe", "person")}
+    assert {"social", "leaks", "docs", "code"} <= cats
+    osint = get_operator("osint_operator")
+    assert {"osint_search", "phone_lookup", "social_lookup"} <= set(osint.tools)
+    print("  PASS  osint_search_logic_and_registration")
+
+
+async def test_osint_search_buckets_results():
+    """osint_search fans dorks out over DuckDuckGo and buckets hits by platform;
+    engine/noise hosts are dropped."""
+    import httpx
+    import security_tools.osint_tools as ot
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        body = (
+            '<a class="result__a" href="https://www.linkedin.com/in/jdoe">John Doe</a>'
+            '<a class="result__snippet">Engineer at Acme</a>'
+            '<a class="result__a" href="https://duckduckgo.com/y.js?ad=1">ad</a>'
+            '<a class="result__snippet">sponsored</a>'
+            '<a class="result__a" href="https://pastebin.com/abc">leak</a>'
+            '<a class="result__snippet">dump</a>')
+        return httpx.Response(200, text=body)
+
+    orig = ot.HttpClient
+    ot.HttpClient = lambda *a, **k: orig(*a, **{**k, "transport": httpx.MockTransport(handler)})
+    try:
+        res = await ot.OsintSearchTool().execute(subject="John Doe", kind="person")
+        assert res.success
+        assert "linkedin.com/in/jdoe" in res.output
+        assert "[SOCIAL]" in res.output and "[LEAKS]" in res.output
+        assert "duckduckgo.com" not in res.output  # engine/ad noise dropped
+    finally:
+        ot.HttpClient = orig
+    print("  PASS  osint_search_buckets_results")
+
+
+async def test_phone_lookup_fallback_and_dorks():
+    """phone_lookup parses without the phonenumbers lib and emits variants + dorks."""
+    from security_tools.osint_tools import PhoneLookupTool
+    res = await PhoneLookupTool().execute(number="+1 415 555 0100")
+    assert res.success
+    assert "+14155550100" in res.output  # E.164
+    assert "US/Canada" in res.output or "United States" in res.output
+    assert "(415) 555-0100" in res.output  # a formatted variant dork
+    assert "Reverse-lookup" in res.output
+    assert res.metadata.get("valid") is True
+    print("  PASS  phone_lookup_fallback_and_dorks")
+
+
+async def test_netlas_search_free_device_search():
+    """netlas_search parses Netlas results into IP:port rows (keyless), and surfaces the
+    free daily-limit message clearly instead of a raw error."""
+    import httpx
+    import security_tools.osint_tools as ot
+
+    ok_body = {"items": [
+        {"data": {"ip": "50.254.149.193", "port": 554, "protocol": "rtsp",
+                  "certificate": {"issuer_dn": "O=Genetec Security Center"},
+                  "isp": "Comcast", "geo": {"country": "US", "city": "Denver"}}},
+        {"data": {"ip": "8.8.4.4", "http": {"title": "Webcam Login"},
+                  "certificate": {"src": "raw_tcp://8.8.4.4:80"}, "isp": "X"}},
+    ]}
+
+    def ok_handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=ok_body)
+
+    orig = ot.HttpClient
+    ot.HttpClient = lambda *a, **k: orig(*a, **{**k, "transport": httpx.MockTransport(ok_handler)})
+    try:
+        res = await ot.NetlasSearchTool().execute(query="port:554", size=5)
+        assert res.success
+        assert "50.254.149.193:554" in res.output and "rtsp" in res.output
+        assert "Genetec Security Center" in res.output
+        assert "8.8.4.4:80" in res.output          # port parsed from certificate.src
+        assert res.metadata.get("result_count") == 2
+    finally:
+        ot.HttpClient = orig
+
+    # The free daily-limit body is turned into a clear, actionable failure.
+    def limit_handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "type": "daily_request_limit_exceeded",
+            "title": "Daily request limit exceeded",
+            "detail": "wait until the limit resets (05 hr.)"})
+
+    ot.HttpClient = lambda *a, **k: orig(*a, **{**k, "transport": httpx.MockTransport(limit_handler)})
+    try:
+        res = await ot.NetlasSearchTool().execute(query="port:554")
+        assert not res.success and res.metadata.get("limited") is True
+        assert "daily request limit" in res.error.lower()
+        assert "NETLAS_API_KEY" in res.error   # points at the free key to raise the limit
+    finally:
+        ot.HttpClient = orig
+    print("  PASS  netlas_search_free_device_search")
+
+
+async def test_social_lookup_instagram_to_linkedin():
+    """social_lookup reads the IG profile's og: name then finds a LinkedIn match."""
+    import httpx
+    import security_tools.osint_tools as ot
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if "instagram.com" in url and "html.duckduckgo" not in url:
+            return httpx.Response(200, text=(
+                '<meta property="og:title" content="Jane Roe (@jane.roe)">'
+                '<meta property="og:description" content="Security researcher">'))
+        # DuckDuckGo search result -> a LinkedIn profile
+        return httpx.Response(200, text=(
+            '<a class="result__a" href="https://www.linkedin.com/in/janeroe">Jane Roe</a>'
+            '<a class="result__snippet">Security Researcher</a>'))
+
+    orig = ot.HttpClient
+    ot.HttpClient = lambda *a, **k: orig(*a, **{**k, "transport": httpx.MockTransport(handler)})
+    try:
+        res = await ot.SocialLookupTool().execute(
+            username="jane.roe", platform="instagram", find="linkedin")
+        assert res.success
+        assert "Jane Roe" in res.output
+        assert "linkedin.com/in/janeroe" in res.output
+        assert "[LINKEDIN candidates]" in res.output
+    finally:
+        ot.HttpClient = orig
+    print("  PASS  social_lookup_instagram_to_linkedin")
+
+
+def test_swarm_skips_non_engagement_input():
+    """Swarm must not deploy a Recon Operator to nmap-scan nothing for a greeting. Only
+    an actual engagement (a target is set, or the text names a host/URL/IP or offensive
+    intent) routes through the swarm; small-talk goes to the lead."""
+    import types
+    from cli.mapache_cli import MapacheCLI
+
+    cli = object.__new__(MapacheCLI)
+    cli.controller = types.SimpleNamespace(
+        chain=types.SimpleNamespace(attack_state=types.SimpleNamespace(target="")))
+
+    for chit in ("hello", "hi there", "thanks!", "what can you do?", "how are you"):
+        assert cli._is_engagement_objective(chit) is False, chit
+    for job in ("scan example.com", "enumerate the host", "find exposed cameras",
+                "nmap 10.0.0.5", "pentest https://acme.io", "recon acme.com",
+                "exploit the target"):
+        assert cli._is_engagement_objective(job) is True, job
+    # Once a target is set, even a bare follow-up continues the engagement.
+    cli.controller.chain.attack_state.target = "10.0.0.5"
+    assert cli._is_engagement_objective("what next") is True
+    print("  PASS  swarm_skips_non_engagement_input")
+
+
 def test_enhanced_input_completion():
     from cli import enhanced_input as ei
 
@@ -6040,8 +6948,8 @@ async def test_external_tools():
         assert _resolve_env("k=${ET_TEST_KEY}") == "k=secret123"
 
         specs = [
-            {"name": "shodan_host", "kind": "http", "method": "GET",
-             "url": "https://api.shodan.io/shodan/host/{ip}?key=${ET_TEST_KEY}",
+            {"name": "example_host", "kind": "http", "method": "GET",
+             "url": "https://api.example.com/host/{ip}?key=${ET_TEST_KEY}",
              "params": {"ip": {"type": "string", "description": "ip", "required": True}}},
             {"name": "my_tool", "kind": "command", "command": "echo {args}",
              "params": {"args": {"type": "string", "description": "a"}}},
@@ -6050,10 +6958,10 @@ async def test_external_tools():
             {"name": "weird", "kind": "ftp"},                   # unknown kind → skip
         ]
         tools, warns = build_external_tools(specs)
-        assert {t.name for t in tools} == {"shodan_host", "my_tool"}
+        assert {t.name for t in tools} == {"example_host", "my_tool"}
         assert len(warns) == 3  # three bad specs skipped, not fatal
 
-        ht = next(t for t in tools if t.name == "shodan_host")
+        ht = next(t for t in tools if t.name == "example_host")
         assert isinstance(ht, HttpApiTool)
         assert "ip" in ht.parameters["properties"]
         # A convenience `required: true` on a param is promoted to the object-level
@@ -6061,7 +6969,7 @@ async def test_external_tools():
         # invalid JSON Schema and strict validators (xAI) 400 on it.
         assert ht.parameters["required"] == ["ip"]
         assert "required" not in ht.parameters["properties"]["ip"]
-        assert ht.to_context_schema().name == "shodan_host"  # per-instance name
+        assert ht.to_context_schema().name == "example_host"  # per-instance name
 
         # A command tool runs through the backend, egress-wrapped.
         class FakeBackend:
@@ -6079,6 +6987,50 @@ async def test_external_tools():
     finally:
         os.environ.pop("ET_TEST_KEY", None)
     print("  PASS  external_tools")
+
+
+async def test_http_api_missing_key_and_auth_note():
+    """An API tool whose key env var is unset fails fast with a clear 'set the key'
+    message instead of firing a doomed keyless request; a live 401/403 gets an
+    auth/credit note so the agent doesn't read it as an unbeatable wall. A keyless
+    endpoint needs no env at all."""
+    import os
+    import httpx
+    import browser.http_client as hc
+    from tools.external_tools import HttpApiTool
+
+    os.environ.pop("XAPI_TEST_KEY", None)
+    spec = {"name": "demo_search", "kind": "http", "method": "GET",
+            "url": "https://api.example.com/search?key=${XAPI_TEST_KEY}&query={query}",
+            "signup_url": "https://example.com/signup",
+            "params": {"query": {"type": "string", "required": True}}}
+    t = HttpApiTool(spec)
+    assert t._required_env == ["XAPI_TEST_KEY"]
+
+    # Missing key: pre-flight fail, no request sent, names the var + signup.
+    res = await t.execute(query="webcam has_screenshot:true")
+    assert not res.success
+    assert "XAPI_TEST_KEY" in res.error and "example.com/signup" in res.error
+    assert res.metadata.get("missing_env") == ["XAPI_TEST_KEY"]
+
+    # Key present but the server returns 403: the error carries an auth/credit note.
+    os.environ["XAPI_TEST_KEY"] = "abc"
+    orig = hc.HttpClient
+    hc.HttpClient = lambda *a, **k: orig(*a, **{
+        **k, "transport": httpx.MockTransport(lambda r: httpx.Response(403, text="cf"))})
+    try:
+        res = await t.execute(query="webcam")
+    finally:
+        hc.HttpClient = orig
+        os.environ.pop("XAPI_TEST_KEY", None)
+    assert not res.success and "auth/credit" in res.error
+
+    # A keyless endpoint (e.g. crt.sh): no required env, so it never pre-flight-blocks.
+    keyless = HttpApiTool({"name": "crtsh_search", "kind": "http", "method": "GET",
+                           "url": "https://crt.sh/?q={query}&output=json",
+                           "params": {"query": {"type": "string", "required": True}}})
+    assert keyless._required_env == []
+    print("  PASS  http_api_missing_key_and_auth_note")
 
 
 async def test_command_tool_clone_autoheal():
@@ -6339,16 +7291,16 @@ def test_integration_catalog():
     from tools.external_tools import build_external_tools
 
     # Names a service, nothing configured → returns its recipe.
-    r = detect_missing_integration("search 8.8.8.8 in shodan", set(), environ={})
-    assert r is not None and r.key == "shodan"
+    r = detect_missing_integration("check 8.8.8.8 on greynoise", set(), environ={})
+    assert r is not None and r.key == "greynoise"
     # Spec present AND key set → fully ready, no prompt.
     assert detect_missing_integration(
-        "shodan this ip", {"shodan_host", "shodan_search"},
-        environ={"SHODAN_API_KEY": "x"}) is None
+        "greynoise this ip", {"greynoise_ip"},
+        environ={"GREYNOISE_API_KEY": "x"}) is None
     # Spec present but key missing → still prompts (to add just the key).
     r2 = detect_missing_integration(
-        "shodan this ip", {"shodan_host", "shodan_search"}, environ={})
-    assert r2 is not None and r2.key == "shodan"
+        "greynoise this ip", {"greynoise_ip"}, environ={})
+    assert r2 is not None and r2.key == "greynoise"
     # Other services + unrelated input.
     assert detect_missing_integration(
         "run this hash through virustotal", set(), environ={}).key == "virustotal"
@@ -6359,6 +7311,14 @@ def test_integration_catalog():
         tools, warns = build_external_tools(list(recipe.specs))
         assert tools and not warns, (recipe.key, warns)
         assert recipe.env_var and recipe.signup_url
+    # Retired integrations (e.g. Shodan) left in a stale persisted config are skipped
+    # at load - by tool name or a retired API host in the URL - so a removed tool never
+    # resurrects. Live integrations are untouched.
+    from core.integration_catalog import is_retired_spec
+    assert is_retired_spec({"name": "shodan_search", "url": "x"})
+    assert is_retired_spec({"name": "custom", "url": "https://api.shodan.io/x"})
+    assert not is_retired_spec({"name": "vt_ip", "url": "https://virustotal.com"})
+    assert not is_retired_spec("not-a-dict")
     print("  PASS  integration_catalog")
     cfg = MapacheConfig.from_dict(
         {"execution": {"backend": "docker", "container": "kali"}})
@@ -6825,6 +7785,7 @@ async def run_all():
     print("\nSetup wizard (feature C1)")
     test_config_save_and_raw_roundtrip()
     test_wizard_prefs_edit_raw()
+    test_wizard_integrations_step()
     test_wizard_configure_model_choice()
     await test_wizard_choose_cloud_model_interactive()
     await test_wizard_roles_and_model_roles_config()
@@ -6843,6 +7804,7 @@ async def run_all():
     test_scope_inactive_allows_everything()
     test_scope_target_allowlist()
     test_scope_fallback_target_and_ip_in_command()
+    test_scope_lan_scan_guard()
     test_scope_forbidden_tools_and_patterns()
     test_scope_load_fail_soft()
     await test_controller_scope_refusal()
@@ -6863,12 +7825,16 @@ async def run_all():
     await test_prompt_injection_defense_and_offense()
     await test_tiered_model_routing()
     await test_offensive_arsenal()
+    await test_advanced_web_weapons()
+    await test_domain_capability_tools()
+    await test_remaining_discipline_tools()
     await test_evidence_first_findings()
     await test_http_repeater_burp_lite()
     await test_route_enumeration()
     test_operator_roster()
     test_lead_prompt_routes_by_discipline()
     test_next_step_is_discipline_aware()
+    test_attack_logic_next_moves()
     test_discipline_benchmarks_valid()
     test_cybench_harness_loader()
     test_cyberseceval_wrapper_logic()
@@ -6904,6 +7870,13 @@ async def run_all():
     await test_web_fetch_surfaces_attack_surface()
     await test_browser_tool()
     await test_heavy_tools()
+
+    print("\nPassive OSINT weapons (deep search / phone / social cross-ref)")
+    test_osint_search_logic_and_registration()
+    await test_osint_search_buckets_results()
+    await test_phone_lookup_fallback_and_dorks()
+    await test_netlas_search_free_device_search()
+    await test_social_lookup_instagram_to_linkedin()
 
     print("\nAutomated reporting (feature L)")
     test_report_builder()
@@ -6952,6 +7925,8 @@ async def run_all():
     test_tui_output_model_and_renderer()
     test_tui_dashboard_model()
     test_agent_color_routing()
+    await test_subagent_trace_dedupes_action()
+    test_swarm_skips_non_engagement_input()
     test_enhanced_input_completion()
     await test_cli_ptk_turn_no_concurrent_prompt()
 
@@ -6971,6 +7946,7 @@ async def run_all():
     test_config_execution_section()
     await test_code_run_tool()
     await test_external_tools()
+    await test_http_api_missing_key_and_auth_note()
     await test_command_tool_clone_autoheal()
     test_tool_registry_name_collision_guard()
     await test_generated_tool_collision_guard()
@@ -6999,6 +7975,7 @@ async def run_all():
     await test_routing_pipeline_picks_fast_executor()
     await test_routing_excludes_embedding_only_model()
     await test_routing_strategy_switch_changes_executor()
+    await test_routing_auto_uses_configured_model()
 
     print("\n" + "─" * 40)
     print("All tests passed.\n")

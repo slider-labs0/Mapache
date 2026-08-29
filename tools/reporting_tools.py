@@ -80,3 +80,64 @@ class ReportFindingTool(BaseTool):
             f"Impact: {f.impact or '(none)'}\nRemediation: {f.remediation or '(none)'}",
             metadata={"severity": f.severity, "category": f.category,
                       "total_findings": len(self.store)})
+
+
+class PlanTool(BaseTool):
+    """Maintain the live checklist the user watches (works for function-calling models,
+    which can't emit the JSON-mode "plan" type). Calls into the conversation chain's
+    todo list and emits `agent.todos` so the UI updates immediately."""
+
+    name = "update_plan"
+    description = (
+        "Maintain your step-by-step task checklist so the user can SEE each step and its "
+        "progress. For any goal needing 3+ steps, call this FIRST with the full ordered "
+        "list, then call it again to update statuses as you work. Keep exactly ONE step "
+        "in_progress at a time; mark finished steps completed. This does not do the work "
+        "- it records the plan."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "todos": {
+                "type": "array",
+                "description": "The full checklist, in order. Each item is "
+                               '{"task": "<step>", "status": "pending|in_progress|completed"}.',
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "task": {"type": "string"},
+                        "status": {"type": "string",
+                                   "enum": ["pending", "in_progress", "completed"]},
+                    },
+                    "required": ["task"],
+                },
+            },
+        },
+        "required": ["todos"],
+    }
+    permissions: set = set()
+    tags = ["planning", "checklist"]
+
+    def __init__(self, chain_getter: Any, bus_getter: Any = None, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._chain_getter = chain_getter
+        self._bus_getter = bus_getter
+
+    async def execute(self, todos: Any, **kwargs: Any) -> ToolResult:
+        chain = self._chain_getter() if callable(self._chain_getter) else self._chain_getter
+        if chain is None:
+            return ToolResult.fail("No task list is available.")
+        if not isinstance(todos, list) or not todos:
+            return ToolResult.fail("Provide `todos` as a non-empty list of steps.")
+        chain.set_todos(todos)
+        items = [{"task": t.task, "status": t.status} for t in chain.todos]
+        bus = self._bus_getter() if callable(self._bus_getter) else self._bus_getter
+        if bus is not None:
+            try:
+                await bus.emit("agent.todos", {"todos": items}, source="tool")
+            except Exception:
+                pass
+        done = sum(1 for t in chain.todos if t.status == "completed")
+        body = "\n".join(f"{t.marker()} {t.task}" for t in chain.todos)
+        return ToolResult.ok(f"Checklist updated ({done}/{len(items)}):\n{body}",
+                             metadata={"todos": items})

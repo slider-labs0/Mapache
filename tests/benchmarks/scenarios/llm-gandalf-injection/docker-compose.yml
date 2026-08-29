@@ -1,0 +1,8 @@
+# Gandalf mini-replica: a DETERMINISTIC rule-based 'assistant' (no model needed)
+# that guards a secret with a naive blocklist a prompt-injection defeats (CWE-1427).
+services:
+  web:
+    build: .
+    ports:
+      - "127.0.0.1:0:5000"
+    restart: "no"

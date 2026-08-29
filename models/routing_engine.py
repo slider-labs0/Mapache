@@ -242,13 +242,22 @@ class RoutingEngine:
         return self._route_auto(role)
 
     def _route_auto(self, role: ModelRole) -> RoutingDecision:
-        """Auto-select best model for role."""
-        candidate = self._best_for_role(role)
+        """Use the operator's configured model. The model chosen in setup drives every
+        role - so 'I picked claude' gives claude agents, 'I picked qwen' routes to qwen -
+        across the multi-agent swarm. Explicit per-role overrides (model_roles) still win
+        above this. Only when no model is configured does it score-pick from the pool
+        (the local multi-model case)."""
+        if self.primary_model_id:
+            candidate = self.primary_model_id
+            reason = "auto: operator's configured model"
+        else:
+            candidate = self._best_for_role(role)
+            reason = f"auto: best score for {role.value}"
         return RoutingDecision(
             role=role,
             model_id=candidate,
             provider=self._get_provider(candidate),
-            reason=f"auto: best score for {role.value}",
+            reason=reason,
         )
 
     # ------------------------------------------------------------------ #

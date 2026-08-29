@@ -1,0 +1,60 @@
+{
+  "discipline": "phishing",
+  "title": "Nazario-corpus-style phishing email header forensics",
+  "difficulty": "easy",
+  "win_condition": "finding",
+  "target": {
+    "kind": "analysis"
+  },
+  "objective": "The artifacts directory contains a raw email (.eml) with full headers. Triage it: determine whether it is a phishing/spoofed message using the authentication results and header inconsistencies, cite the specific evidence (From vs Reply-To vs Return-Path, SPF/DKIM/DMARC results, the mismatched link), name the class with a CWE, and recommend defensive actions.",
+  "artifacts_dir": "artifacts",
+  "tags": [
+    "phishing",
+    "email",
+    "spoofing",
+    "header-analysis",
+    "nazario"
+  ],
+  "rubric": {
+    "cwe": "CWE-290",
+    "vuln_keywords": [
+      "phishing",
+      "spoofing",
+      "spoofed",
+      "email spoofing",
+      "sender forgery",
+      "impersonation",
+      "authentication failure",
+      "display-name spoof"
+    ],
+    "evidence_markers": [
+      "spf=fail",
+      "dkim=fail",
+      "dmarc=fail",
+      "Reply-To",
+      "Return-Path",
+      "From:",
+      "support@",
+      "secure-bank-update",
+      "X-"
+    ],
+    "grounded_markers": [
+      "spf=fail",
+      "Reply-To"
+    ],
+    "remediation_keywords": [
+      "dmarc",
+      "quarantine",
+      "reject",
+      "block",
+      "user awareness",
+      "report",
+      "spf",
+      "dkim",
+      "do not click",
+      "reset"
+    ],
+    "min_evidence": 2
+  },
+  "id": "phish-nazario-headers"
+}

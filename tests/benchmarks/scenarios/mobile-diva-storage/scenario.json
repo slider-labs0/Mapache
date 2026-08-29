@@ -1,0 +1,53 @@
+{
+  "discipline": "mobile",
+  "title": "DIVA-style Android app: insecure local data storage",
+  "difficulty": "easy",
+  "win_condition": "finding",
+  "target": {
+    "kind": "analysis"
+  },
+  "objective": "Statically analyze the decompiled Android app in the artifacts directory. It persists sensitive data locally in a way any app/rooted user can read. Identify the insecure-storage weakness, cite the exact file/API and the value it writes, name the class with a CWE, and recommend the fix.",
+  "artifacts_dir": "artifacts",
+  "tags": [
+    "mobile",
+    "android",
+    "insecure-storage",
+    "diva"
+  ],
+  "rubric": {
+    "cwe": "CWE-312",
+    "vuln_keywords": [
+      "insecure data storage",
+      "cleartext storage",
+      "plaintext storage",
+      "sensitive data in",
+      "world-readable",
+      "insecure storage",
+      "cleartext"
+    ],
+    "evidence_markers": [
+      "SharedPreferences",
+      "MODE_WORLD_READABLE",
+      "putString",
+      "creditcard",
+      "password",
+      "getSharedPreferences",
+      "SQLite"
+    ],
+    "grounded_markers": [
+      "MODE_WORLD_READABLE",
+      "putString"
+    ],
+    "remediation_keywords": [
+      "encrypt",
+      "keystore",
+      "EncryptedSharedPreferences",
+      "MODE_PRIVATE",
+      "do not store",
+      "android keystore",
+      "secure"
+    ],
+    "min_evidence": 2
+  },
+  "id": "mobile-diva-storage"
+}

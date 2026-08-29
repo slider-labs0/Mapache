@@ -1,0 +1,4 @@
+Static analysis notes (real binary is /target/crackme):
+check_key() decodes an embedded byte array by XOR 0x2a, then strcmp() against the
+user input. The key material ships inside the binary, so the 'secret' is derivable
+by anyone with the file. enc[] ^ 0x2a spells the accepted password.

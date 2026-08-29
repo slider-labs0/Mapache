@@ -4,7 +4,7 @@ external_tools.py - bring-your-own tools (integrations).
 Let an operator route their OWN tools into Mapache from config, without writing a
 plugin, in two flavours:
 
-  * HTTP/API tools  - wrap a REST endpoint (Shodan, Censys, VirusTotal, GreyNoise,
+  * HTTP/API tools  - wrap a REST endpoint (VirusTotal, GreyNoise, Censys, AbuseIPDB,
     an internal service …). Declared with a URL template + params; the agent calls
     it like any tool. API keys go in via ${ENV} refs so they never sit in the spec.
     Requests honor the egress profile (proxy/Tor), so lookups aren't attributable
@@ -20,10 +20,11 @@ BaseTool instances the CLI registers. Bad specs warn-don't-block (skipped with a
 message), so one typo can't stop startup.
 
 Spec shape:
-  { "name": "shodan_host", "kind": "http", "method": "GET",
-    "url": "https://api.shodan.io/shodan/host/{ip}?key=${SHODAN_API_KEY}",
+  { "name": "vt_ip", "kind": "http", "method": "GET",
+    "url": "https://www.virustotal.com/api/v3/ip_addresses/{ip}",
+    "headers": {"x-apikey": "${VT_API_KEY}"},
     "params": {"ip": {"type": "string", "description": "target IP"}},
-    "description": "Shodan host lookup", "permission": "network" }
+    "description": "VirusTotal IP reputation", "permission": "network" }
 
   { "name": "my_recon", "kind": "command",
     "repo": "https://github.com/me/mytool",          # optional: cloned once
@@ -115,7 +116,7 @@ def _param_schema(spec: dict) -> dict:
 
 
 class HttpApiTool(BaseTool):
-    """A REST/API endpoint wrapped as a tool (e.g. Shodan). Set per-instance."""
+    """A REST/API endpoint wrapped as a tool (e.g. VirusTotal). Set per-instance."""
 
     name = "http_api_tool"  # placeholder for BaseTool.__init_subclass__
     description = "external API tool"
@@ -133,10 +134,34 @@ class HttpApiTool(BaseTool):
         self._url = str(spec.get("url", ""))
         self._headers = dict(spec.get("headers") or {})
         self._body = spec.get("body")
+        self._signup = spec.get("signup_url") or ""
+        # Which ${ENV} vars this endpoint needs (the API key etc.) - so we can fail
+        # fast with a clear message instead of firing a doomed credential-less request
+        # that the provider bounces (a Cloudflare-fronted API answers a keyless call
+        # with an HTTP 403 challenge, which reads like a block, not "set a key").
+        blob = " ".join([self._url, *map(str, self._headers.values()),
+                         str(self._body or "")])
+        self._required_env = _ENV_RE.findall(blob)
         self.egress = egress
+
+    def _missing_env(self) -> list[str]:
+        return [v for v in self._required_env if not os.environ.get(v)]
 
     async def execute(self, **kwargs: Any) -> ToolResult:
         from browser.http_client import HttpClient
+        # Pre-flight: a required credential is unset - don't send a keyless request
+        # that will 403. Tell the operator exactly what to set.
+        missing = self._missing_env()
+        if missing:
+            names = ", ".join(missing)
+            hint = (f" Get a key at {self._signup} then set it, or re-run the "
+                    f"integration setup." if self._signup else
+                    " Set it in your environment (or via the integration setup).")
+            return ToolResult.fail(
+                f"{self.name}: missing API credential - {names} is not set, so the "
+                f"request would be rejected (providers answer a keyless call with an "
+                f"HTTP 401/403, not real data).{hint}",
+                metadata={"missing_env": missing})
         url = _resolve_env(_fill(self._url, kwargs, url=True))
         headers = {k: _resolve_env(str(v)) for k, v in self._headers.items()}
         body = _resolve_env(_fill(str(self._body), kwargs, url=False)) if self._body else None
@@ -149,8 +174,17 @@ class HttpApiTool(BaseTool):
             return ToolResult.fail(f"{self.name}: request failed - {exc}")
         text = (resp.text or "")[:8000]
         if not resp.success:
+            # A 401/403 on an authenticated API almost always means the key is bad,
+            # expired, or out of query credits - flag that so the agent doesn't read
+            # it as an unbeatable Cloudflare wall and give up.
+            auth_note = ""
+            if resp.status_code in (401, 403):
+                auth_note = (f"\n(This is an auth/credit response. Check that "
+                             f"{', '.join(self._required_env) or 'the API key'} is "
+                             f"valid and has remaining credits"
+                             + (f"; keys: {self._signup}" if self._signup else "") + ".)")
             return ToolResult.fail(
-                f"{self.name}: HTTP {resp.status_code}\n{text}",
+                f"{self.name}: HTTP {resp.status_code}\n{text}{auth_note}",
                 metadata={"status": resp.status_code})
         return ToolResult.ok(f"{self.name} → HTTP {resp.status_code}\n{text}",
                              metadata={"status": resp.status_code})

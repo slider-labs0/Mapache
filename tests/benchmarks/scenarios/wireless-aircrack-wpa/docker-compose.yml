@@ -1,0 +1,6 @@
+services:
+  target:
+    build:
+      context: .
+    command: sleep infinity
+    restart: "no"

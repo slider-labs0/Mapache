@@ -66,6 +66,14 @@ class ChromiumController:
 
     DEFAULT_TIMEOUT = 30000  # ms
     MAX_TEXT_LENGTH = 8000
+    # DDoS "access queue" fronts (Dread/EndGame, Cloudflare-style) show a waiting page
+    # that auto-redirects to the real site. We wait it out instead of returning it.
+    QUEUE_MARKERS = (
+        "access queue", "placed in a queue", "awaiting forwarding",
+        "you will be automatically redirected", "please do not refresh",
+        "checking your browser", "ddos protection", "please wait",
+    )
+    QUEUE_MAX_WAIT = 150  # seconds to wait for the queue/redirect to clear
 
     def __init__(
         self,
@@ -104,6 +112,9 @@ class ChromiumController:
                 "--disable-setuid-sandbox",
                 "--disable-dev-shm-usage",
                 "--disable-gpu",
+                # .onion services serve self-signed certs; never stop at the cert
+                # interstitial ("Your connection is not private" / NET::ERR_CERT_*).
+                "--ignore-certificate-errors",
             ],
         }
 
@@ -150,6 +161,65 @@ class ChromiumController:
     # Page operations
     # ------------------------------------------------------------------ #
 
+    async def _bypass_cert_interstitial(self, page: Any) -> None:
+        """Click through Chromium's self-signed-cert warning ('Your connection is not
+        private' -> Advanced -> Proceed) if it appears. Common on .onion services."""
+        try:
+            title = (await page.title()) or ""
+            body = await page.evaluate(
+                "() => document.body ? document.body.innerText : ''") or ""
+        except Exception:
+            return
+        blob = (title + " " + body).lower()
+        if not ("privacy error" in blob or "connection is not private" in blob
+                or "err_cert" in blob or "net::err_cert" in blob):
+            return
+        logger.info("Cert interstitial detected - proceeding through it")
+        for attempt in (
+            lambda: page.evaluate(
+                "() => window.certificateErrorPageController "
+                "&& window.certificateErrorPageController.proceed()"),
+            lambda: page.click("#proceed-link", timeout=3000),
+        ):
+            try:
+                await attempt()
+                await page.wait_for_load_state("domcontentloaded", timeout=15000)
+                return
+            except Exception:
+                continue
+
+    async def _wait_through_queue(self, page: Any) -> None:
+        """If the page is a DDoS 'access queue' / waiting front (Dread's EndGame etc.),
+        wait for it to auto-redirect to the real site instead of returning the queue.
+        Bounded by QUEUE_MAX_WAIT; safe no-op on a normal page."""
+        async def _blob() -> str:
+            try:
+                title = (await page.title()) or ""
+                body = await page.evaluate(
+                    "() => document.body ? document.body.innerText : ''") or ""
+                return (title + " " + body).lower()
+            except Exception:
+                return ""
+
+        blob = await _blob()
+        if not any(m in blob for m in self.QUEUE_MARKERS):
+            return
+        logger.info("Access/DDoS queue detected - waiting up to %ds for redirect",
+                    self.QUEUE_MAX_WAIT)
+        import time as _time
+        deadline = _time.time() + self.QUEUE_MAX_WAIT
+        while _time.time() < deadline:
+            try:
+                await page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception:
+                pass
+            await asyncio.sleep(5)
+            blob = await _blob()
+            if not any(m in blob for m in self.QUEUE_MARKERS):
+                logger.info("Cleared the access queue")
+                return
+        logger.info("Still queued after %ds - returning the current page", self.QUEUE_MAX_WAIT)
+
     async def fetch(
         self,
         url: str,
@@ -187,6 +257,14 @@ class ChromiumController:
                     await page.wait_for_load_state("networkidle", timeout=5000)
                 except Exception:
                     pass
+
+            # Self-signed cert interstitial ("Your connection is not private"): proceed
+            # anyway. --ignore-certificate-errors normally prevents it; this is a fallback.
+            await self._bypass_cert_interstitial(page)
+
+            # DDoS/access-queue front (e.g. Dread/EndGame): don't return the waiting
+            # page - sit in the queue for the auto-redirect, then read the real page.
+            await self._wait_through_queue(page)
 
             title = await page.title()
             html = await page.content()

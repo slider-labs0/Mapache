@@ -57,6 +57,8 @@ CORE_TOOLS = {
     "search_payloads", "secret_scan",
     # Operation plan (OPPLAN) - objectives + status transitions for the orchestrator.
     "opplan_add", "opplan_update", "opplan_show",
+    # Live checklist - maintain the step-by-step task list the user watches (any phase).
+    "update_plan",
     # Vulnerability-research pipeline seeder (scanner→detector→verifier→patcher→exploiter).
     "vuln_research",
 }
@@ -94,6 +96,12 @@ PORT_TOOLS = {
     "445":  {"msf_search", "msf_run", "kali_run"},
     "139":  {"msf_search", "msf_run", "kali_run"},
     "3389": {"msf_search", "msf_run", "kali_run"},
+    # ICS/OT: Modbus, S7comm, DNP3, EtherNet/IP, BACnet -> read-only enum tool.
+    "502":  {"modbus_scan", "kali_run"},
+    "102":  {"modbus_scan", "kali_run"},
+    "20000": {"modbus_scan", "kali_run"},
+    "44818": {"modbus_scan", "kali_run"},
+    "47808": {"modbus_scan", "kali_run"},
 }
 
 
@@ -382,6 +390,20 @@ class AttackState:
         if self.dead_vectors:
             lines.append("DEAD vectors (identical response for every value tried - STOP "
                          f"fuzzing these, switch approach): {', '.join(self.dead_vectors[:8])}")
+
+        # Finding-driven, cross-discipline next moves (feature: attack logic). Turns the
+        # raw findings above into prioritized "do THIS next, with THIS tool" guidance so
+        # the agent chains findings into deeper exploitation across every domain.
+        try:
+            from .attack_logic import next_moves
+            moves = next_moves(self)
+        except Exception:
+            moves = []
+        if moves:
+            lines.append("PRIORITIZED NEXT MOVES (highest value first - pick one, act, "
+                         "then re-read this block):")
+            for i, mv in enumerate(moves, 1):
+                lines.append(f"  {i}. {mv}")
 
         lines.append(f"Next step: {self.suggest_next_step()}")
         lines.append("=== END ATTACK STATE ===")

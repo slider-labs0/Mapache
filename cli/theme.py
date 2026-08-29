@@ -438,6 +438,7 @@ _TOOL_DISPLAY = {
     "file_list": "List", "file_search": "Search",
     "web_fetch": "Fetch", "web_search": "Search", "http_request": "HTTP",
     "http_repeater": "Repeater", "browser": "Browser", "tor_fetch": "Tor fetch",
+    "tor_control": "Tor control", "onion_search": "Onion search",
     "nmap_scan": "Nmap", "code_run": "Code", "create_tool": "CreateTool",
     "cve_lookup": "CVE", "msf_search": "MSF", "msf_run": "MSF", "sqlmap": "Sqlmap",
     "fuzz": "Fuzz", "searchsploit": "Searchsploit", "binary_analyze": "Analyze",

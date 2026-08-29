@@ -95,7 +95,10 @@ OBJECTIVE_ANALYSIS = (
 # --------------------------------------------------------------------------- #
 
 def _run(argv: list[str], *, timeout: int = 300, cwd: str | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, cwd=cwd)
+    # encoding/errors are explicit: docker emits UTF-8 progress bytes that the Windows
+    # default (cp1252) cannot decode, which otherwise crashes the capture reader thread.
+    return subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", timeout=timeout, cwd=cwd)
 
 
 def docker_available() -> bool:

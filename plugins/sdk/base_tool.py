@@ -59,8 +59,10 @@ class ToolResult:
         return cls(output=output, success=True, metadata=metadata or {})
 
     @classmethod
-    def fail(cls, error: str, output: str = "") -> "ToolResult":
-        return cls(output=output, success=False, error=error)
+    def fail(cls, error: str, output: str = "",
+             metadata: dict | None = None) -> "ToolResult":
+        return cls(output=output, success=False, error=error,
+                   metadata=metadata or {})
 
     def to_string(self) -> str:
         """What gets injected back into the model context."""

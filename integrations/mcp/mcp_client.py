@@ -31,6 +31,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -65,6 +66,22 @@ class MCPServerConfig:
     timeout: float = 0.0
 
 
+_ENV_REF_RE = re.compile(r"\$\{([A-Z0-9_]+)\}")
+
+
+def _resolve_env_map(env: dict) -> dict[str, str]:
+    """Interpolate ${VAR} in an mcp.json `env` map from the process environment, so a
+    secret can be referenced as ${ZOOMEYE_API_KEY} instead of being pasted in the file.
+    An entry that resolves to empty is DROPPED (not passed as ""), so it can't clobber a
+    value the same key already has in os.environ - which the server env inherits."""
+    out: dict[str, str] = {}
+    for k, v in (env or {}).items():
+        s = _ENV_REF_RE.sub(lambda m: os.environ.get(m.group(1), ""), str(v))
+        if s != "" or not _ENV_REF_RE.search(str(v)):
+            out[str(k)] = s  # keep literals and resolved values; drop unresolved ${VAR}
+    return out
+
+
 def load_mcp_config(path: str) -> list[MCPServerConfig]:
     """
     Parse a Claude-Desktop-style mcp.json. Returns [] if the file is absent so
@@ -90,7 +107,7 @@ def load_mcp_config(path: str) -> list[MCPServerConfig]:
             name=name,
             command=command,
             args=list(spec.get("args", []) or []),
-            env={str(k): str(v) for k, v in (spec.get("env") or {}).items()},
+            env=_resolve_env_map(spec.get("env") or {}),
             tools=[str(t) for t in (spec.get("tools") or [])],
             timeout=float(spec.get("timeout") or 0.0),
         ))

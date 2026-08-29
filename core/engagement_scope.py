@@ -44,6 +44,39 @@ from typing import Any, Optional
 TARGET_KEYS = {"target", "host", "hosts", "rhost", "rhosts", "ip", "domain", "url"}
 
 _IPV4_RE = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b")
+
+# Tools that actively scan / sweep hosts by name, and the scanner/host-touching
+# binaries a raw shell/kali_run invocation uses. The LAN guard applies to these so an
+# agent-invented scan of the operator's own network is refused - while a filename or
+# log line that merely mentions a private IP (a different tool) is not.
+_SCAN_TOOLS = {"nmap_scan", "masscan"}
+_SHELL_TOOLS = {"shell", "kali_run"}
+_SCANNER_BIN_RE = re.compile(
+    r"\b(nmap|masscan|zmap|unicornscan|hping3|arp-?scan|netdiscover|fping|nbtscan|"
+    r"nikto|gobuster|ffuf|dirb|feroxbuster|wpscan|enum4linux|crackmapexec|nxc|"
+    r"smbclient|snmpwalk|onesixtyone|showmount|rpcclient|amap)\b", re.IGNORECASE)
+
+
+def _is_internal_host(host: str) -> bool:
+    """True for an RFC1918 / link-local / CGNAT (100.64/10) address - an internal host
+    the agent must not scan on its own. Loopback is EXCLUDED: it is governed by
+    allow_loopback and used for local practice targets (e.g. a Juice Shop container)."""
+    h = (host or "").strip()
+    if h.count(":") == 1:  # strip a trailing :port (never touch bare IPv6)
+        maybe, _, port = h.partition(":")
+        if port.isdigit():
+            h = maybe
+    try:
+        ip = ipaddress.ip_address(h)
+    except ValueError:
+        return False
+    if ip.is_loopback:
+        return False
+    try:
+        cgnat = ip in ipaddress.ip_network("100.64.0.0/10")
+    except ValueError:
+        cgnat = False
+    return ip.is_private or ip.is_link_local or cgnat
 # scheme://host[:port] - host captured without the port or path.
 _URL_HOST_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9+.\-]*://(?P<host>[^/:\s]+)")
 _HOSTNAME_RE = re.compile(
@@ -67,6 +100,10 @@ class EngagementScope:
     forbidden_tools: set[str] = field(default_factory=set)
     forbidden_patterns: list[str] = field(default_factory=list)
     allow_loopback: bool = True
+    # LAN safety net: by default the agent may NOT scan internal/RFC1918 hosts it
+    # invented (only the stated target or an explicitly in-scope range). Set true for a
+    # deliberate internal/LAN pentest to lift that guard.
+    allow_private: bool = False
 
     # ------------------------------------------------------------------ #
     # Construction
@@ -79,6 +116,7 @@ class EngagementScope:
             forbidden_tools={str(t) for t in (data.get("forbidden_tools") or [])},
             forbidden_patterns=[str(p) for p in (data.get("forbidden_patterns") or [])],
             allow_loopback=bool(data.get("allow_loopback", True)),
+            allow_private=bool(data.get("allow_private", False)),
         )
         for raw in (data.get("targets") or []):
             target = str(raw).strip()
@@ -122,6 +160,22 @@ class EngagementScope:
         tools (e.g. nmap_scan) that the model often calls without one - it is
         checked alongside any host found in the args.
         """
+        # LAN safety net - enforced even when no scope.json is loaded. The agent must
+        # never SCAN an internal (RFC1918/link-local/CGNAT) host it invented: that is the
+        # operator's own network, not an OSINT/recon target. Allowed only when the range
+        # is explicitly in scope, IS the engagement's stated target, or allow_private is
+        # set for a deliberate internal engagement. Scoped to scanner tools so a private
+        # IP that merely appears in a log line or an SSRF payload param is not refused.
+        if not self.allow_private and self._is_scan_call(tool_name, args):
+            for h in self._extract_hosts(args):
+                if _is_internal_host(h) and not self._internal_scan_ok(h, fallback_target):
+                    return ScopeDecision(
+                        False,
+                        f"refusing to scan internal/LAN host {h!r}: it is not your target "
+                        "and not in scope. Do NOT scan the local network. If this host is "
+                        "authorized, add its range to scope.json 'targets' (or set "
+                        "'allow_private': true for an internal engagement).")
+
         if not self.active:
             return ScopeDecision(True)
 
@@ -155,6 +209,33 @@ class EngagementScope:
     # ------------------------------------------------------------------ #
     # Host extraction + membership
     # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _is_scan_call(tool_name: str, args: dict[str, Any]) -> bool:
+        """Whether this call actively scans hosts: a scan tool by name, or a raw
+        shell/kali_run whose command invokes a scanner/host-touching binary."""
+        if tool_name in _SCAN_TOOLS:
+            return True
+        if tool_name in _SHELL_TOOLS:
+            cmd = " ".join(str(v) for v in args.values())
+            return bool(_SCANNER_BIN_RE.search(cmd))
+        return False
+
+    def _internal_scan_ok(self, host: str, fallback: Optional[str]) -> bool:
+        """An internal host may be scanned only if it is explicitly in scope, or it is
+        (or lies within) the engagement's stated target."""
+        if self._in_scope(host):
+            return True
+        fb = (str(fallback or "").strip().lower().rstrip(".") or "").split()[0:1]
+        fb = fb[0] if fb else ""
+        if not fb:
+            return False
+        if host == fb:
+            return True
+        try:  # fallback given as a CIDR/host that contains this host
+            return ipaddress.ip_address(host) in ipaddress.ip_network(fb, strict=False)
+        except ValueError:
+            return False
 
     def _extract_hosts(self, args: dict[str, Any]) -> set[str]:
         hosts: set[str] = set()

@@ -99,7 +99,10 @@ _RECON = {"nmap_scan", "web_fetch", "web_search", "http_request", "http_repeater
           "shell", "searchsploit", "tech_detect"}
 _WEB = {"kali_run", "web_fetch", "web_search", "http_request", "http_repeater",
         "browser", "sqlmap", "fuzz", "burp_scan", "burp_proxy", "searchsploit", "shell",
-        "tech_detect", "jwt_tool", "graphql", "llm_inject", "code_run"}
+        "tech_detect", "jwt_tool", "graphql", "llm_inject", "code_run",
+        "ssrf_probe", "cors_audit", "ssti_probe", "nosqli_probe", "smuggle_probe",
+        "proto_pollution", "xxe_tool", "deserialize_gadget", "cache_poison",
+        "oauth_probe", "race_probe"}
 _EXPLOIT = {"msf_search", "msf_run", "msf_sessions", "searchsploit", "http_request",
             "http_repeater", "sqlmap", "fuzz", "kali_run", "shell", "jwt_tool", "graphql",
             "llm_inject", "ad_attack", "code_run"}
@@ -132,11 +135,16 @@ _add(Operator(
     prefer_local=False,  # works over public open-source intel - cloud OK
     model_role="planner",  # research/correlation - reasoning-heavy
     description="Passive open-source intel - domains, emails, employees, breaches, leaks.",
-    tools={"web_fetch", "web_search", "tor_fetch", "shell", "memory_save"},
+    tools={"web_fetch", "web_search", "osint_search", "phone_lookup", "social_lookup",
+           "tor_fetch", "tor_control", "onion_search", "shell", "memory_save"},
     triggers=set(),
     expertise="passive footprinting only: domain/subdomain, email and employee "
               "enumeration, breach/credential-leak and public code-leak discovery, infra "
-              "fingerprinting. Feeds Recon and Exploit; touch no target system directly.",
+              "fingerprinting. Prefer `osint_search` over a bare web_search - it fans one "
+              "subject out into social/leak/doc/code dorks in a single call. Use "
+              "`phone_lookup` to validate/attribute a phone number, and `social_lookup` "
+              "to pivot a handle to the person's other profiles (e.g. the LinkedIn behind "
+              "an Instagram account). Feeds Recon and Exploit; touch no target system directly.",
 ))
 _add(Operator(
     name="web_operator", title="Web Operator", phase="enumeration",
@@ -176,7 +184,7 @@ _add(Operator(
     # http_request/http_repeater: raw calls to the metadata service (169.254.169.254 /
     # 169.254.170.2) for credential theft, and to cloud REST APIs.
     tools={"shell", "kali_run", "web_fetch", "http_request", "http_repeater",
-           "cloud_metadata", "file_read", "create_tool"},
+           "cloud_metadata", "cloud_enum", "file_read", "create_tool"},
     expertise="IAM privilege escalation, public S3/blob/bucket exposure, Kubernetes RBAC "
               "escapes and exposed kubelets/dashboards, and cloud metadata-service (IMDS) "
               "abuse for credential theft. Use provider CLIs via shell; respect scope.",
@@ -185,8 +193,10 @@ _add(Operator(
     name="contract_auditor", title="Contract Auditor", phase="exploitation",
     model_role="planner",  # deep reasoning over source
     description="Solidity / EVM smart-contract audits.",
-    # http_request: JSON-RPC calls to a node / block explorer APIs.
-    tools={"shell", "file_read", "file_write", "web_fetch", "http_request", "create_tool"},
+    # contract_scan: offline Solidity static analysis (reentrancy/tx.origin/delegatecall/
+    # unprotected setters); http_request: JSON-RPC calls to a node / block explorer APIs.
+    tools={"shell", "file_read", "file_write", "contract_scan", "web_fetch",
+           "http_request", "create_tool"},
     expertise="Solidity/EVM review for reentrancy, oracle manipulation, flash-loan abuse, "
               "and broken access control; run slither/mythril-style analysis through shell "
               "and reason over the source.",
@@ -278,7 +288,7 @@ _add(Operator(
     # http_request/http_repeater: test the app's API backend (authz/IDOR on mobile
     # endpoints); file_list/file_search: browse the decompiled apk/ipa tree.
     tools={"shell", "kali_run", "file_read", "file_list", "file_search",
-           "http_request", "http_repeater", "create_tool"},
+           "http_request", "http_repeater", "mobile_scan", "create_tool"},
     expertise="static analysis (apktool/jadx/class-dump), dynamic instrumentation "
               "(frida/objection), SSL-pinning and root/jailbreak bypass, exported-component "
               "abuse, WebView JS-bridge exploitation, MobSF runs.",
@@ -287,7 +297,10 @@ _add(Operator(
     name="wireless_operator", title="Wireless Operator", phase="exploitation",
     requires_remote=True,
     description="Wi-Fi / BLE / Zigbee / sub-GHz attacks.",
-    tools={"shell", "kali_run", "create_tool"},
+    # handshake_analyze: the OFFLINE half - crack a captured WPA handshake/PMKID
+    # anywhere (capturing needs the radio via the remote link); file_* to manage captures.
+    tools={"shell", "kali_run", "handshake_analyze", "file_read", "file_list",
+           "file_search", "create_tool"},
     expertise="WPA2 handshake/PMKID capture, WPA3-SAE downgrade, WPA-Enterprise evil-twin, "
               "KARMA/Mana, deauth, WPS Pixie Dust, BLE GATT, Zigbee Touchlink, sub-GHz "
               "replay. Needs a radio via hardware passthrough or an SSH dropbox.",
@@ -298,7 +311,7 @@ _add(Operator(
     # web_fetch/http_request: the device's web UI / REST API; file_list/file_search:
     # walk the binwalk-extracted firmware root for creds/keys/configs.
     tools={"shell", "kali_run", "searchsploit", "file_read", "file_list", "file_search",
-           "web_fetch", "http_request", "create_tool"},
+           "web_fetch", "http_request", "firmware_scan", "create_tool"},
     triggers={"1900", "5683", "8883", "upnp", "mqtt", "coap"},
     expertise="firmware acquisition + binwalk extraction, hardcoded credentials, "
               "U-Boot / /dev/mem access, and BLE/Zigbee/Z-Wave/sub-GHz/LoRaWAN radio work "
@@ -308,8 +321,9 @@ _add(Operator(
     name="ics_operator", title="ICS Operator", phase="enumeration", roe_gated=True,
     read_only=True,
     description="ICS / OT / SCADA attacks (Modbus, DNP3, S7comm, BACnet, OPC-UA).",
-    # http_request: HMI / engineering-workstation web interfaces (read-only enum).
-    tools={"shell", "kali_run", "web_fetch", "http_request", "create_tool"},
+    # modbus_scan: read-only Modbus/TCP enumeration (device id + live registers) - the
+    # unauthenticated-PLC finding; http_request: HMI / engineering-workstation web UIs.
+    tools={"shell", "kali_run", "web_fetch", "http_request", "modbus_scan", "create_tool"},
     triggers={"502", "20000", "102", "44818", "47808", "modbus", "s7", "bacnet", "dnp3"},
     expertise="Modbus/DNP3/S7comm/BACnet/OPC-UA enumeration. OT is fragile: read-only "
               "enumeration first, and writes only against an explicit in-scope lab/canary - "
@@ -319,7 +333,8 @@ _add(Operator(
     name="forensicator", title="Forensicator", phase="analysis", read_only=True,
     model_role="planner",  # timeline/IOC analysis + detection mapping
     description="DFIR / purple-team validation - timelines, IOCs, attack→detection mapping.",
-    tools={"shell", "kali_run", "file_read", "file_list", "file_search"},
+    # log_timeline: parse auth/syslog/web logs into a suspicious-event timeline with IOCs.
+    tools={"shell", "kali_run", "log_timeline", "file_read", "file_list", "file_search"},
     expertise="disk/memory/log/network timeline analysis, IOC extraction, and mapping the "
               "engagement's actions to the detections they should have triggered - the "
               "purple-team validation pass.",
@@ -330,7 +345,8 @@ _add(Operator(
     description="Supply-chain attacks - dependencies, build pipelines, package integrity.",
     # web_fetch/http_request: query package-registry APIs (npm/pypi) for typosquat /
     # dependency-confusion checks and provenance metadata.
-    tools={"shell", "kali_run", "file_read", "web_search", "web_fetch",
+    # dep_audit: offline manifest audit (typosquats/install-scripts/unpinned/URL deps).
+    tools={"shell", "kali_run", "dep_audit", "file_read", "web_search", "web_fetch",
            "http_request", "create_tool"},
     expertise="dependency confusion / typosquatting, compromised or malicious packages, "
               "CI/CD pipeline and build-artifact integrity, and signing/provenance gaps "

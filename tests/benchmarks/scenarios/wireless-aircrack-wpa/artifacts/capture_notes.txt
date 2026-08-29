@@ -1,0 +1,4 @@
+airodump-ng summary of the capture (wpa.cap):
+  BSSID              ESSID     ENC    AUTH   handshake
+  00:0d:93:eb:b0:8c  Coherer   WPA2   PSK    yes (4-way handshake captured)
+Task: crack the PSK offline -> aircrack-ng -w wordlist.txt wpa.cap

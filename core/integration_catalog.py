@@ -1,8 +1,8 @@
 """
 integration_catalog.py - known third-party services for just-in-time setup.
 
-When the operator says "search this in Shodan" or "run this hash through
-VirusTotal" and that integration isn't configured yet, the CLI recognises the
+When the operator says "run this hash through VirusTotal" or "check this IP on
+GreyNoise" and that integration isn't configured yet, the CLI recognises the
 service, offers a one-question setup (paste the API key), writes the tool spec to
 config (key kept as a ${ENV} ref), and makes it available on the spot.
 
@@ -20,9 +20,9 @@ from typing import Any, Optional
 
 @dataclass(frozen=True)
 class IntegrationRecipe:
-    key: str                       # canonical id, e.g. "shodan"
-    display: str                   # "Shodan"
-    env_var: str                   # "SHODAN_API_KEY"
+    key: str                       # canonical id, e.g. "virustotal"
+    display: str                   # "VirusTotal"
+    env_var: str                   # "VT_API_KEY"
     signup_url: str                # where to obtain a key
     blurb: str                     # one-line description
     triggers: tuple[str, ...]      # substrings in user input that name it
@@ -33,29 +33,6 @@ class IntegrationRecipe:
 
 
 CATALOG: tuple[IntegrationRecipe, ...] = (
-    IntegrationRecipe(
-        key="shodan", display="Shodan", env_var="SHODAN_API_KEY",
-        signup_url="https://account.shodan.io/",
-        blurb="Passive host recon - open ports, services, banners, and known CVEs.",
-        triggers=("shodan",),
-        specs=(
-            {"name": "shodan_host", "kind": "http", "method": "GET",
-             "url": "https://api.shodan.io/shodan/host/{ip}?key=${SHODAN_API_KEY}",
-             "description": "Shodan: open ports, services, banners, and known CVEs "
-                            "for an IP (passive - no packets to the target).",
-             "params": {"ip": {"type": "string", "description": "target IPv4",
-                                "required": True}},
-             "permission": "network"},
-            {"name": "shodan_search", "kind": "http", "method": "GET",
-             "url": "https://api.shodan.io/shodan/host/search?key=${SHODAN_API_KEY}"
-                    "&query={query}",
-             "description": "Shodan search (e.g. 'apache country:US port:8080'). "
-                            "Uses query credits.",
-             "params": {"query": {"type": "string", "description": "Shodan query",
-                                  "required": True}},
-             "permission": "network"},
-        ),
-    ),
     IntegrationRecipe(
         key="virustotal", display="VirusTotal", env_var="VT_API_KEY",
         signup_url="https://www.virustotal.com/gui/my-apikey",
@@ -111,6 +88,32 @@ CATALOG: tuple[IntegrationRecipe, ...] = (
 )
 
 _BY_KEY = {r.key: r for r in CATALOG}
+
+# Integrations that were removed from Mapache. A persisted spec for one of these (left
+# in a user's ~/.mapache/config.json by an old wizard setup) is skipped at load so a
+# retired tool can never resurrect from stale config. Matched by tool name or a retired
+# API host in the URL.
+RETIRED_INTEGRATIONS = frozenset({"shodan_host", "shodan_search", "shodan_internetdb"})
+_RETIRED_HOSTS = ("shodan.io",)
+
+
+def is_retired_spec(spec: Any) -> bool:
+    """True if an integration spec is a removed tool that should not be loaded."""
+    if not isinstance(spec, dict):
+        return False
+    if str(spec.get("name", "")) in RETIRED_INTEGRATIONS:
+        return True
+    url = str(spec.get("url", "")).lower()
+    return any(h in url for h in _RETIRED_HOSTS)
+
+
+# Stamp each spec with its recipe's signup URL so the built tool can point the
+# operator at where to get a key when the credential is missing (HttpApiTool reads
+# spec["signup_url"]). Done once here so it survives persistence and covers every
+# recipe without hand-editing each spec.
+for _r in CATALOG:
+    for _s in _r.specs:
+        _s.setdefault("signup_url", _r.signup_url)
 
 
 def get_recipe(key: str) -> Optional[IntegrationRecipe]:

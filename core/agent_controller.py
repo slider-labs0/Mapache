@@ -571,6 +571,9 @@ class AgentController:
         # and consecutive steps that discovered nothing new.
         dup_streak = 0
         noprog_streak = 0
+        # A stalled turn gets ONE forceful reprieve (hard course-correct + reset) before
+        # it is actually aborted - models often stall one step from breaking out.
+        stall_reprieved = False
 
         while iteration < self.MAX_ITERATIONS:
             iteration += 1
@@ -691,6 +694,7 @@ class AgentController:
             # so the task list survives across turns and is re-injected below.
             if parsed.get("todos"):
                 self.chain.set_todos(parsed["todos"])
+                await self._emit_todos(session_id)  # surface the checklist to the UI
 
             # Progress-only update: revise statuses, no tool call, no final
             # answer. Re-loop so the model acts with the updated list in view
@@ -699,6 +703,9 @@ class AgentController:
             if parsed.get("type") == "todo_update":
                 for ref in parsed.get("completed") or []:
                     self.chain.update_todo(ref, "completed")
+                for ref in parsed.get("in_progress") or []:
+                    self.chain.update_todo(ref, "in_progress")
+                await self._emit_todos(session_id)  # push progress to the checklist UI
                 continue
 
             if parsed.get("type") in ("tool_call", "tool_calls"):
@@ -725,6 +732,29 @@ class AgentController:
 
                 stalled = (dup_streak >= self.STALL_ABORT_DUP
                            or noprog_streak >= self.STALL_ABORT_NOPROG)
+                if stalled and not stall_reprieved:
+                    # First stall: don't end the turn - the model is often one concrete
+                    # step from breaking out (e.g. it just realised it needs a /search
+                    # path). Force a hard course-correction, reset the streaks, and give
+                    # it one more run. Only a SECOND stall actually aborts.
+                    stall_reprieved = True
+                    reason = ("repeating identical tool calls"
+                              if dup_streak >= self.STALL_ABORT_DUP
+                              else f"no new progress in {noprog_streak} steps")
+                    await self.bus.emit(
+                        "agent.stall",
+                        {"action": "reprieve", "reason": reason, "session_id": session_id},
+                        source="controller", session_id=session_id)
+                    self.context.add_user_message(
+                        "STOP - you are repeating the same action and it will keep returning "
+                        "the same result. Take a CONCRETELY DIFFERENT action right now: change "
+                        "the URL path or query string (for a search index, append the search "
+                        "endpoint, e.g. /search/?q=<term>), switch tools, or change the "
+                        "parameters - do not re-issue the previous call. If you genuinely "
+                        "cannot make progress, give your final answer. This is your last "
+                        "chance before the turn ends.")
+                    dup_streak = noprog_streak = 0
+                    continue
                 if stalled:
                     reason = ("repeating identical tool calls" if dup_streak >= self.STALL_ABORT_DUP
                               else f"no new progress in {noprog_streak} steps")
@@ -735,12 +765,12 @@ class AgentController:
                          "noprog_streak": noprog_streak, "session_id": session_id},
                         source="controller", session_id=session_id,
                     )
-                    content = await self._guard_fabricated_flags(
-                        "Stopped without completing the objective - the agent stalled "
-                        f"({reason}). No further progress was being made.", session_id)
-                    return AgentResponse(
-                        content=content, session_id=session_id,
-                        tool_calls_made=tools_used, iterations=iteration, error="stalled")
+                    # Don't discard partial recon with a canned abort: give the model
+                    # ONE tool-free chance to summarize what it actually learned and
+                    # answer. (The screenshot case had a candidate .onion lead worth
+                    # reporting even though verification kept failing.)
+                    return await self._stall_closeout(
+                        session_id, reason, iteration, tools_used, on_token)
 
                 # Softer intervention: one course-correct nudge when progress dries up,
                 # giving the model a chance to change tack before the abort backstop.
@@ -1002,10 +1032,18 @@ class AgentController:
                     self._add_usage(piece)
                     continue
                 if piece.get("type") == "tool_call":
-                    tool_call = piece
-                    break
+                    # Keep the FIRST tool call but do NOT break: with
+                    # stream_options.include_usage the token-usage chunk is the LAST
+                    # chunk (after the tool call), so breaking here would drop token
+                    # accounting for every tool-calling turn. Drain the rest of the
+                    # stream (ignoring trailing content/tool calls) to capture usage.
+                    if tool_call is None:
+                        tool_call = piece
+                    continue
                 continue  # unknown control dict - ignore
             token = str(piece)
+            if tool_call is not None:
+                continue  # trailing content after the tool call - ignore, just drain
             text_parts.append(token)
             try:
                 on_token(token)
@@ -1023,9 +1061,18 @@ class AgentController:
         return {"message": message}
 
     def _add_usage(self, usage: Any) -> None:
-        """Accumulate a provider `usage` block into the session token total."""
+        """Accumulate a provider `usage` block into the session token total, and bubble
+        it up to the parent controller so a swarm's live token count (TUI Budget)
+        updates DURING an operator's work, not only when it finishes."""
         if isinstance(usage, dict):
-            self.session_tokens += int(usage.get("total_tokens") or 0)
+            n = int(usage.get("total_tokens") or 0)
+            self.session_tokens += n
+            parent = getattr(self, "_parent_controller", None)
+            if parent is not None and n:
+                try:
+                    parent._add_usage({"total_tokens": n})
+                except Exception:
+                    pass
 
     # ------------------------------------------------------------------ #
     # Response parsing
@@ -1369,6 +1416,50 @@ class AgentController:
             return True
         return core in self._grounding_seen
 
+    async def _emit_todos(self, session_id: str) -> None:
+        """Publish the current checklist so the UI can show each step + progress."""
+        try:
+            items = [{"task": t.task, "status": t.status} for t in self.chain.todos]
+        except Exception:
+            return
+        await self.bus.emit(
+            "agent.todos", {"todos": items, "session_id": session_id},
+            source="controller", session_id=session_id)
+
+    async def _stall_closeout(self, session_id: str, reason: str, iteration: int,
+                              tools_used: int, on_token: Any) -> "AgentResponse":
+        """On a stall abort, give the model ONE tool-free turn to report what it
+        actually gathered rather than returning a bare 'stalled' message. Tools are
+        withheld (no schemas passed), so the model can only produce a prose final
+        answer; if that comes back empty we fall back to the terse notice."""
+        self.context.add_user_message(
+            "You are stuck repeating the same action, so tool use is now DISABLED for "
+            "the rest of this turn. Do NOT call any tool. Write your FINAL ANSWER as "
+            "prose: concisely state what you have actually learned and gathered so far "
+            "(candidate leads, partial findings, confirmed facts), what remains "
+            "unverified and why, and your best current conclusion plus the single most "
+            "useful next step. Prose only - no JSON, no tool calls.")
+        text = ""
+        try:
+            if self.context.use_function_calling:
+                payload = self.context.build(format="ollama")
+            else:
+                payload = self.context.build_json_mode()
+            # Pass no `tools`/`json_mode`: force a plain-prose completion.
+            raw = await self._chat(payload["messages"], {}, on_token)
+            parsed = self._parse_model_response(raw)
+            text = (parsed.get("content") or parsed.get("text")
+                    or (raw if isinstance(raw, str) else "") or "").strip()
+        except Exception as exc:
+            logger.info("Stall closeout call failed: %s", exc)
+        if not text:
+            text = "Stopped without completing the objective; no further progress was possible."
+        content = await self._guard_fabricated_flags(
+            f"{text}\n\n[turn ended early - stalled: {reason}]", session_id)
+        return AgentResponse(
+            content=content, session_id=session_id,
+            tool_calls_made=tools_used, iterations=iteration, error="stalled")
+
     async def _execute_tool_calls(
         self,
         calls: list[dict[str, Any]],
@@ -1432,7 +1523,11 @@ class AgentController:
                 fallback_target=self.chain.attack_state.target,
             )
             if not decision.allowed:
-                logger.warning("RoE refused %s: %s", tool_name, decision.reason)
+                # INFO (file log only), NOT warning: the operator already sees a clean
+                # "[blocked] RoE: refused ..." line from the agent.scope_refused event
+                # below. A warning here would ALSO print to the console/TUI and clobber
+                # that clean line with a raw "agent_controller RoE refused ..." duplicate.
+                logger.info("RoE refused %s: %s", tool_name, decision.reason)
                 self.context.add_tool_result(
                     tool_call_id, tool_name,
                     f"REFUSED by engagement scope: {decision.reason}.\n"
@@ -1837,6 +1932,10 @@ class AgentController:
             # prior findings through it and records its own for the next stage.
             knowledge_graph=self.knowledge_graph,
         )
+        # Token accounting bubbles up live: the child adds each usage block to its own
+        # AND the parent's session_tokens as it works, so the TUI Budget reflects a
+        # swarm's spend in real time (not only when each operator finishes).
+        child._parent_controller = self
         # Stall/iteration tuning lives as per-INSTANCE overrides on the lead (a
         # flag-hunt harness, for example, raises STALL_ABORT_NOPROG so the "no new
         # findings in N steps" backstop doesn't kill a legitimate flag hunt that
@@ -1895,6 +1994,8 @@ class AgentController:
         try:
             result = await child.run(child_task, session_id=f"{session_id}:{suffix}")
         finally:
+            # (Token usage already bubbled up live via child._parent_controller during
+            # the run - see _add_usage - so there is nothing to roll up here.)
             # Dispose the child's private backend (e.g. stop the container it
             # started) - factories opt in by exposing `aclose` on the backend.
             await self._teardown_backend(child_backend)

@@ -1,0 +1,8 @@
+# Self-contained Modbus/TCP server (pymodbus) with writable coils/registers and
+# NO authentication (Modbus has none) - CWE-306. Build I control, reliable.
+services:
+  plc:
+    build: .
+    ports:
+      - "127.0.0.1:0:502"
+    restart: "no"

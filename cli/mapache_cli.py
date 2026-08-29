@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import re
 import shutil
 import sys
 import threading
@@ -54,7 +55,8 @@ from security_tools.kali.kali_tools_interface import (
     KaliToolListTool, KaliRunTool, SearchsploitTool,
 )
 from browser.scraping_tools import (WebFetchTool, HttpRequestTool, WebSearchTool,
-                                     TorFetchTool, EgressCheckTool)
+                                     TorFetchTool, TorControlTool, OnionSearchTool,
+                                     EgressCheckTool)
 from tools.filesystem_tool import (
     FileReadTool, FileWriteTool, FileEditTool,
     FileListTool, FileSearchTool,
@@ -95,11 +97,12 @@ Commands:
   /hosts                 Show per-host attack states (multi-host delegation)
   /backend               Show the execution backend (local / ssh / docker)
   /egress                 Show egress/anonymity (proxy/Tor to hide your IP)
-  /integrations           List bring-your-own tools (Shodan/API + GitHub/CLI)
+  /integrations           List bring-your-own tools (VirusTotal/API + GitHub/CLI)
   /hub [search|install]  Browse/install community skills (feature I)
   /voice [on|off]        Voice I/O status / toggle (Phase 9); /say <text> speaks
   /opsec                 Show hybrid OPSEC routing (which ops are pinned local)
   /scope                 Show Rules-of-Engagement scope (in-scope targets)
+  /todos                 Show the agent's live checklist (steps + progress)
   /log                   Show engagement-log summary
   /log export            Write a Markdown engagement-log timeline
   /report [md|html|both|sarif|bounty|all]  Structured report (findings/severity; SARIF + bounty drafts)
@@ -140,6 +143,14 @@ MATCH THE SCOPE OF THE REQUEST (read this first):
 - When unsure whether a request is narrow or broad, do the narrow thing and ASK before expanding.
 - "Objective" (in the discipline rules below) means the operator's ACTUAL request, not a whole
   kill chain you inferred. Finishing a named single action IS meeting the objective.
+
+═══════════════════════════════════════════
+SHOW YOUR PLAN AS A CHECKLIST:
+═══════════════════════════════════════════
+- For any goal that needs 3+ steps, call `update_plan` FIRST with the full ordered checklist
+  (each step: task + status), so the operator can watch each step and its progress. Then call
+  `update_plan` again as you go: mark the finished step completed and the next one in_progress.
+  Keep EXACTLY ONE step in_progress. (A NAMED SINGLE ACTION needs no checklist - just do it.)
 
 ═══════════════════════════════════════════
 IDENTIFY THE ENGAGEMENT - ROUTE BY DISCIPLINE (this is NOT a web/CTF-only bot):
@@ -291,6 +302,7 @@ class MapacheCLI:
         self.swarm = False  # /swarm: autonomous multi-agent supervisor routing (feature P2)
         self.tui = None           # full-screen TUI (RaccoonTUI) when --tui is active
         self._accent_stack = []   # per-agent transcript accent while sub-agents nest
+        self._trace_last_action = {}  # per sub-agent: last narrated action, to dedupe it
         self.kg = None            # shared knowledge graph (findings store), built in setup()
         self.opplan = None        # operation plan (objectives + status), built in setup()
         self.memory = MemoryManager()
@@ -529,8 +541,28 @@ class MapacheCLI:
         egress_spec = dict(getattr(self.config, "egress", None) or {"mode": "direct"})
         if getattr(self.args, "egress", None):
             self.egress = EgressProfile.parse(self.args.egress)
+        elif getattr(self.args, "tor", False):
+            # -tor / --tor: opt in to Tor for this run without touching config.
+            self.egress = EgressProfile.parse("tor")
         else:
             self.egress = EgressProfile.from_dict(egress_spec)
+
+        # If exiting through Tor, make sure Tor is actually running: the egress path
+        # (unlike tor_fetch/tor_control) does NOT auto-start it, so without this every
+        # web tool would fail with a connection error ("Tor egress isn't functional").
+        if getattr(self.egress, "mode", "") == "tor":
+            try:
+                import re as _re
+                from browser.tor_controller import TorController
+                _proxy = self.egress.httpx_proxy() or ""
+                _m = _re.search(r":(\d+)", _proxy)
+                _port = int(_m.group(1)) if _m else 9050
+                _tc = TorController(socks_port=_port, control_port=_port + 1)
+                _ok, _msg = await _tc.start()
+                print(f"  [egress] Tor {'ready' if _ok else 'NOT ready'} on :{_port} - "
+                      f"{_msg.splitlines()[0]}")
+            except Exception as _exc:  # never block startup on this
+                print(f"  [egress] could not auto-start Tor: {_exc}")
 
         # Voice I/O (Phase 9): optional TTS/STT. From config.voice; --voice forces
         # it on. Null providers by default, so this is a no-op until a backend is
@@ -558,13 +590,25 @@ class MapacheCLI:
         from core.opplan import OPPLAN
         self.opplan = OPPLAN(path=os.path.join(self.working_dir, "opplan.json"))
 
+        sys_prompt = SYSTEM_PROMPT
+        if getattr(self.egress, "mode", "") in ("tor", "proxy"):
+            _ep = self.egress.httpx_proxy() or ""
+            _kind = "Tor" if self.egress.mode == "tor" else "a proxy"
+            sys_prompt += (
+                "\n\nOUTBOUND ANONYMITY: your web/network traffic ALREADY exits through "
+                f"{_kind} ({_ep}), which is running and managed by Mapache. Do NOT test for "
+                "or require a local `tor` binary - `where tor` / `tor --version` will not "
+                "find the Tor Browser bundle, and `tor_control` is a Mapache TOOL, not a "
+                "shell command. NEVER conclude you are blocked for lack of Tor: just use "
+                "your web tools (web_fetch/http_request/browser) - they already route "
+                "through it. Only call the tor_control tool if you truly need to check.")
         self.controller = AgentController(
             model_provider=self.routed,
             mode=mode,
             knowledge_graph=self.kg,
             opplan_provider=lambda: self.opplan.table() if self.opplan else "",
             use_function_calling=self.routed.supports_tools,
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=sys_prompt,
             working_dir=self.working_dir,
             confirm_dangerous=self.confirm,
             confirm_callback=confirm_cb,
@@ -615,6 +659,9 @@ class MapacheCLI:
             print(f"\n  ↻ attempt {d.get('attempt')}/{d.get('of')} - fresh approach\n",
                   flush=True)
         self.controller.bus.subscribe("attempt.start", _on_attempt)
+        # Live checklist: mirror the agent's plan into the TUI panel, and (plain mode)
+        # print it whenever it changes so the user sees each step + progress.
+        self.controller.bus.subscribe("agent.todos", self._on_todos)
 
         if not self.args.no_tools:
             self.registry = ToolRegistry(granted_permissions={
@@ -660,10 +707,15 @@ class MapacheCLI:
             # severity, evidence, impact, remediation) into a shared report - success
             # is a finding with proof, not a flag.
             from core.findings import FindingsStore
-            from tools.reporting_tools import ReportFindingTool
+            from tools.reporting_tools import ReportFindingTool, PlanTool
             self.findings_store = FindingsStore(
                 path=os.path.join(self.working_dir, "findings.json"))
             self.registry.register(ReportFindingTool(store=self.findings_store))
+            # Live checklist tool - lets function-calling models maintain the task list
+            # the user watches (JSON-mode models use the "plan" response type instead).
+            self.registry.register(PlanTool(
+                chain_getter=lambda: getattr(self.controller, "chain", None),
+                bus_getter=lambda: getattr(self.controller, "bus", None)))
             # Offensive knowledge + specialist web/cloud weapons (payloads corpus, JWT,
             # GraphQL, IMDS, secret-scan, tech-fingerprint).
             from security_tools.web_weapons import SearchPayloadsTool, JwtTool, GraphqlTool
@@ -671,11 +723,39 @@ class MapacheCLI:
             from security_tools.cloud_metadata import CloudMetadataTool
             from security_tools.llm_attacks import LlmInjectTool
             from security_tools.ad_tools import AdAttackTool
+            # Per-domain capability tools: cloud account enumeration (post-credential),
+            # mobile-app + firmware static analysis.
+            from security_tools.cloud_enum import CloudEnumTool
+            from security_tools.device_tools import MobileScanTool, FirmwareScanTool
             from security_tools.reversing_tools import BinaryAnalyzeTool
+            # The remaining discipline weapons: ICS/Modbus enum, Wi-Fi handshake
+            # analysis, DFIR log-timeline, supply-chain dep audit, Solidity static scan.
+            from security_tools.ics_tools import ModbusScanTool
+            from security_tools.wireless_tools import HandshakeAnalyzeTool
+            from security_tools.dfir_tools import LogTimelineTool
+            from security_tools.supply_chain_tools import DepAuditTool
+            from security_tools.contract_tools import ContractScanTool
+            # Advanced web-attack classes beyond the common SQLi/IDOR/XSS: SSRF,
+            # CORS misconfig, SSTI (engine-fingerprinted -> RCE), NoSQL injection.
+            # They share the authenticated web session + egress with the other web tools.
+            from security_tools.web_advanced import (SsrfProbeTool, CorsAuditTool,
+                                                     SstiProbeTool, NoSqliProbeTool,
+                                                     SmuggleProbeTool, ProtoPollutionTool,
+                                                     XxeTool, DeserializeGadgetTool,
+                                                     CachePoisonTool, OauthProbeTool,
+                                                     RaceProbeTool)
+            _es = dict(egress=self.egress, session=web_session)
             for _t in (SearchPayloadsTool(), JwtTool(), GraphqlTool(session=web_session),
                        SecretScanTool(), TechDetectTool(session=web_session),
                        CloudMetadataTool(), LlmInjectTool(session=web_session),
-                       AdAttackTool(), BinaryAnalyzeTool()):
+                       AdAttackTool(), BinaryAnalyzeTool(),
+                       CloudEnumTool(backend=self.exec_backend), MobileScanTool(),
+                       FirmwareScanTool(), ModbusScanTool(), HandshakeAnalyzeTool(),
+                       LogTimelineTool(), DepAuditTool(), ContractScanTool(),
+                       SsrfProbeTool(**_es), CorsAuditTool(**_es), SstiProbeTool(**_es),
+                       NoSqliProbeTool(**_es), SmuggleProbeTool(**_es),
+                       ProtoPollutionTool(**_es), XxeTool(**_es), DeserializeGadgetTool(),
+                       CachePoisonTool(**_es), OauthProbeTool(**_es), RaceProbeTool(**_es)):
                 self.registry.register(_t)
             # Real headless browser (capability #1): renders JavaScript/SPAs that the
             # raw HTTP tools can't. Safe to register even without Playwright - it
@@ -685,7 +765,39 @@ class MapacheCLI:
             self.registry.register(self._browser_tool)
             self.registry.register(WebSearchTool())
             self.registry.register(TorFetchTool())
+            self.registry.register(TorControlTool())
+            self.registry.register(OnionSearchTool())
             self.registry.register(EgressCheckTool(egress=self.egress))
+            # Passive OSINT weapons: deeper multi-source search, phone-number intel,
+            # and social-account cross-referencing (e.g. the LinkedIn behind an
+            # Instagram handle). Route through egress like the other web tools.
+            from security_tools.osint_tools import (OsintSearchTool, PhoneLookupTool,
+                                                    SocialLookupTool, NetlasSearchTool)
+            self.registry.register(OsintSearchTool(egress=self.egress))
+            self.registry.register(PhoneLookupTool(egress=self.egress))
+            self.registry.register(SocialLookupTool(egress=self.egress))
+            # Completely-free exposed-device / camera search (Netlas.io): keyless and
+            # NOT paywalled (unlike Shodan/ZoomEye). Works anonymously on a small daily
+            # quota; a free NETLAS_API_KEY raises it. The go-to internet-wide device
+            # search that needs no payment.
+            self.registry.register(NetlasSearchTool(egress=self.egress))
+            # Free, keyless Certificate Transparency search (crt.sh): find an org's
+            # subdomains/hostnames from issued TLS certs. No key - a strong, always-on
+            # passive-recon primitive for host discovery.
+            # Query a domain (example.com) or a wildcard (%.example.com) for subdomains.
+            from tools.external_tools import HttpApiTool
+            self.registry.register(HttpApiTool({
+                "name": "crtsh_search", "kind": "http", "method": "GET",
+                "url": "https://crt.sh/?q={query}&output=json",
+                "description": "Certificate Transparency search (crt.sh): subdomains and "
+                               "hostnames from issued TLS certificates for a domain. Free, "
+                               "no API key. Use a bare domain (example.com) or a wildcard "
+                               "(%.example.com) to enumerate subdomains. Passive.",
+                "params": {"query": {"type": "string", "description":
+                                     "domain or wildcard, e.g. example.com or %.example.com",
+                                     "required": True}},
+                "permission": "network",
+            }, egress=self.egress))
 
             # Phase 6 - Advanced security
             self.registry.register(MetasploitSearchTool())
@@ -706,12 +818,16 @@ class MapacheCLI:
             self.registry.register(SqlmapTool(backend=self.exec_backend, egress=self.egress))
             self.registry.register(FuzzTool(backend=self.exec_backend, egress=self.egress))
 
-            # Integrations (bring-your-own tools): http (e.g. Shodan) + command (a
+            # Integrations (bring-your-own tools): http (e.g. VirusTotal) + command (a
             # CLI / GitHub repo) specs from config.integrations. They run through the
             # execution backend + egress like the built-ins. Warn-don't-block.
+            # Skip retired integrations (e.g. Shodan) left in an old ~/.mapache/config.json
+            # so a removed tool never resurrects from stale persisted config.
+            from core.integration_catalog import is_retired_spec
+            _cfg_ints = [i for i in (getattr(self.config, "integrations", None) or [])
+                         if not is_retired_spec(i)]
             ext_tools, ext_warn = build_external_tools(
-                getattr(self.config, "integrations", None),
-                backend=self.exec_backend, egress=self.egress)
+                _cfg_ints, backend=self.exec_backend, egress=self.egress)
             for _w in ext_warn:
                 print(f"  [!] {_w}")
             registered_ext = []
@@ -775,6 +891,7 @@ class MapacheCLI:
             "grok": Provider.GROK, "nvidia_nim": Provider.NIM,
             "deepseek": Provider.DEEPSEEK, "moonshot": Provider.MOONSHOT,
             "zhipu": Provider.ZHIPU, "alibaba": Provider.ALIBABA,
+            "huggingface": Provider.HUGGINGFACE,
         }
         for prov in self.config.usable_providers():
             if not prov.is_cloud:
@@ -1459,6 +1576,29 @@ class MapacheCLI:
         if not keep_going and self.tui is not None and self.tui._app is not None:
             self.tui._app.exit()
 
+    _ENGAGEMENT_RE = re.compile(
+        r"\b(scan|nmap|enumerate|recon|exploit|attack|pentest|pen[- ]?test|vuln\w*|"
+        r"cve|payload|inject\w*|brute[- ]?force|crack|privesc|escalat\w*|lateral|"
+        r"exfil\w*|foothold|shell|rce|sqli|xss|ssrf|lfi|rfi|idor|subdomain|osint|"
+        r"footprint|camera|webcam|exposed|breach|phish\w*|credential|password|"
+        r"metasploit|msf|hydra|gobuster|ffuf|sqlmap|nikto|burp|target|host)\b",
+        re.IGNORECASE)
+    # scheme://host, a bare domain, or an IPv4 - a concrete target in the text.
+    _TARGET_RE = re.compile(
+        r"\b(?:[a-z][a-z0-9+.\-]*://\S+|(?:\d{1,3}\.){3}\d{1,3}"
+        r"|[a-z0-9-]+(?:\.[a-z0-9-]+)+\.[a-z]{2,})\b", re.IGNORECASE)
+
+    def _is_engagement_objective(self, text: str) -> bool:
+        """Whether this input is an actual engagement to route through the swarm, vs a
+        greeting / plain question that the lead should just answer. True if a target is
+        already set, or the text names a target (host/URL/IP) or offensive intent."""
+        t = (text or "").strip()
+        if not t:
+            return False
+        if str(getattr(self.controller.chain.attack_state, "target", "") or "").strip():
+            return True
+        return bool(self._ENGAGEMENT_RE.search(t) or self._TARGET_RE.search(t))
+
     async def _agent_turn(self, user_input: str) -> None:
         if self.controller is None:
             return
@@ -1475,7 +1615,10 @@ class MapacheCLI:
         # specialist operators instead of the single lead loop. Its delegate.start/
         # end events drive the existing handoff banners + colour routing, so the
         # operators are visible as they're deployed.
-        if self.swarm:
+        # BUT: a non-actionable input (a greeting, a plain question) with no target is
+        # not an engagement - don't deploy a Recon Operator to nmap-scan nothing for
+        # "hello". Hand those to the lead agent for a normal reply.
+        if self.swarm and self._is_engagement_objective(user_input):
             try:
                 from core.orchestrator import Supervisor, make_model_planner
                 sres = await Supervisor(
@@ -1625,6 +1768,18 @@ class MapacheCLI:
                 await ticker
             except asyncio.CancelledError:
                 pass
+        # Final HUD refresh: token usage lands at the END of a turn's stream (the usage
+        # chunk is the last piece), so the ticker's last tick often still read 0. Push
+        # one more tick with the settled totals so the Budget reflects the real spend
+        # instead of freezing at the pre-usage value.
+        _tui = getattr(self, "tui", None)
+        if _tui is not None:
+            try:
+                elapsed = time.monotonic() - getattr(self, "_turn_start_ts", time.monotonic())
+                tokens = getattr(getattr(self, "controller", None), "session_tokens", 0)
+                _tui.dashboard.tick(elapsed, tokens)
+            except Exception:
+                pass
         if clear:
             self.render.thinking_clear()
 
@@ -1664,9 +1819,14 @@ class MapacheCLI:
         i = 0
         while True:
             if getattr(self, "tui", None) is not None:
-                word = theme.thinking_word(i // theme.THINKING_WORD_EVERY)
                 elapsed = time.monotonic() - getattr(self, "_turn_start_ts", time.monotonic())
                 tokens = getattr(getattr(self, "controller", None), "session_tokens", 0)
+                # The live loader: while a tool is in flight (lead OR sub-agent) the
+                # bottom line names the current tool and animates - so you can see it
+                # working and, as one finishes and the next starts, the loader flips to
+                # it. Between tools it falls back to the rotating "thinking" word.
+                tool = getattr(self, "_running_tool", None)
+                word = tool if tool else theme.thinking_word(i // theme.THINKING_WORD_EVERY)
                 self.render.thinking(theme.status_line(word, elapsed, tokens, frame=i))
                 # Refresh the right-hand HUD in step with the status clock.
                 _bud = dict(getattr(self.config, "budget", None) or {})
@@ -1712,7 +1872,20 @@ class MapacheCLI:
         prefix = self._agent_trace_prefix(data)
         if prefix is not None:
             if name not in ("delegate", "delegate_parallel"):
-                print(f"\n{prefix}{theme.action_phrase(name, args)}", flush=True)
+                # Narrate what the sub-agent is doing ("Sending an HTTP request") as a
+                # SEGMENT header, printed once per process. A burst of identical tool
+                # calls stays under that one header; repetitive per-call result lines
+                # are NOT committed - the live loader below shows the current tool and
+                # flips to the next as each finishes. A new process = a new segment.
+                op = (data.get("_agent") or {}).get("operator") or "sub-agent"
+                phrase = theme.action_phrase(name, args)
+                if self._trace_last_action.get(op) != phrase:
+                    print(f"\n{prefix}{phrase}", flush=True)
+                    self._trace_last_action[op] = phrase
+                # Drive the live loader (the bottom spinner) with this tool, so it
+                # animates while the call runs and updates when the next one starts.
+                self._running_tool = name
+                self._running_action = phrase
                 # Surface a sub-agent's tool/command on the HUD too (its steps otherwise
                 # bypass the renderer, which is why swarm runs showed tools 0).
                 if self.tui is not None:
@@ -1740,9 +1913,17 @@ class MapacheCLI:
         # spinner state (that belongs to the lead's own in-flight tool, if any).
         prefix = self._agent_trace_prefix(data)
         if prefix is not None:
-            secs = (data.get("duration_ms") or 0.0) / 1000.0
-            mark = "x" if data.get("error") else "ok"
-            print(f"{prefix}{mark} {name} · {secs:.1f}s", flush=True)
+            # A successful call commits NOTHING here - the live loader already showed
+            # it, and committing an "ok <tool>" line per call is exactly the repetitive
+            # noise we want gone. Only a FAILURE settles a permanent line (it is not
+            # repetitive, and you need to see it), and it re-arms the narration so the
+            # next call reprints its segment header (the failure ended the run).
+            if data.get("error"):
+                secs = (data.get("duration_ms") or 0.0) / 1000.0
+                indent = prefix[: len(prefix) - len(prefix.lstrip())]
+                print(f"{indent}  ⎿ x {name} · {secs:.1f}s", flush=True)
+                op = (data.get("_agent") or {}).get("operator") or "sub-agent"
+                self._trace_last_action.pop(op, None)
             return
         self._running_tool = None
         self._running_action = None
@@ -1759,6 +1940,25 @@ class MapacheCLI:
             # Claude-Code-style result summary nested under the tool line ('⎿ …').
             self.render.info(theme.result_line(
                 self._result_summary(data), error=bool(data.get("error"))))
+
+    async def _on_todos(self, event) -> None:
+        """The agent's checklist changed: update the TUI panel, or (plain mode) print
+        it so the user can watch each step and its progress."""
+        items = (event.data or {}).get("todos") or []
+        if self.tui is not None:
+            self.tui.dashboard.set_checklist(items)
+            return
+        # Plain mode: only print when it actually changed (avoid re-printing).
+        sig = tuple((str(i.get("task")), str(i.get("status"))) for i in items)
+        if sig == getattr(self, "_last_todos_sig", None) or not sig:
+            return
+        self._last_todos_sig = sig
+        done = sum(1 for i in items if i.get("status") == "completed")
+        mark = {"completed": "[x]", "in_progress": "[~]", "pending": "[ ]"}
+        lines = [f"\n  Checklist ({done}/{len(items)})"]
+        for i in items:
+            lines.append(f"    {mark.get(i.get('status'), '[ ]')} {i.get('task')}")
+        print("\n".join(lines), flush=True)
 
     @staticmethod
     def _result_summary(data: dict) -> str:
@@ -1848,6 +2048,9 @@ class MapacheCLI:
         name = event.data.get("operator")
         if name:
             getattr(self, "_ran_operators", set()).add(name)  # for cross-engagement learning
+            # A fresh delegation is a new block - forget the last narrated action so
+            # the operator's first tool re-prints its phrase.
+            self._trace_last_action.pop(name, None)
         if self.tui is None:
             return
         accent = self._agent_accent(name)
@@ -1859,6 +2062,13 @@ class MapacheCLI:
 
     async def _on_delegate_end(self, event) -> None:
         """Control returns to the caller - banner, then restore the prior accent."""
+        # The sub-agent's last tool is done; drop its loader so the lead's spinner
+        # doesn't keep showing a stale sub-agent tool until the lead's next call.
+        self._running_tool = None
+        self._running_action = None
+        op = event.data.get("operator")
+        if op:
+            self._trace_last_action.pop(op, None)
         if self.tui is None:
             return
         accent = getattr(self.render, "accent", "green")
@@ -1904,7 +2114,7 @@ class MapacheCLI:
         return {t.name for t in (self._integrations or [])}
 
     async def _maybe_setup_integration(self, user_input: str) -> None:
-        """If the request names a known service (Shodan/VirusTotal/…) that isn't set
+        """If the request names a known service (VirusTotal/GreyNoise/…) that isn't set
         up, offer a one-question setup: paste the key, we register the tool(s) live
         and persist the spec (key stays a ${ENV} ref). Wizard-style, mid-conversation."""
         if self.controller is None:
@@ -2222,7 +2432,7 @@ class MapacheCLI:
             tools = self._integrations
             if not tools:
                 print("\n  No integrations configured. Add tools under "
-                      "config.integrations (http API like Shodan, or a command / "
+                      "config.integrations (http API like VirusTotal, or a command / "
                       "GitHub-repo CLI). See tools/external_tools.py for the shape.\n")
             else:
                 print(f"\n  Integrations ({len(tools)}) - bring-your-own tools:")
@@ -2275,6 +2485,19 @@ class MapacheCLI:
                       "working dir to\n  restrict targets/actions. Example:")
                 print('    {"name": "engagement", "targets": ["10.10.10.0/24"],')
                 print('     "forbidden_tools": ["msf_run"]}\n')
+
+        elif command == "/todos":
+            todos = list(getattr(self.controller.chain, "todos", []) or []) \
+                if self.controller else []
+            if not todos:
+                print("\n  Checklist is empty - the agent builds one as it plans a "
+                      "multi-step task.\n")
+            else:
+                done = sum(1 for t in todos if t.status == "completed")
+                print(f"\n  Checklist ({done}/{len(todos)})")
+                for i, t in enumerate(todos, 1):
+                    print(f"    {i}. {t.marker()} {t.task}")
+                print()
 
         elif command == "/models":
             if self.routed:
@@ -2530,6 +2753,9 @@ def parse_args() -> argparse.Namespace:
                              "through it; shell/nmap wrap with torsocks/proxychains "
                              "(TCP-connect only). Strongest hide: attack from a pivot "
                              "via --exec-backend. Default: config.egress or direct.")
+    parser.add_argument("-tor", "--tor", dest="tor", action="store_true",
+                        help="Route this run through Tor (shortcut for --egress tor; "
+                             "auto-starts Tor). Opt-in per run - default stays direct.")
     parser.add_argument("--voice", action="store_true",
                         help="Speak agent responses (Phase 9). Needs a TTS backend "
                              "in config.voice (e.g. tts=pyttsx3); no-op otherwise.")

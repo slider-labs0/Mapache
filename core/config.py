@@ -67,6 +67,12 @@ DEFAULT_ZHIPU_URL = "https://open.bigmodel.cn/api/paas/v4"
 # models. International host by default; mainland China is
 # https://dashscope.aliyuncs.com/compatible-mode/v1 (set ALIBABA_BASE_URL to switch).
 DEFAULT_ALIBABA_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+# Hugging Face Inference Providers: one OpenAI-compatible router in front of many
+# serverless backends (Together, Novita, Fireworks, HF Inference, ...). Paste a HF
+# access token (hf_...); model ids are "owner/Model", optionally pinned to a backend
+# with a ":provider" suffix (e.g. "deepseek-ai/DeepSeek-V3-0324:together"). Which
+# backends are reachable depends on the token's enabled providers on huggingface.co.
+DEFAULT_HUGGINGFACE_URL = "https://router.huggingface.co/v1"
 
 KIND_OLLAMA = "ollama"
 KIND_OPENAI = "openai_compatible"
@@ -102,6 +108,13 @@ ZHIPU_MODELS = ["glm-4.6", "glm-4.5", "glm-4-plus", "glm-4-air", "glm-4-flash"]
 # Alibaba Cloud (DashScope) Qwen API model ids. Add newer ids via `mapache setup`.
 ALIBABA_MODELS = ["qwen-max", "qwen-plus", "qwen-turbo", "qwen3-max",
                   "qwen2.5-72b-instruct"]
+# Hugging Face Inference Providers model ids (owner/Model). These are broadly served
+# across HF's backends; add newer ids (or ":provider"-pinned variants) via `mapache setup`.
+HUGGINGFACE_MODELS = ["deepseek-ai/DeepSeek-V3-0324",
+                      "meta-llama/Llama-3.3-70B-Instruct",
+                      "Qwen/Qwen2.5-72B-Instruct",
+                      "meta-llama/Llama-3.1-8B-Instruct",
+                      "mistralai/Mistral-Small-24B-Instruct-2501"]
 
 
 def _default_config() -> dict[str, Any]:
@@ -155,6 +168,10 @@ def _default_config() -> dict[str, Any]:
                 "kind": KIND_OPENAI, "base_url": DEFAULT_ALIBABA_URL,
                 "api_key": "", "models": list(ALIBABA_MODELS), "enabled": True,
             },
+            "huggingface": {
+                "kind": KIND_OPENAI, "base_url": DEFAULT_HUGGINGFACE_URL,
+                "api_key": "", "models": list(HUGGINGFACE_MODELS), "enabled": True,
+            },
         },
         "messaging": {"telegram_token": "", "discord_token": ""},
         # Execution backend (feature H): where `shell` commands run.
@@ -166,7 +183,7 @@ def _default_config() -> dict[str, Any]:
         # http://host:port; wrapper = auto|proxychains|torsocks|none (shell tools).
         "egress": {"mode": "direct"},
         # Integrations: bring-your-own tools the agent can call. Each entry is an
-        # http spec (wrap an API like Shodan; keys via ${ENV}) or a command spec
+        # http spec (wrap an API like VirusTotal; keys via ${ENV}) or a command spec
         # (wrap a CLI / GitHub repo). See tools/external_tools.py for the shape.
         "integrations": [],
         # Community skill hub (feature I): registry = path to a local index.json
@@ -203,6 +220,10 @@ _ENV_MAP: dict[str, tuple[str, ...]] = {
     "DASHSCOPE_API_KEY": ("providers", "alibaba", "api_key"),
     "ALIBABA_API_KEY": ("providers", "alibaba", "api_key"),
     "ALIBABA_BASE_URL": ("providers", "alibaba", "base_url"),
+    "HF_TOKEN": ("providers", "huggingface", "api_key"),
+    "HUGGINGFACE_API_KEY": ("providers", "huggingface", "api_key"),
+    "HUGGING_FACE_HUB_TOKEN": ("providers", "huggingface", "api_key"),
+    "HUGGINGFACE_BASE_URL": ("providers", "huggingface", "base_url"),
     "TELEGRAM_BOT_TOKEN": ("messaging", "telegram_token"),
     "DISCORD_BOT_TOKEN": ("messaging", "discord_token"),
 }
@@ -278,6 +299,17 @@ def _load_json_file(path: Optional[Path]) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # Typed view
 # --------------------------------------------------------------------------- #
+
+
+def _is_junk_model_id(model_id: str) -> bool:
+    """A provider model-list entry that is not a real, routable model id: an empty or
+    whitespace token, a display name with spaces ('Ox Alpha'), a bare number ('4'), or
+    the meta-alias 'auto' (which collides with the auto strategy). Real ids look like
+    'qwen3-max', 'z-ai/glm-5.2', 'grok-4', 'anthropic/claude-sonnet-5'."""
+    m = (model_id or "").strip()
+    if not m or " " in m or m.isdigit() or m.lower() == "auto":
+        return True
+    return False
 
 
 @dataclass
@@ -414,7 +446,12 @@ class MapacheConfig:
         for prov in self.providers.values():
             if prov.is_cloud and prov.is_usable:
                 out.extend(prov.models)
-        return out
+        # Drop junk that leaks in from provider model-list discovery (a stray token
+        # like '4', a display name with a space like 'Ox Alpha', or the meta-alias
+        # 'auto') so it never becomes a routable model.
+        seen: set[str] = set()
+        return [m for m in out
+                if not _is_junk_model_id(m) and not (m in seen or seen.add(m))]
 
     def usable_providers(self) -> list[ProviderConfig]:
         return [p for p in self.providers.values() if p.is_usable]
