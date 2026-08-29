@@ -24,8 +24,8 @@
 <a href="https://youtube.com/@internetanarchy-s?si=kcu2YQKxeL0etik4">
   <img src="https://img.shields.io/badge/YouTube-watch-FF0000?style=for-the-badge&logo=youtube&logoColor=white" alt="YouTube">
 </a>
-<a href="https://kickstarter.com/projects/your-project">
-  <img src="https://img.shields.io/badge/Kickstarter-back%20us-05CE78?style=for-the-badge&logo=kickstarter&logoColor=white" alt="Kickstarter">
+<a href="https://github.com/sponsors/slider-labs0">
+  <img src="https://img.shields.io/badge/Sponsor-GitHub-EA4AAA?style=for-the-badge&logo=githubsponsors&logoColor=white" alt="GitHub Sponsors">
 </a>
 
 </div>
