@@ -171,3 +171,37 @@ Full reference lives in [docs/](docs/README.md). Highlights:
 | End-to-end walkthroughs across disciplines | [Use cases](docs/use-cases.md) |
 
 `STATUS.md` and `ROADMAP.md` cover internals and planned work.
+
+## Contributing and reporting bugs
+
+Found a bug, or something not behaving the way this README describes? Please
+[open an issue](https://github.com/slider-labs0/Mapache/issues/new). A good report includes:
+
+- what you ran (the command or objective) and what you expected,
+- what happened instead, with the exact error text or a short transcript,
+- your OS, Python version, and the model/provider in use,
+- steps to reproduce, if you have them.
+
+Feature ideas and questions are welcome as issues too.
+
+Pull requests are welcome. Before opening one:
+
+1. Run the test suite and make sure it stays green: `py -3.11 tests/test_core.py`
+   (on Windows, prefix `PYTHONUTF8=1`). Use Python 3.11, not 3.14.
+2. Add a test for any new behavior or fix, next to the existing ones in `tests/test_core.py`.
+3. Keep changes evidence-first and full-spectrum: a new capability should produce a concrete,
+   verifiable finding, and should not narrow Mapache to a single discipline.
+
+See `docs/` for architecture and `ROADMAP.md` for where the project is headed.
+
+## Security and responsible use
+
+Mapache is for **authorized** security testing only: your own systems, engagements you have
+written permission for, and lab or CTF targets. You are responsible for staying in scope and
+within the law. The rules-of-engagement guardrails (see
+[Execution and OPSEC](docs/execution-and-opsec.md)) help, but they do not replace authorization.
+
+If you discover a security vulnerability **in Mapache itself**, please do not file it as a
+public issue. Report it privately through
+[GitHub's security advisories](https://github.com/slider-labs0/Mapache/security/advisories/new)
+so it can be fixed before disclosure.
